@@ -19,6 +19,17 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import inspect
 
+try:
+    from huggingface_hub.utils import EntryNotFoundError, HfHubHTTPError
+except Exception:
+    EntryNotFoundError = None  # type: ignore[assignment]
+    HfHubHTTPError = None  # type: ignore[assignment]
+
+try:
+    import httpx
+except Exception:
+    httpx = None  # type: ignore[assignment]
+
 # 兼容新版 huggingface_hub：0.25.0 起移除 use_auth_token 參數
 try:
     import huggingface_hub
@@ -78,6 +89,22 @@ except Exception:  # pragma: no cover
 
 
 SUPPORTED_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
+
+
+_CUSTOM_MODULE_ERRORS: Tuple[type, ...] = tuple(
+    err
+    for err in (
+        EntryNotFoundError if isinstance(EntryNotFoundError, type) else None,
+        HfHubHTTPError if isinstance(HfHubHTTPError, type) else None,
+        getattr(httpx, "HTTPStatusError", None) if httpx is not None else None,
+        FileNotFoundError,
+    )
+    if isinstance(err, type)
+)
+
+
+class MissingCustomModuleError(RuntimeError):
+    """Raised when SpeechBrain pretrained模型缺少可選的 custom.py 檔案時使用。"""
 
 
 @dataclass
@@ -198,11 +225,25 @@ class SpeechEmbedder:
     def __init__(self, device: torch.device) -> None:
         if EncoderClassifier is None:
             raise RuntimeError("需要 speechbrain 才能載入 ECAPA 嵌入，請安裝 speechbrain 與 torch。")
-        run_device = "cpu"
-        if device.type == "mps":
-            run_device = "mps"
+        run_device = "mps" if device.type == "mps" else "cpu"
         try:
-            self.classifier = EncoderClassifier.from_hparams(
+            self.classifier = self._load_classifier(run_device)
+            self.device = device
+        except MissingCustomModuleError:
+            raise
+        except Exception as e:
+            warnings.warn(f"ECAPA 在 {run_device} 初始化失敗，改用 CPU。原因: {e}")
+            try:
+                self.classifier = self._load_classifier("cpu")
+                self.device = torch.device("cpu")
+            except MissingCustomModuleError:
+                raise
+            except Exception:
+                raise
+
+    def _load_classifier(self, run_device: str):
+        try:
+            return EncoderClassifier.from_hparams(
                 source=os.environ.get("SPEECHBRAIN_VOXCELEB_CACHE", "speechbrain/spkrec-ecapa-voxceleb"),
                 savedir=os.environ.get("SPEECHBRAIN_CACHE_DIR"),
                 run_opts={
@@ -210,18 +251,8 @@ class SpeechEmbedder:
                     "inference_batch_size": 1,
                 },
             )
-            self.device = device
-        except Exception as e:
-            warnings.warn(f"ECAPA 在 {run_device} 初始化失敗，改用 CPU。原因: {e}")
-            self.classifier = EncoderClassifier.from_hparams(
-                source=os.environ.get("SPEECHBRAIN_VOXCELEB_CACHE", "speechbrain/spkrec-ecapa-voxceleb"),
-                savedir=os.environ.get("SPEECHBRAIN_CACHE_DIR"),
-                run_opts={
-                    "device": "cpu",
-                    "inference_batch_size": 1,
-                },
-            )
-            self.device = torch.device("cpu")
+        except _CUSTOM_MODULE_ERRORS as err:
+            raise MissingCustomModuleError(f"custom.py 缺失導致 Hugging Face 404（device={run_device}）: {err}") from err
 
     def embed(self, y: np.ndarray, sr: int) -> np.ndarray:
         if sr != 16000:
@@ -250,6 +281,9 @@ class FeatureExtractor:
         if self._use_speechbrain:
             try:
                 self._embedder = SpeechEmbedder(device=device)
+            except MissingCustomModuleError as e:
+                warnings.warn(f"speechbrain 缺少 custom.py，降級到 log-mel。原因: {e}")
+                self._use_speechbrain = False
             except Exception as e:
                 warnings.warn(f"speechbrain 初始化失敗，降級到 log-mel。原因: {e}")
                 self._use_speechbrain = False
