@@ -182,13 +182,31 @@ async def lifespan(app: FastAPI):
         os.environ["SPEECHBRAIN_CACHE_DIR"] = "/tmp/speechbrain_cache"
         os.environ["HF_HOME"] = "/tmp/huggingface_cache"
         os.environ["TRANSFORMERS_CACHE"] = "/tmp/transformers_cache"
+        os.environ["HUGGINGFACE_HUB_CACHE"] = "/tmp/huggingface_cache/hub"
+        os.environ["HF_DATASETS_CACHE"] = "/tmp/huggingface_cache/datasets"
         os.environ["XDG_CACHE_HOME"] = "/tmp/cache"
         os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
         os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
         
-        # 確保快取目錄存在
-        for cache_dir in ["/tmp/speechbrain_cache", "/tmp/huggingface_cache", "/tmp/transformers_cache", "/tmp/cache", "/tmp/numba_cache", "/tmp/matplotlib"]:
-            os.makedirs(cache_dir, exist_ok=True)
+        # 確保快取目錄存在並設置權限(修復 Hugging Face Spaces 2025 權限問題)
+        cache_dirs = [
+            "/tmp/speechbrain_cache", 
+            "/tmp/huggingface_cache",
+            "/tmp/huggingface_cache/hub",
+            "/tmp/huggingface_cache/datasets", 
+            "/tmp/transformers_cache", 
+            "/tmp/cache", 
+            "/tmp/numba_cache", 
+            "/tmp/matplotlib",
+            "/tmp/voice_cache"
+        ]
+        for cache_dir in cache_dirs:
+            os.makedirs(cache_dir, mode=0o777, exist_ok=True)
+            # 確保目錄有完整寫入權限
+            try:
+                os.chmod(cache_dir, 0o777)
+            except Exception as chmod_err:
+                logger.warning(f"無法設置 {cache_dir} 權限: {chmod_err}")
         
         # 確保 Firestore 在應用啟動時就已連接
         logger.info("🚀 正在初始化 Firestore 連接...")
