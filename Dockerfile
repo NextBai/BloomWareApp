@@ -30,10 +30,27 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p ${XDG_CACHE_HOME}/fontconfig ${MPLCONFIGDIR} ${NUMBA_CACHE_DIR} ${SPEECHBRAIN_CACHE_DIR} ${HF_HOME} ${TRANSFORMERS_CACHE}
+RUN mkdir -p ${XDG_CACHE_HOME}/fontconfig \
+    ${MPLCONFIGDIR} \
+    ${NUMBA_CACHE_DIR} \
+    ${SPEECHBRAIN_CACHE_DIR} \
+    ${HF_HOME} \
+    ${HF_HOME}/hub \
+    ${HF_HOME}/datasets \
+    ${TRANSFORMERS_CACHE} \
+    /tmp/voice_cache \
+    && chmod -R 777 ${XDG_CACHE_HOME} \
+    && chmod -R 777 ${MPLCONFIGDIR} \
+    && chmod -R 777 ${NUMBA_CACHE_DIR} \
+    && chmod -R 777 ${SPEECHBRAIN_CACHE_DIR} \
+    && chmod -R 777 ${HF_HOME} \
+    && chmod -R 777 ${TRANSFORMERS_CACHE} \
+    && chmod -R 777 /tmp/voice_cache
 
 COPY . .
 
-ENV PORT=7860
+ENV PORT=7860 \
+    HUGGINGFACE_HUB_CACHE=${HF_HOME}/hub \
+    HF_DATASETS_CACHE=${HF_HOME}/datasets
 
 CMD ["bash", "-lc", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-7860}"]
