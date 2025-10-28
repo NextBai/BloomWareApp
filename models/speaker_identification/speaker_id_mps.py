@@ -222,48 +222,118 @@ _EMBEDDER_CACHE: Dict[str, "SpeechEmbedder"] = {}
 
 
 class SpeechEmbedder:
-    def __init__(self, device: torch.device) -> None:
+    """
+    ECAPA-TDNN 語音嵌入提取器（基於 SpeechBrain）
+    
+    Hugging Face Space 部署建議：
+    - 設定環境變數 HF_HOME=/tmp/huggingface
+    - 設定環境變數 SPEECHBRAIN_CACHE_DIR=/tmp/speechbrain
+    - 確保 requirements.txt 包含 speechbrain>=1.0.0
+    """
+    def __init__(self, device: torch.device, max_retries: int = 2) -> None:
         if EncoderClassifier is None:
             raise RuntimeError("需要 speechbrain 才能載入 ECAPA 嵌入，請安裝 speechbrain 與 torch。")
+        
         run_device = "mps" if device.type == "mps" else "cpu"
-        try:
-            self.classifier = self._load_classifier(run_device)
-            if self.classifier is None:
-                self.is_available = False
-            else:
-                self.is_available = True
-            self.device = device
-        except Exception as e:
-            warnings.warn(f"ECAPA 在 {run_device} 初始化失敗，改用 CPU。原因: {e}")
+        self.classifier = None
+        self.is_available = False
+        self.device = device
+        self.load_error = None
+        
+        # 嘗試載入（含重試機制）
+        for attempt in range(max_retries):
+            try:
+                self.classifier = self._load_classifier(run_device)
+                if self.classifier is not None:
+                    self.is_available = True
+                    self.device = device
+                    print(f"✓ ECAPA embedder 載入成功 (device={run_device}, attempt={attempt + 1})")
+                    return
+                else:
+                    self.load_error = "EncoderClassifier.from_hparams 返回 None（可能缺少模型檔案）"
+            except Exception as e:
+                self.load_error = str(e)
+                if attempt < max_retries - 1:
+                    warnings.warn(f"ECAPA 載入失敗 (attempt {attempt + 1}/{max_retries}): {e}，重試中...")
+                    continue
+                else:
+                    warnings.warn(f"ECAPA 在 {run_device} 載入失敗，嘗試改用 CPU。原因: {e}")
+        
+        # 如果主要設備失敗，且不是 CPU，嘗試 CPU
+        if run_device != "cpu":
             try:
                 self.classifier = self._load_classifier("cpu")
-                if self.classifier is None:
-                    self.is_available = False
-                else:
+                if self.classifier is not None:
                     self.is_available = True
-                self.device = torch.device("cpu")
-            except Exception:
-                self.classifier = None
-                self.is_available = False
-                self.device = device
+                    self.device = torch.device("cpu")
+                    print("✓ ECAPA embedder 載入成功 (降級至 CPU)")
+                    return
+            except Exception as e:
+                warnings.warn(f"ECAPA 在 CPU 也載入失敗: {e}")
+                self.load_error = f"所有設備載入失敗: {e}"
+        
+        # 完全失敗
+        self.classifier = None
+        self.is_available = False
+        warnings.warn(
+            f"⚠️  ECAPA embedder 不可用。錯誤: {self.load_error}\n"
+            f"建議檢查：\n"
+            f"  1. speechbrain 版本 >= 1.0.0\n"
+            f"  2. 網路連線是否正常\n"
+            f"  3. 環境變數 SPEECHBRAIN_CACHE_DIR 是否設定\n"
+            f"  4. Hugging Face Space 請設定 HF_HOME=/tmp/huggingface"
+        )
 
     def _load_classifier(self, run_device: str):
+        """
+        載入 SpeechBrain ECAPA-TDNN 分類器
+        
+        2025 最佳實踐：
+        - 使用明確的 savedir（Hugging Face Space 需要）
+        - 設定適當的 run_opts
+        - 處理 custom.py 缺失問題
+        """
+        # 優先使用環境變數，否則使用 /tmp（Hugging Face Space 友善）
+        savedir = os.environ.get("SPEECHBRAIN_CACHE_DIR")
+        if savedir is None:
+            import tempfile
+            savedir = os.path.join(tempfile.gettempdir(), "speechbrain_cache")
+        
         try:
-            return EncoderClassifier.from_hparams(
-                source=os.environ.get("SPEECHBRAIN_VOXCELEB_CACHE", "speechbrain/spkrec-ecapa-voxceleb"),
-                savedir=os.environ.get("SPEECHBRAIN_CACHE_DIR"),
+            model_source = os.environ.get("SPEECHBRAIN_VOXCELEB_CACHE", "speechbrain/spkrec-ecapa-voxceleb")
+            
+            classifier = EncoderClassifier.from_hparams(
+                source=model_source,
+                savedir=savedir,
                 run_opts={
                     "device": run_device,
                     "inference_batch_size": 1,
                 },
             )
-        except _CUSTOM_MODULE_ERRORS:
-            # 如果載入失敗，返回 None
+            return classifier
+            
+        except _CUSTOM_MODULE_ERRORS as e:
+            # custom.py 缺失或 HTTP 錯誤
+            warnings.warn(f"載入模型時遇到預期錯誤（custom.py 或網路問題）: {type(e).__name__}: {e}")
             return None
+        except Exception as e:
+            # 其他未預期錯誤
+            warnings.warn(f"載入 ECAPA 模型時發生錯誤: {type(e).__name__}: {e}")
+            raise
 
     def embed(self, y: np.ndarray, sr: int) -> np.ndarray:
         if not self.is_available:
-            raise RuntimeError("ECAPA embedder 不可用，缺少 custom.py 或載入失敗。")
+            error_msg = (
+                "ECAPA embedder 不可用，無法提取語音特徵。\n"
+                f"載入錯誤: {self.load_error}\n"
+                "建議：\n"
+                "  1. 檢查 speechbrain 是否正確安裝: pip install speechbrain>=1.0.0\n"
+                "  2. 確認網路連線可訪問 huggingface.co\n"
+                "  3. 在 Hugging Face Space 設定環境變數 HF_HOME\n"
+                "  4. 或設定環境變數 DISABLE_SPEECHBRAIN=true 改用 log-mel 特徵重新訓練模型"
+            )
+            raise RuntimeError(error_msg)
+        
         if sr != 16000:
             y = librosa.resample(y, orig_sr=sr, target_sr=16000)
             sr = 16000
@@ -284,25 +354,39 @@ class FeatureExtractor:
         disable_sb = os.environ.get("DISABLE_SPEECHBRAIN", "false").lower() in {"1", "true", "yes"}
         self._use_speechbrain = bool(cfg.use_speechbrain and EncoderClassifier is not None and not disable_sb)
         self._embedder: Optional[SpeechEmbedder] = None
+        
         if disable_sb:
-            warnings.warn("SpeechBrain 嵌入已停用，改用 log-mel 特徵。")
+            warnings.warn("⚠️  SpeechBrain 嵌入已透過環境變數停用，改用 log-mel 特徵。")
+            self._use_speechbrain = False
 
         if self._use_speechbrain:
             try:
                 self._embedder = SpeechEmbedder(device=device)
-            except MissingCustomModuleError as e:
-                warnings.warn(f"speechbrain 缺少 custom.py，降級到 log-mel。原因: {e}")
-                self._use_speechbrain = False
+                if not self._embedder.is_available:
+                    warnings.warn(
+                        "⚠️  ECAPA embedder 初始化失敗，自動降級到 log-mel 特徵。\n"
+                        "這可能影響模型準確度。若要使用 ECAPA，請確保：\n"
+                        "  - speechbrain >= 1.0.0 已安裝\n"
+                        "  - 網路可訪問 huggingface.co\n"
+                        "  - 環境變數正確設定（HF_HOME, SPEECHBRAIN_CACHE_DIR）"
+                    )
+                    self._use_speechbrain = False
+                    self._embedder = None
             except Exception as e:
-                warnings.warn(f"speechbrain 初始化失敗，降級到 log-mel。原因: {e}")
+                warnings.warn(f"⚠️  speechbrain 初始化失敗，降級到 log-mel。原因: {e}")
                 self._use_speechbrain = False
+                self._embedder = None
 
     @property
     def feature_kind(self) -> str:
-        return "ecapa_embedding" if self._use_speechbrain else "logmel_stats"
+        """返回當前使用的特徵類型"""
+        if self._use_speechbrain and self._embedder is not None and self._embedder.is_available:
+            return "ecapa_embedding"
+        return "logmel_stats"
 
     def extract_one(self, y: np.ndarray, sr: int) -> np.ndarray:
-        if self._use_speechbrain and self._embedder is not None:
+        """提取單一音訊片段的特徵"""
+        if self._use_speechbrain and self._embedder is not None and self._embedder.is_available:
             return self._embedder.embed(y, sr)
         return logmel_stats(y, sr)
 
@@ -523,14 +607,38 @@ def plot_training_curves(history: Dict[str, List[float]], out_path: Path) -> Non
 
 
 def _ensure_embedder_for_infer(feature_kind: str, device: torch.device) -> Optional[SpeechEmbedder]:
+    """
+    確保推論時 ECAPA embedder 可用
+    
+    Returns:
+        SpeechEmbedder 實例（可用時）或 None（不可用時）
+    
+    Raises:
+        RuntimeError: 當模型需要 ECAPA 但無法載入時
+    """
     if feature_kind == "ecapa_embedding":
         if EncoderClassifier is None:
-            raise RuntimeError("此模型為 ECAPA 特徵，請安裝 speechbrain 與 torch。")
+            raise RuntimeError(
+                "此模型使用 ECAPA 特徵訓練，但 speechbrain 未安裝。\n"
+                "請執行: pip install speechbrain>=1.0.0 torch torchaudio"
+            )
+        
         key = f"{feature_kind}:{device.type}"
         if key not in _EMBEDDER_CACHE:
             embedder = SpeechEmbedder(device=device)
             if not embedder.is_available:
-                return None  # 無法載入，稍後降級
+                raise RuntimeError(
+                    f"此模型使用 ECAPA 特徵訓練，但 embedder 載入失敗。\n"
+                    f"錯誤: {embedder.load_error}\n\n"
+                    "解決方案：\n"
+                    "  1. 確認網路連線可訪問 huggingface.co\n"
+                    "  2. 在 Hugging Face Space 設定環境變數:\n"
+                    "     HF_HOME=/tmp/huggingface\n"
+                    "     SPEECHBRAIN_CACHE_DIR=/tmp/speechbrain\n"
+                    "  3. 或重新用 log-mel 特徵訓練模型:\n"
+                    "     export DISABLE_SPEECHBRAIN=true\n"
+                    "     python speaker_id_mps.py"
+                )
             _EMBEDDER_CACHE[key] = embedder
         return _EMBEDDER_CACHE[key]
     return None
@@ -541,18 +649,35 @@ def predict_files(
     inputs: Sequence[Path],
     threshold: float = 0.0,
 ) -> List[Dict[str, object]]:
+    """
+    使用訓練好的模型對音訊檔案進行說話人識別
+    
+    Args:
+        model_dir: 模型目錄（包含 speaker_id_mlp.pt 和 speaker_id_assets.joblib）
+        inputs: 要預測的音訊檔案列表
+        threshold: 信心度閾值（低於此值判定為 unknown）
+    
+    Returns:
+        預測結果列表，每個元素包含 file, pred, score, top, is_unknown 等欄位
+    
+    Raises:
+        FileNotFoundError: 模型檔案不存在
+        RuntimeError: ECAPA 模型需要但無法載入
+    """
     model_path = model_dir / "speaker_id_mlp.pt"
     assets_path = model_dir / "speaker_id_assets.joblib"
     if not model_path.exists() or not assets_path.exists():
-        raise FileNotFoundError("找不到模型或資產檔，請先訓練。")
+        raise FileNotFoundError(f"找不到模型或資產檔，請先訓練。\n模型路徑: {model_path}\n資產路徑: {assets_path}")
 
     assets = joblib.load(assets_path)
     label_encoder: LabelEncoder = assets["label_encoder"]
     scaler: StandardScaler = assets["scaler"]
     feature_kind: str = assets["feature_kind"]
-    target_sr: int = int(assets["target_sr"])  # noqa: F841（僅提示用途）
-    input_dim: int = int(assets["input_dim"])  # noqa: F841（僅提示用途）
-    num_classes: int = int(assets["num_classes"])  # noqa: F841
+    target_sr: int = int(assets["target_sr"])
+    input_dim: int = int(assets["input_dim"])
+    num_classes: int = int(assets["num_classes"])
+
+    print(f"📦 載入模型: feature_kind={feature_kind}, input_dim={input_dim}, classes={num_classes}")
 
     device = resolve_device("mps")
     model = MLPClassifier(input_dim=input_dim, num_classes=len(label_encoder.classes_))
@@ -560,7 +685,12 @@ def predict_files(
     model.to(device)
     model.eval()
 
+    # 確保 ECAPA embedder 可用（如果模型需要）
     embedder = _ensure_embedder_for_infer(feature_kind, device)
+    
+    if feature_kind == "ecapa_embedding" and (embedder is None or not embedder.is_available):
+        # 這個錯誤不應該發生，因為 _ensure_embedder_for_infer 會拋異常
+        raise RuntimeError("內部錯誤: ECAPA embedder 應該已被驗證可用")
 
     results: List[Dict[str, object]] = []
     for p in inputs:
@@ -568,25 +698,30 @@ def predict_files(
             results.append({"file": str(p), "error": "檔案不存在"})
             continue
         try:
-            y = read_audio_mono(p, target_sr=assets["target_sr"])
+            y = read_audio_mono(p, target_sr=target_sr)
+            
+            # 根據特徵類型提取特徵
             if feature_kind == "ecapa_embedding":
-                if embedder is not None:
-                    feat = embedder.embed(y, assets["target_sr"])
-                    feat = scaler.transform(feat.reshape(1, -1))
-                    feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
-                else:
-                    raise RuntimeError("ECAPA 模型需要 speechbrain embedder，但不可用。")
-            else:
-                feat = logmel_stats(y, assets["target_sr"])
+                if embedder is None:
+                    raise RuntimeError("ECAPA embedder 未初始化")
+                feat = embedder.embed(y, target_sr)
                 feat = scaler.transform(feat.reshape(1, -1))
                 feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
+            else:
+                # log-mel 特徵
+                feat = logmel_stats(y, target_sr)
+                feat = scaler.transform(feat.reshape(1, -1))
+                feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
+            
             with torch.no_grad():
                 logits = model(feat_t)
                 probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+            
             pairs = list(zip(label_encoder.classes_.tolist(), probs.tolist()))
             pairs.sort(key=lambda x: x[1], reverse=True)
             pred_label, pred_score = pairs[0]
             pred_out = "unknown" if float(pred_score) < threshold else pred_label
+            
             results.append(
                 {
                     "file": str(p),
