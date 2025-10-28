@@ -1,0 +1,118 @@
+{
+  "mcpServers": {
+    "features-server": {
+      "command": "python",
+      "args": ["-m", "features.mcp.server"],
+      "env": {
+        "PYTHONPATH": "."
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "@modelcontextprotocol/server-filesystem@latest",
+        "/Users/baidongqu/Desktop"
+      ],
+      "description": "文件系統操作工具",
+      "enabled": false
+    }
+  },
+  "server_info": {
+    "name": "features-mcp-server",
+    "version": "2.0.0",
+    "description": "MCP 功能服務器，提供天氣、新聞、匯率等查詢功能",
+    "protocol_version": "2024-11-05"
+  },
+  "tools": {
+    "weather_query": {
+      "name": "weather_query",
+      "description": "查詢指定城市的天氣資訊，支援城市名稱或座標查詢",
+      "category": "daily_life",
+      "examples": ["台北天氣", "東京天氣", "25.0330,121.5654"],
+      "module": "features.mcp.tools.weather_tool",
+      "class": "WeatherTool"
+    },
+    "news_query": {
+      "name": "news_query",
+      "description": "查詢最新新聞資訊，支援關鍵詞搜尋和分類篩選，可獲取完整文章內容",
+      "category": "daily_life",
+      "examples": ["科技新聞", "今天新聞", "台灣新聞", "完整內容新聞"],
+      "module": "features.mcp.tools.news_tool",
+      "class": "NewsTool"
+    },
+    "exchange_query": {
+      "name": "exchange_query",
+      "description": "查詢匯率資訊，支援即時匯率查詢和貨幣轉換計算",
+      "category": "daily_life",
+      "examples": ["美元對台幣", "100 USD 換 TWD", "EUR USD 匯率"]
+    },
+    "healthkit_query": {
+      "name": "healthkit_query",
+      "description": "查詢 HealthKit 健康數據，包括心率、步數、血氧、呼吸頻率等",
+      "category": "health",
+      "examples": ["我的心率", "今天步數", "最近一週健康數據", "血氧濃度"],
+      "module": "features.mcp.tools.healthkit_tool",
+      "class": "HealthKitTool"
+    },
+    "system_list_features": {
+      "name": "system_list_features",
+      "description": "列出所有可用的 MCP 功能",
+      "category": "system",
+      "examples": ["功能列表", "有什麼功能"]
+    },
+    "system_health_check": {
+      "name": "system_health_check",
+      "description": "檢查 MCP 服務器健康狀態",
+      "category": "system",
+      "examples": ["健康檢查", "服務狀態"]
+    }
+  },
+  "environment": {
+    "required_env_vars": [
+      "WEATHER_API_KEY",
+      "NEWSAPI_KEY"
+    ],
+    "optional_env_vars": [
+      "FIXER_API_KEY",
+      "HTTP_TIMEOUT"
+    ],
+    "default_values": {
+      "HTTP_TIMEOUT": "12"
+    }
+  },
+  "usage": {
+    "installation": [
+      "1. 確保已安裝 Python 3.8+",
+      "2. 安裝依賴: pip install -r requirements.txt",
+      "3. 設置環境變數 (參考 .env.example)",
+      "4. 執行服務器: python -m features.mcp.main_server"
+    ],
+    "examples": [
+      {
+        "description": "查詢台北天氣",
+        "input": {"name": "weather_query", "arguments": {"city": "台北"}},
+        "expected_output": "台北天氣資訊，包含溫度、濕度、風速等"
+      },
+      {
+        "description": "查詢科技新聞",
+        "input": {"name": "news_query", "arguments": {"category": "technology", "language": "zh-TW"}},
+        "expected_output": "最新科技新聞列表"
+      },
+      {
+        "description": "美元換台幣",
+        "input": {"name": "exchange_query", "arguments": {"from_currency": "USD", "to_currency": "TWD", "amount": 100}},
+        "expected_output": "100 美元兌換台幣的金額和匯率資訊"
+      }
+    ]
+  },
+  "metadata": {
+    "created": "2025-01-XX",
+    "updated": "2025-01-XX",
+    "author": "MCP Features Team",
+    "license": "MIT",
+    "compatibility": {
+      "python_version": ">=3.8",
+      "mcp_version": ">=0.1.0"
+    }
+  }
+}
