@@ -569,15 +569,15 @@ def predict_files(
             continue
         try:
             y = read_audio_mono(p, target_sr=assets["target_sr"])
-            if feature_kind == "ecapa_embedding" and embedder is not None:
-                feat = embedder.embed(y, assets["target_sr"])
+            if feature_kind == "ecapa_embedding":
+                if embedder is not None:
+                    feat = embedder.embed(y, assets["target_sr"])
+                    feat = scaler.transform(feat.reshape(1, -1))
+                    feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
+                else:
+                    raise RuntimeError("ECAPA 模型需要 speechbrain embedder，但不可用。")
             else:
                 feat = logmel_stats(y, assets["target_sr"])
-            # 如果 embedder 不可用，且原本是 ecapa，則不使用 scaler（維度不匹配）
-            if feature_kind == "ecapa_embedding" and embedder is None:
-                # 不標準化，直接使用原始特徵（可能影響準確度）
-                feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
-            else:
                 feat = scaler.transform(feat.reshape(1, -1))
                 feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
             with torch.no_grad():
