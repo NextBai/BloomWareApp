@@ -228,18 +228,24 @@ class SpeechEmbedder:
         run_device = "mps" if device.type == "mps" else "cpu"
         try:
             self.classifier = self._load_classifier(run_device)
+            if self.classifier is None:
+                self.is_available = False
+            else:
+                self.is_available = True
             self.device = device
-        except MissingCustomModuleError:
-            raise
         except Exception as e:
             warnings.warn(f"ECAPA 在 {run_device} 初始化失敗，改用 CPU。原因: {e}")
             try:
                 self.classifier = self._load_classifier("cpu")
+                if self.classifier is None:
+                    self.is_available = False
+                else:
+                    self.is_available = True
                 self.device = torch.device("cpu")
-            except MissingCustomModuleError:
-                raise
             except Exception:
-                raise
+                self.classifier = None
+                self.is_available = False
+                self.device = device
 
     def _load_classifier(self, run_device: str):
         try:
@@ -251,10 +257,13 @@ class SpeechEmbedder:
                     "inference_batch_size": 1,
                 },
             )
-        except _CUSTOM_MODULE_ERRORS as err:
-            raise MissingCustomModuleError(f"custom.py 缺失導致 Hugging Face 404（device={run_device}）: {err}") from err
+        except _CUSTOM_MODULE_ERRORS:
+            # 如果載入失敗，返回 None
+            return None
 
     def embed(self, y: np.ndarray, sr: int) -> np.ndarray:
+        if not self.is_available:
+            raise RuntimeError("ECAPA embedder 不可用，缺少 custom.py 或載入失敗。")
         if sr != 16000:
             y = librosa.resample(y, orig_sr=sr, target_sr=16000)
             sr = 16000
@@ -519,7 +528,10 @@ def _ensure_embedder_for_infer(feature_kind: str, device: torch.device) -> Optio
             raise RuntimeError("此模型為 ECAPA 特徵，請安裝 speechbrain 與 torch。")
         key = f"{feature_kind}:{device.type}"
         if key not in _EMBEDDER_CACHE:
-            _EMBEDDER_CACHE[key] = SpeechEmbedder(device=device)
+            embedder = SpeechEmbedder(device=device)
+            if not embedder.is_available:
+                return None  # 無法載入，稍後降級
+            _EMBEDDER_CACHE[key] = embedder
         return _EMBEDDER_CACHE[key]
     return None
 
@@ -557,12 +569,17 @@ def predict_files(
             continue
         try:
             y = read_audio_mono(p, target_sr=assets["target_sr"])
-            if feature_kind == "ecapa_embedding":
-                feat = embedder.embed(y, assets["target_sr"])  # type: ignore[arg-type]
+            if feature_kind == "ecapa_embedding" and embedder is not None:
+                feat = embedder.embed(y, assets["target_sr"])
             else:
-                feat = logmel_stats(y, assets["target_sr"])  # type: ignore[arg-type]
-            feat = scaler.transform(feat.reshape(1, -1))
-            feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
+                feat = logmel_stats(y, assets["target_sr"])
+            # 如果 embedder 不可用，且原本是 ecapa，則不使用 scaler（維度不匹配）
+            if feature_kind == "ecapa_embedding" and embedder is None:
+                # 不標準化，直接使用原始特徵（可能影響準確度）
+                feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
+            else:
+                feat = scaler.transform(feat.reshape(1, -1))
+                feat_t = torch.tensor(feat, dtype=torch.float32, device=device)
             with torch.no_grad():
                 logits = model(feat_t)
                 probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
