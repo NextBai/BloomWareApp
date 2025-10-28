@@ -19,6 +19,8 @@ from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import inspect
 
+from models.speaker_identification.hf_compat import allow_missing_custom_py
+
 try:
     from huggingface_hub.utils import EntryNotFoundError, HfHubHTTPError
 except Exception:
@@ -302,14 +304,15 @@ class SpeechEmbedder:
         try:
             model_source = os.environ.get("SPEECHBRAIN_VOXCELEB_CACHE", "speechbrain/spkrec-ecapa-voxceleb")
             
-            classifier = EncoderClassifier.from_hparams(
-                source=model_source,
-                savedir=savedir,
-                run_opts={
-                    "device": run_device,
-                    "inference_batch_size": 1,
-                },
-            )
+            with allow_missing_custom_py():
+                classifier = EncoderClassifier.from_hparams(
+                    source=model_source,
+                    savedir=savedir,
+                    run_opts={
+                        "device": run_device,
+                        "inference_batch_size": 1,
+                    },
+                )
             return classifier
             
         except _CUSTOM_MODULE_ERRORS as e:
