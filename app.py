@@ -202,11 +202,8 @@ async def lifespan(app: FastAPI):
         ]
         for cache_dir in cache_dirs:
             os.makedirs(cache_dir, mode=0o777, exist_ok=True)
-            # 確保目錄有完整寫入權限
-            try:
-                os.chmod(cache_dir, 0o777)
-            except Exception as chmod_err:
-                logger.warning(f"無法設置 {cache_dir} 權限: {chmod_err}")
+            # 注意：在 Hugging Face Spaces 中無法修改 /tmp 目錄權限
+            # 權限已在 Dockerfile 中設置
         
         # 確保 Firestore 在應用啟動時就已連接
         logger.info("🚀 正在初始化 Firestore 連接...")
