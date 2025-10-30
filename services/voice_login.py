@@ -87,30 +87,56 @@ class VoiceLoginConfig:
 class VoiceAuthService:
     """
     管理語音登入流程：收集 PCM 串流、切窗、評估 1:N 認證結果。
-    目前採用「標籤法」：speaker_id_mps 的 top1 label 透過 mapping 關聯到 user。
+    目前採用「標籤法」：CNN 後端的 top1 label 透過 mapping 關聯到 user。
     """
 
     def __init__(self, base_dir: Optional[Path] = None, config: Optional[VoiceLoginConfig] = None) -> None:
         self.base_dir = base_dir or Path(__file__).resolve().parent.parent
         self.identity_dir = self.base_dir / "models/speaker_identification"
-        self.model_dir = self.identity_dir / "models_mps"
+        # 新模型（CNN）預設目錄，可用環境變數覆寫
+        override_dir = os.getenv("VOICE_CNN_MODEL_DIR")
+        self.model_dir = Path(override_dir).expanduser() if override_dir else (self.identity_dir / "models_cnn")
         self.config = config or VoiceLoginConfig()
         preferred_tmp = os.getenv("VOICE_LOGIN_TMP_DIR")
         self.temp_dir = resolve_voice_temp_dir(preferred_tmp)
         logging.info("語音暫存目錄使用: %s", self.temp_dir)
 
-        # 載入 speaker 模組
+        # 載入 CNN 後端（完整取代舊 MPS/ECAPA）
         if str(self.identity_dir) not in os.sys.path:
             os.sys.path.insert(0, str(self.identity_dir))
         try:
-            from models.speaker_identification.speaker_id_mps import predict_files as _predict_files  # type: ignore
+            from models.speaker_identification.cnn_adapter import predict_files as _predict_files  # type: ignore
         except Exception as e:  # pragma: no cover
-            raise RuntimeError(f"載入說話者辨識模組失敗：{e}")
+            raise RuntimeError(f"載入 CNN 說話者辨識模組失敗：{e}")
         self._predict_files = _predict_files
 
-        # 確認資產存在
-        if not (self.model_dir / "speaker_id_mlp.pt").exists() or not (self.model_dir / "speaker_id_assets.joblib").exists():
-            raise FileNotFoundError("找不到說話者模型或資產，請先完成訓練與資產輸出。")
+        # 資產檢查：需要 speaker_id_model.pth 與 classes 定義（classes.txt 或 processed_audio 目錄）
+        # 若預設目錄不存在，向下相容：嘗試使用舊的專題cnn 目錄（搬遷前）
+        if not self.model_dir.exists():
+            legacy_dir = self.base_dir / "專題cnn"
+            if legacy_dir.exists():
+                self.model_dir = legacy_dir
+            else:
+                raise FileNotFoundError(f"找不到 CNN 模型目錄：{self.model_dir}")
+
+        model_file = self.model_dir / "speaker_id_model.pth"
+        classes_txt = self.model_dir / "classes.txt"
+        processed_dir = self.model_dir / "processed_audio"
+        if not model_file.exists():
+            raise FileNotFoundError(f"缺少模型檔：{model_file}")
+        if not classes_txt.exists() and not processed_dir.exists():
+            raise FileNotFoundError(
+                f"缺少類別定義，請提供 {classes_txt.name} 或 {processed_dir.name}/ 子資料夾；或設 VOICE_CNN_CLASSES 指定路徑"
+            )
+        if classes_txt.exists():
+            try:
+                content = classes_txt.read_text(encoding="utf-8").strip()
+            except Exception:
+                content = ""
+            if not content:
+                raise FileNotFoundError(
+                    f"{classes_txt} 內容為空，請填入每行一個類別名稱，或提供 {processed_dir.name}/ 以自動推斷"
+                )
 
         # 以 user_id 管理暫存錄音緩衝
         self._buffers: Dict[str, bytearray] = {}
