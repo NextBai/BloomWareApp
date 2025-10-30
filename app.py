@@ -178,27 +178,17 @@ async def start_external_servers_async(app: FastAPI):
 async def lifespan(app: FastAPI):
     # Startup
     try:
-        # 設置各種模型和庫的快取目錄到可寫位置，避免 Hugging Face Spaces 權限問題
-        os.environ["SPEECHBRAIN_CACHE_DIR"] = "/tmp/speechbrain_cache"
-        os.environ["HF_HOME"] = "/tmp/huggingface_cache"
-        os.environ["TRANSFORMERS_CACHE"] = "/tmp/transformers_cache"
-        os.environ["HUGGINGFACE_HUB_CACHE"] = "/tmp/huggingface_cache/hub"
-        os.environ["HF_DATASETS_CACHE"] = "/tmp/huggingface_cache/datasets"
+        # 設置通用快取目錄到可寫位置（移除 HuggingFace/SpeechBrain 相關）
         os.environ["XDG_CACHE_HOME"] = "/tmp/cache"
         os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
         os.environ["MPLCONFIGDIR"] = "/tmp/matplotlib"
-        
-        # 確保快取目錄存在並設置權限(修復 Hugging Face Spaces 2025 權限問題)
+
+        # 確保快取目錄存在
         cache_dirs = [
-            "/tmp/speechbrain_cache", 
-            "/tmp/huggingface_cache",
-            "/tmp/huggingface_cache/hub",
-            "/tmp/huggingface_cache/datasets", 
-            "/tmp/transformers_cache", 
-            "/tmp/cache", 
-            "/tmp/numba_cache", 
+            "/tmp/cache",
+            "/tmp/numba_cache",
             "/tmp/matplotlib",
-            "/tmp/voice_cache"
+            "/tmp/voice_cache",
         ]
         for cache_dir in cache_dirs:
             os.makedirs(cache_dir, mode=0o777, exist_ok=True)

@@ -26,8 +26,9 @@ jsonschema>=4.17.0
 # Machine Learning dependencies
 numpy>=1.24.0,<2.0.0
 torch==2.8.0
+torchaudio==2.8.0
 scikit-learn==1.6.1
 joblib>=1.3.0
 librosa==0.11.0
 soundfile>=0.12.0
-speechbrain==1.0.3
+noisereduce>=0.4.3

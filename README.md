@@ -32,8 +32,7 @@ ENABLE_BACKGROUND_JOBS=false PORT=7860 python app.py
 
 ## 📦 推上 HuggingFace
 ```bash
-# 先到 https://huggingface.co/settings/tokens 生成 write 權限 token
-git clone https://huggingface.co/spaces/XiaoBai1221/Bloom_Ware
+（已移除 HuggingFace/SpeechBrain 相依，無需設定 token）
 cd Bloom_Ware
 # 將最新程式碼覆蓋進來
 git add .
