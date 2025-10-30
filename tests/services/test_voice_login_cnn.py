@@ -27,7 +27,7 @@ def test_voice_login_success_with_cnn_stub(monkeypatch):
         (tmpdir / "classes.txt").write_text("alice\nbob\n", encoding="utf-8")
         monkeypatch.setenv("VOICE_CNN_MODEL_DIR", str(tmpdir))
 
-        # 在 VoiceAuthService 初始化前，先以假模組覆蓋 cnn_adapter，避免實際載入大型相依（如 torchaudio）
+        # 在 VoiceAuthService 初始化前，先以假模組覆蓋 inference，避免實際載入大型相依（如 torchaudio）
         dummy = types.SimpleNamespace(
             predict_files=lambda model_dir, inputs, threshold=0.0: [{
                 "file": str(inputs[0]),
@@ -37,7 +37,7 @@ def test_voice_login_success_with_cnn_stub(monkeypatch):
                 "is_unknown": False,
             }]
         )
-        monkeypatch.setitem(sys.modules, 'models.speaker_identification.cnn_adapter', dummy)
+        monkeypatch.setitem(sys.modules, 'scripts.inference', dummy)
 
         svc = VoiceAuthService(config=VoiceLoginConfig(
             window_seconds=1,
@@ -68,11 +68,11 @@ def test_voice_login_no_audio_returns_error(monkeypatch):
         (tmpdir / "classes.txt").write_text("alice\nbob\n", encoding="utf-8")
         monkeypatch.setenv("VOICE_CNN_MODEL_DIR", str(tmpdir))
 
-        # 同樣先注入假 cnn_adapter 模組
+        # 同樣先注入假 inference 模組
         dummy = types.SimpleNamespace(
             predict_files=lambda model_dir, inputs, threshold=0.0: []
         )
-        monkeypatch.setitem(sys.modules, 'models.speaker_identification.cnn_adapter', dummy)
+        monkeypatch.setitem(sys.modules, 'scripts.inference', dummy)
 
         svc = VoiceAuthService(config=VoiceLoginConfig(
             window_seconds=1,

@@ -78,6 +78,76 @@ def softmax(x):
     return e / e.sum(dim=1, keepdim=True)
 
 
+def predict_files(model_dir, file_list, threshold=0.0):
+    """
+    預測多個音訊檔案的說話者。
+
+    Args:
+        model_dir: 模型目錄，包含 speaker_id_model.pth 和 classes.txt
+        file_list: 檔案路徑列表
+        threshold: 預測門檻（目前未使用）
+
+    Returns:
+        結果列表，每個元素為字典，包含 'pred', 'score', 'top'
+    """
+    device = get_device()
+    bundle = torchaudio.pipelines.WAV2VEC2_BASE
+    target_sr = bundle.sample_rate
+
+    model_path = os.path.join(model_dir, 'speaker_id_model.pth')
+    classes_path = os.path.join(model_dir, 'classes.txt')
+    processed_dir = os.path.join(model_dir, 'processed_audio')
+
+    if os.path.isfile(classes_path):
+        classes = load_classes(classes_path)
+    elif os.path.isdir(processed_dir):
+        classes = load_classes(processed_dir)
+    else:
+        raise FileNotFoundError(f"找不到類別定義：{classes_path} 或 {processed_dir}")
+
+    num_classes = len(classes)
+
+    model = Wav2Vec2SpeakerClassifier(bundle, num_classes)
+    state = torch.load(model_path, map_location='cpu')
+    model.load_state_dict(state)
+    model.to(device).eval()
+
+    results = []
+    for file_path in file_list:
+        try:
+            # 前處理音訊
+            y, sr = process_like_training(file_path)
+
+            # 轉成模型輸入
+            y_t = torch.tensor(y, dtype=torch.float32).unsqueeze(0)
+            if sr != target_sr:
+                resampler = torchaudio.transforms.Resample(sr, target_sr)
+                y_t = resampler(y_t)
+            length = torch.tensor([y_t.shape[1]], dtype=torch.long)
+            waveforms, lengths = y_t.to(device), length.to(device)
+
+            with torch.no_grad():
+                logits = model(waveforms, lengths)
+                probs = softmax(logits).squeeze(0).cpu()
+                top_prob, top_idx = torch.max(probs, dim=0)
+                pred = classes[top_idx.item()]
+
+                # 獲取 top 候選
+                topk = torch.topk(probs, k=min(3, num_classes))
+                top = [(classes[i], float(p)) for p, i in zip(topk.values.tolist(), topk.indices.tolist())]
+
+            result = {
+                'pred': pred,
+                'score': float(top_prob.item()),
+                'top': top
+            }
+            results.append(result)
+        except Exception as e:
+            results.append({'error': str(e)})
+
+    return results
+
+
 # ============== 錄音與前處理（比照 process_audio.py） ==============
 REC_SR = 22050
 TARGET_RMS = 0.1
