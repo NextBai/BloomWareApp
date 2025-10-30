@@ -105,7 +105,7 @@ class VoiceAuthService:
         if str(self.identity_dir) not in os.sys.path:
             os.sys.path.insert(0, str(self.identity_dir))
         try:
-            from models.speaker_identification.cnn_adapter import predict_files as _predict_files  # type: ignore
+            from scripts.inference import predict_files as _predict_files  # type: ignore
         except Exception as e:  # pragma: no cover
             raise RuntimeError(f"載入 CNN 說話者辨識模組失敗：{e}")
         self._predict_files = _predict_files

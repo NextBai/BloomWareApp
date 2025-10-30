@@ -783,7 +783,7 @@ async function handleVoiceBindingReady() {
 
   // 更新提示文字
   if (typeof transcript !== 'undefined') {
-    transcript.textContent = '請開始說話（錄音 5 秒）...';
+    transcript.textContent = '請開始說話（錄音 3 秒）...';
     transcript.className = 'voice-transcript provisional';
   }
 
@@ -814,10 +814,10 @@ async function handleVoiceBindingReady() {
       return;
     }
 
-    console.log('⏱️ 開始倒數 5 秒錄音...');
+    console.log('⏱️ 開始倒數 3 秒錄音...');
 
     // 倒數計時提示
-    let countdown = 5;
+    let countdown = 3;
     const countdownInterval = setInterval(() => {
       countdown--;
       if (countdown > 0 && typeof transcript !== 'undefined') {
@@ -826,10 +826,10 @@ async function handleVoiceBindingReady() {
       }
     }, 1000);
 
-    // 5 秒後自動停止錄音
+    // 3 秒後自動停止錄音
     setTimeout(() => {
       clearInterval(countdownInterval);
-      console.log('⏹️ 5 秒錄音完成，自動停止');
+      console.log('⏹️ 3 秒錄音完成，自動停止');
 
       // 停止音訊視覺化
       if (typeof stopRealAudioAnalysis === 'function') {
@@ -852,7 +852,7 @@ async function handleVoiceBindingReady() {
         transcript.className = 'voice-transcript provisional';
       }
 
-    }, 5000);  // 5 秒錄音時長
+    }, 3000);  // 3 秒錄音時長
   } else {
     console.error('❌ WebSocket 管理器未初始化');
     showErrorNotification('系統錯誤：WebSocket 未連接');

@@ -219,7 +219,7 @@ async def lifespan(app: FastAPI):
         # 初始化語音登入服務（硬編參數）
         try:
             app.state.voice_auth = VoiceAuthService(config=VoiceLoginConfig(
-                window_seconds=4,
+                window_seconds=3,
                 required_windows=1,
                 sample_rate=16000,
                 prob_threshold=0.40,
