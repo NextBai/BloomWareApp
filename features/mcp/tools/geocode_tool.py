@@ -57,7 +57,7 @@ class ReverseGeocodeTool(MCPTool):
         cached = await db_cache.get_geo_cached(geokey)
         if cached:
             return cls.create_success_response(
-                content=f"{cached.get('city')}, {cached.get('admin')}",
+                content=cached.get("display_name") or f"{cached.get('city')}, {cached.get('admin')}",
                 data=cached
             )
 
@@ -66,7 +66,7 @@ class ReverseGeocodeTool(MCPTool):
         if db_cached:
             await db_cache.set_geo_cache(geokey, db_cached)
             return cls.create_success_response(
-                content=f"{db_cached.get('city')}, {db_cached.get('admin')}",
+                content=db_cached.get("display_name") or f"{db_cached.get('city')}, {db_cached.get('admin')}",
                 data=db_cached
             )
 
@@ -92,11 +92,35 @@ class ReverseGeocodeTool(MCPTool):
                 city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("county")
                 admin = addr.get("state") or addr.get("county") or ""
                 country_code = (addr.get("country_code") or "").upper()
-                payload = {"city": city or "", "admin": admin or "", "country_code": country_code}
+                display_name = data.get("display_name") or ""
+                road = addr.get("road") or addr.get("pedestrian") or addr.get("footway") or ""
+                house_number = addr.get("house_number") or ""
+                suburb = addr.get("suburb") or addr.get("neighbourhood") or ""
+                label_parts = []
+                if road and house_number:
+                    label_parts.append(f"{road}{house_number}")
+                elif road:
+                    label_parts.append(road)
+                if suburb:
+                    label_parts.append(suburb)
+                if city:
+                    label_parts.append(city)
+                if admin:
+                    label_parts.append(admin)
+                label = ", ".join(label_parts)
+                payload = {
+                    "city": city or "",
+                    "admin": admin or "",
+                    "country_code": country_code,
+                    "display_name": display_name,
+                    "label": label or display_name,
+                    "road": road,
+                    "house_number": house_number,
+                    "suburb": suburb,
+                }
 
         # 回寫快取
         await db_cache.set_geo_cache(geokey, payload)
         await set_geo_cache(geokey, payload)
 
-        return cls.create_success_response(content=f"{payload['city']}, {payload['admin']}", data=payload)
-
+        return cls.create_success_response(content=payload.get("label") or f"{payload['city']}, {payload['admin']}", data=payload)
