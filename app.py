@@ -858,6 +858,26 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                         from geohash2 import encode as gh_encode
                         geohash7 = gh_encode(lat, lon, precision=7) if (lat is not None and lon is not None) else None
                         heading_cardinal = _heading_to_cardinal(heading_deg) if heading_deg is not None else None
+                        city = message_data.get("city")
+                        admin = message_data.get("admin")
+                        country_code = message_data.get("country_code")
+                        address_display = message_data.get("address_display")
+                        # 若前端未提供城市資訊，嘗試透過 MCP reverse_geocode 取得
+                        if (not city) and lat is not None and lon is not None:
+                            try:
+                                feature_router: MCPAgentBridge = app.state.feature_router
+                                reverse_tool = feature_router.mcp_server.tools.get("reverse_geocode")
+                                if reverse_tool and reverse_tool.handler:
+                                    geo_res = await reverse_tool.handler({"lat": lat, "lon": lon})
+                                    if isinstance(geo_res, dict) and geo_res.get("success"):
+                                        payload = geo_res.get("data") or geo_res
+                                        city = payload.get("city") or city
+                                        admin = payload.get("admin") or admin
+                                        country_code = payload.get("country_code") or country_code
+                                        address_display = payload.get("display_name") or payload.get("label") or address_display
+                            except Exception as ge:
+                                logger.debug(f"反地理查詢失敗: {ge}")
+
                         env_payload = {
                             "lat": lat,
                             "lon": lon,
@@ -868,6 +888,10 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                             "locale": locale,
                             "device": device,
                             "geohash_7": geohash7,
+                            "city": city,
+                            "admin": admin,
+                            "country_code": country_code,
+                            "address_display": address_display,
                         }
 
                         # 更新會話暫存

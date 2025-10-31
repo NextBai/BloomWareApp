@@ -198,6 +198,10 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     if device:
         parts.append(f"裝置: {device}")
 
+    address_display = (ctx.get("address_display") or "").strip()
+    if address_display:
+        parts.append(f"地點: {address_display}")
+
     return "\n".join(parts)
 
 
