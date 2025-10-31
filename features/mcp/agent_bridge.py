@@ -59,6 +59,32 @@ class MCPAgentBridge:
         # 2025 最佳實踐：啟動時預熱熱門查詢快取
         await self._preheat_cache()
 
+    def _normalize_tool_name(self, raw_name: Optional[str]) -> Optional[str]:
+        """
+        將 GPT 回傳的工具名稱正規化為註冊表中的實際名稱。
+
+        - 去除前後空白
+        - 將空白與破折號統一轉為底線
+        - 以不分大小寫方式匹配既有工具名稱
+        """
+        if not raw_name:
+            return None
+
+        candidate = raw_name.strip()
+        if not candidate:
+            return None
+
+        candidate = candidate.replace("-", "_").replace(" ", "_")
+        if candidate in self.mcp_server.tools:
+            return candidate
+
+        candidate_lower = candidate.lower()
+        for registered_name in self.mcp_server.tools.keys():
+            if registered_name.lower() == candidate_lower:
+                return registered_name
+
+        return None
+
     def get_current_time_data(self) -> Dict[str, Any]:
         """
         獲取當前時間數據，用於生成個性化歡迎詞
@@ -242,36 +268,47 @@ class MCPAgentBridge:
                         logger.warning("⚠️ GPT 標記為工具調用但未提供工具名稱，降級為聊天")
                         return False, None
 
-                    # 解析 tool_name:params 格式
+                    raw_tool_name = tool_name_with_params
+                    params_str = ""
                     if ":" in tool_name_with_params:
-                        tool_name, params_str = tool_name_with_params.split(":", 1)
-                        # 解析參數
-                        arguments = {}
-                        if params_str.strip():
-                            for param_pair in params_str.split(","):
-                                if "=" in param_pair:
-                                    key, value = param_pair.split("=", 1)
-                                    key = key.strip()
-                                    value = value.strip()
+                        raw_tool_name, params_str = tool_name_with_params.split(":", 1)
 
-                                    # 跳過空值（避免傳入空字串導致驗證失敗）
-                                    if not value:
-                                        continue
+                    tool_name = self._normalize_tool_name(raw_tool_name)
+                    if not tool_name:
+                        logger.warning(f"⚠️ 工具 {raw_tool_name} 無法對應到註冊名稱，降級為聊天")
+                        return False, None
 
-                                    # 嘗試類型轉換
-                                    if value.isdigit():
-                                        arguments[key] = int(value)
-                                    elif value.lower() in ('true', 'false'):
-                                        arguments[key] = value.lower() == 'true'
-                                    elif value.replace('.', '', 1).isdigit():
-                                        arguments[key] = float(value)
-                                    else:
-                                        arguments[key] = value
-                    else:
-                        tool_name = tool_name_with_params
-                        arguments = {}
+                    # 解析參數
+                    arguments = {}
+                    if params_str.strip():
+                        for param_pair in params_str.split(","):
+                            if "=" not in param_pair:
+                                continue
+                            key, value = param_pair.split("=", 1)
+                            key = key.strip()
+                            value = value.strip()
 
-                    logger.info(f"✅ GPT 檢測到工具調用: {tool_name}")
+                            # 跳過空鍵或空值（避免傳入空字串導致驗證失敗）
+                            if not key or not value:
+                                continue
+
+                            # 嘗試類型轉換
+                            normalized_value = value
+                            if value.isdigit():
+                                normalized_value = int(value)
+                            else:
+                                lower_value = value.lower()
+                                if lower_value in ("true", "false"):
+                                    normalized_value = lower_value == "true"
+                                else:
+                                    try:
+                                        normalized_value = float(value)
+                                    except ValueError:
+                                        normalized_value = value
+
+                            arguments[key] = normalized_value
+
+                    logger.info(f"✅ GPT 檢測到工具調用: {raw_tool_name.strip()} → {tool_name}")
                     logger.debug("工具調用參數: %s", _safe_json(arguments))
 
                     # 驗證工具是否存在
