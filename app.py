@@ -399,6 +399,7 @@ class ConnectionManager:
         self.active_connections: Dict[str, WebSocket] = {}
         self.client_info: Dict[str, dict] = {}
         self.user_sessions: Dict[str, Dict[str, Any]] = {}  # 用戶會話信息
+        self.last_env: Dict[str, Dict[str, Any]] = {}  # 最近的環境快照
 
     async def connect(self, websocket: WebSocket, user_id: str, user_info: Dict[str, Any]):
         await websocket.accept()
@@ -717,7 +718,8 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
             data = await websocket.receive_text()
             try:
                 message_data = json.loads(data)
-                message_type = message_data.get("type", "")
+                message_type_raw = message_data.get("type", "")
+                message_type = (message_type_raw or "").strip().lower()
 
                 # 更新最後活動時間
                 manager.user_sessions[user_id]["last_activity"] = datetime.now()
