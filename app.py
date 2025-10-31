@@ -48,6 +48,7 @@ from core.database import (
     update_chat_title,
     delete_chat,
     save_chat_message,  # 寫入保持原樣
+    get_user_env_current,
 )
 # 使用優化版數據庫函數（帶快取）
 from core.database.optimized import (
@@ -701,9 +702,22 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
         # 發送個性化歡迎消息（語音登入模式跳過）
         if not is_voice_login_mode:
             try:
+                tz_hint = None
+                try:
+                    env_res = await get_user_env_current(user_id)
+                    if env_res.get("success"):
+                        tz_hint = (env_res.get("context") or {}).get("tz")
+                except Exception as tz_err:
+                    logger.debug(f"讀取使用者時區失敗: {tz_err}")
+
                 td = app.state.feature_router.get_current_time_data()
                 # WebSocket 連線時沒有語音情緒，使用空字串
-                welcome_msg = compose_welcome(user_name=user_info.get('name'), time_data=td, emotion_label="")
+                welcome_msg = compose_welcome(
+                    user_name=user_info.get('name'),
+                    time_data=td,
+                    emotion_label="",
+                    timezone=tz_hint,
+                )
             except Exception as e:
                 logger.warning(f"生成歡迎訊息失敗: {e}")
                 welcome_msg = f"歡迎回來，{user_info['name']}！"
@@ -1087,7 +1101,19 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                     name = user.get("name") or "用戶"
                                     emo = result.get("emotion") or {}
                                     emo_label = str(emo.get("label") or "")
-                                    welcome = compose_welcome(user_name=name, time_data=td, emotion_label=emo_label)
+                                    tz_hint = None
+                                    try:
+                                        env_res = await get_user_env_current(user_id)
+                                        if env_res.get("success"):
+                                            tz_hint = (env_res.get("context") or {}).get("tz")
+                                    except Exception as tz_err:
+                                        logger.debug(f"讀取使用者時區失敗: {tz_err}")
+                                    welcome = compose_welcome(
+                                        user_name=name,
+                                        time_data=td,
+                                        emotion_label=emo_label,
+                                        timezone=tz_hint,
+                                    )
                                 except Exception:
                                     welcome = None
 
