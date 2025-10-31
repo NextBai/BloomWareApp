@@ -747,8 +747,16 @@ function initializeWebSocket(token) {
       case 'error':
         // 錯誤訊息
         console.error('❌ 後端錯誤:', data.message);
-        setState('idle');
-        showErrorNotification(data.message);
+
+        const messageText = data && typeof data.message === 'string' ? data.message : '';
+        const isEnvSnapshotWarning = messageText.includes('env_snapshot');
+
+        if (!isEnvSnapshotWarning) {
+          setState('idle');
+          showErrorNotification(messageText || '系統發生未知錯誤');
+        } else {
+          console.warn('⚠️ 後端尚未支援 env_snapshot，忽略此警告');
+        }
         break;
 
       case 'voice_login_result':
@@ -775,6 +783,14 @@ function initializeWebSocket(token) {
           }
         } catch (_) {}
         console.log('✅ 語音綁定完成（已更新本地狀態）');
+        break;
+
+      case 'env_ack':
+        if (data.success) {
+          console.log('🧭 環境快照已同步，Geohash:', data.geohash_7, 'Heading:', data.heading);
+        } else {
+          console.warn('⚠️ 環境快照同步失敗:', data.error);
+        }
         break;
 
       default:
