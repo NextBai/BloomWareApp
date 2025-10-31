@@ -175,7 +175,7 @@ async def get_user_history(user_id, limit=20):
     try:
         import asyncio as _asyncio
         def _fetch_messages():
-            docs = messages_collection.where("user_id", "==", user_id)\
+            docs = messages_collection.where(filter=FieldFilter("user_id", "==", user_id))\
                                     .order_by("timestamp")\
                                     .limit(limit)\
                                     .stream()
@@ -374,7 +374,7 @@ async def get_user_chats(user_id):
     try:
         import asyncio as _asyncio
         def _fetch_chats():
-            docs = chats_collection.where("user_id", "==", user_id)\
+            docs = chats_collection.where(filter=FieldFilter("user_id", "==", user_id))\
                                  .order_by("updated_at", direction=firestore.Query.DESCENDING)\
                                  .stream()
             chats = []
@@ -422,7 +422,7 @@ async def get_chat(chat_id):
             def _fetch_msgs():
                 q = (
                     messages_collection
-                    .where("chat_id", "==", chat_id)
+                    .where(filter=FieldFilter("chat_id", "==", chat_id))
                     .order_by("timestamp", direction=_fs.Query.ASCENDING)
                 )
                 return [d.to_dict() for d in q.stream()]
@@ -490,7 +490,7 @@ async def get_chat_messages(chat_id: str, limit: int | None = None, ascending: b
         from google.cloud import firestore as _fs
 
         def _query():
-            q = messages_collection.where("chat_id", "==", chat_id)
+            q = messages_collection.where(filter=FieldFilter("chat_id", "==", chat_id))
             direction = _fs.Query.ASCENDING if ascending else _fs.Query.DESCENDING
             q = q.order_by("timestamp", direction=direction)
             if limit and limit > 0:
@@ -731,7 +731,7 @@ async def save_memory(
 
         def _find_existing():
             docs = (
-                col_ref.where("content_hash", "==", content_hash)
+                col_ref.where(filter=FieldFilter("content_hash", "==", content_hash))
                 .limit(1)
                 .stream()
             )
@@ -936,9 +936,9 @@ async def get_user_memories(
 
         def _fetch_memories():
             col_ref = _get_user_memories_collection(user_id)
-            query = col_ref.where("importance", ">=", min_importance)
+            query = col_ref.where(filter=FieldFilter("importance", ">=", min_importance))
             if memory_type:
-                query = query.where("type", "==", memory_type)
+                query = query.where(filter=FieldFilter("type", "==", memory_type))
             docs = (
                 query.order_by("importance", direction=firestore.Query.DESCENDING)
                 .order_by("updated_at", direction=firestore.Query.DESCENDING)
@@ -1112,8 +1112,8 @@ async def cleanup_old_memories(user_id: str, days_old: int = 90, min_importance:
         def _delete_old():
             col_ref = _get_user_memories_collection(user_id)
             docs = (
-                col_ref.where("importance", "<", min_importance)
-                .where("updated_at", "<", cutoff_date)
+                col_ref.where(filter=FieldFilter("importance", "<", min_importance))
+                .where(filter=FieldFilter("updated_at", "<", cutoff_date))
                 .stream()
             )
             deleted_count = 0
