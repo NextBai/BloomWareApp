@@ -42,7 +42,7 @@
 - 對話：前端以 `/ws?token=JWT` 連上；訊息先經「語音綁定 FSM」攔截（若用語音綁定流程）→ 進入 `ChatPipeline` → 視意圖走 MCP 工具或一般聊天 → 落庫 `chats/messages`。
 - 檔案分析：`/api/upload-file` 或 `/api/analyze-file-base64`，文字/PDF/圖片分流到對應分析邏輯，底層仍透過 OpenAI。
 - 健康資料：建議透過 MCP `healthkit_tool` 查 Firestore（iOS 端直寫 `health_data`）。
-- 位置快照：前端成功取得瀏覽器定位時會透過 `env_snapshot` 送到 WebSocket；後端會自動寫入 Firestore 並呼叫 MCP `reverse_geocode` 反查地點，AI Prompt 只會顯示地點名稱（有 label）或地址（無 label），不再硬編碼地標。
+- 位置快照：前端成功取得瀏覽器定位時會透過 `env_snapshot` 送到 WebSocket；後端會自動寫入 Firestore 並呼叫 MCP `reverse_geocode` 反查地點，AI Prompt 只會顯示地點名稱（有 label）或地址（無 label），不再硬編碼地標。連線歡迎詞也會優先使用最近的 `tz`，避免問候時間錯亂。
 
 —
 

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict
+from datetime import datetime
+from typing import Dict, Optional
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:  # pragma: no cover - zoneinfo may不可用
+    ZoneInfo = None  # type: ignore
 
 
 def _greet_from_period(period: str) -> str:
@@ -15,6 +21,24 @@ def _greet_from_period(period: str) -> str:
         "深夜": "夜安",
     }
     return mapping.get(period, "您好")
+
+
+def _derive_period_from_hour(hour: int) -> str:
+    if 5 <= hour < 9:
+        return "早晨"
+    if 9 <= hour < 12:
+        return "上午"
+    if 12 <= hour < 14:
+        return "中午"
+    if 14 <= hour < 18:
+        return "下午"
+    if 18 <= hour < 20:
+        return "傍晚"
+    if 20 <= hour < 23:
+        return "晚上"
+    if 23 <= hour or hour < 2:
+        return "深夜"
+    return "凌晨"
 
 
 def _mood_from_emotion_label(emo_label: str) -> str:
@@ -35,14 +59,33 @@ def _mood_from_emotion_label(emo_label: str) -> str:
     return "很高興再次見到你！"
 
 
-def compose_welcome(user_name: str, time_data: Dict, emotion_label: str) -> str:
+def compose_welcome(
+    user_name: str,
+    time_data: Dict,
+    emotion_label: str,
+    timezone: Optional[str] = None,
+) -> str:
     name = user_name or "用戶"
-    greet = _greet_from_period(str(time_data.get("day_period", "")))
-    month = time_data.get("month")
-    day = time_data.get("day")
-    weekday = time_data.get("weekday_full_chinese", "")
+    dt: Optional[datetime] = None
+
+    if timezone and ZoneInfo:
+        try:
+            dt = datetime.now(ZoneInfo(timezone))
+        except Exception:
+            dt = None
+
+    if dt is None:
+        dt = datetime.now()
+
+    day_period = _derive_period_from_hour(dt.hour)
+    greet = _greet_from_period(day_period)
+
+    month = dt.month
+    day = dt.day
+    weekday_list = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    weekday = weekday_list[dt.weekday()]
+
     date_str = f"{month}月{day}號{weekday}"
     mood = _mood_from_emotion_label(str(emotion_label or ""))
     return f"{name}{greet}！今天是{date_str}，{mood}有什麼要與我分享呢？"
-
 
