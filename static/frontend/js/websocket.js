@@ -915,4 +915,3 @@ async function handleVoiceBindingReady() {
 }
 
 console.log('✅ WebSocket 模組已載入（完整版）');
-        break;

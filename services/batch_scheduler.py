@@ -9,7 +9,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from typing import Dict, List, Any
 from services.batch_processor import batch_processor
 from core.database import firestore_db
@@ -165,11 +165,11 @@ class BatchScheduler:
     async def _wait_until(self, target_time: dt_time):
         """等待到指定時間"""
         now = datetime.now()
-        target = now.replace(hour=target_time.hour, minute=target_time.minute, second=target_time.second, microsecond=0)
+        target = datetime.combine(now.date(), target_time)
 
         # 如果目標時間已過，設定為明天
         if target <= now:
-            target = target.replace(day=target.day + 1)
+            target += timedelta(days=1)
 
         wait_seconds = (target - now).total_seconds()
         logger.debug(f"⏰ 等待 {wait_seconds:.0f} 秒後執行（目標時間: {target}）")
