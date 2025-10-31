@@ -41,15 +41,18 @@ class WeatherTool(MCPTool):
         return StandardToolSchemas.create_input_schema({
             "city": {
                 "type": "string",
-                "description": "城市名稱（請使用英文，例如：Taipei, Tokyo, London, New York）或座標 (lat,lon 格式)"
+                "description": "城市名稱（英文）或座標字串 (lat,lon)，若提供 lat/lon 會優先生效",
+                "default": ""
             },
+            "lat": {"type": "number", "description": "緯度（優先於 city）", "default": None},
+            "lon": {"type": "number", "description": "經度（優先於 city）", "default": None},
             "language": {
                 "type": "string",
                 "description": "回覆語言 (zh_tw, en, zh_cn)",
                 "default": "zh_tw",
                 "enum": ["zh_tw", "en", "zh_cn"]
             }
-        }, ["city"])
+        }, ["city"])  # city 可留空，若 lat/lon 有值則忽略
 
     @classmethod
     def get_output_schema(cls) -> Dict[str, Any]:
@@ -65,15 +68,20 @@ class WeatherTool(MCPTool):
         """執行天氣查詢"""
         city = arguments.get("city")
         language = arguments.get("language", "zh_tw")
+        lat_arg = arguments.get("lat")
+        lon_arg = arguments.get("lon")
 
-        if not city:
-            raise ValidationError("city", "未提供城市名稱")
+        if (lat_arg is None or lon_arg is None) and not city:
+            raise ValidationError("city", "未提供城市或經緯度")
 
         if not WEATHER_API_KEY:
             raise ExecutionError("未設置天氣 API 密鑰，請在 .env 文件中添加 WEATHER_API_KEY")
 
         try:
-            weather_data = await cls._get_weather_data(city, language)
+            if lat_arg is not None and lon_arg is not None:
+                weather_data = await cls._get_weather_data_by_coord(float(lat_arg), float(lon_arg), language)
+            else:
+                weather_data = await cls._get_weather_data(city, language)
 
             if weather_data.get("success"):
                 # 生成結構化數據供 AI 格式化
@@ -93,6 +101,38 @@ class WeatherTool(MCPTool):
         except Exception as e:
             logger.error(f"天氣查詢錯誤: {e}")
             raise ExecutionError(f"天氣查詢時發生錯誤: {str(e)}", e)
+
+    @staticmethod
+    async def _get_weather_data_by_coord(lat: float, lon: float, language: str = "zh_tw") -> Dict[str, Any]:
+        try:
+            logger.info(f"查詢座標天氣: lat={lat}, lon={lon}")
+            params = {
+                "appid": WEATHER_API_KEY,
+                "units": "metric",
+                "lang": language,
+                "lat": lat,
+                "lon": lon,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(WEATHER_API_URL, params=params, timeout=10) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return {"success": True, "data": data}
+                    elif response.status == 401:
+                        return {"success": False, "error": "天氣 API 授權失敗，請檢查 API 密鑰"}
+                    elif response.status == 404:
+                        return {"success": False, "error": "找不到座標對應天氣資訊"}
+                    elif response.status == 429:
+                        return {"success": False, "error": "天氣 API 請求次數超限，請稍後再試"}
+                    else:
+                        return {"success": False, "error": f"天氣 API 請求失敗，狀態碼: {response.status}"}
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "獲取天氣資訊超時"}
+        except aiohttp.ClientError:
+            return {"success": False, "error": "網絡連接錯誤，無法獲取天氣資訊"}
+        except Exception as e:
+            logger.error(f"獲取天氣資訊錯誤: {e}")
+            return {"success": False, "error": str(e)}
 
     @staticmethod
     async def _get_weather_data(city: str, language: str = "zh_tw") -> Dict[str, Any]:

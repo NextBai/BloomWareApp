@@ -23,6 +23,9 @@ python-multipart==0.0.20
 matplotlib==3.7.1
 jsonschema>=4.17.0
 
+# Geospatial / directions
+geohash2==1.1
+
 # Machine Learning dependencies
 numpy>=1.24.0,<2.0.0
 torch==2.8.0

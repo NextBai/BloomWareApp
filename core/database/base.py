@@ -29,6 +29,8 @@ messages_collection = None
 memories_collection = None
 health_data_collection = None
 device_bindings_collection = None
+geo_cache_collection = None
+route_cache_collection = None
 
 # 記憶儲存相關設定
 MAX_MEMORIES_PER_USER = 500
@@ -90,6 +92,11 @@ def connect_to_firestore():
         chats_collection = firestore_db.collection('chats')
         health_data_collection = firestore_db.collection('health_data')
         device_bindings_collection = firestore_db.collection('device_bindings')
+        
+        # 其他集合
+        global geo_cache_collection, route_cache_collection
+        geo_cache_collection = firestore_db.collection('geo_cache')
+        route_cache_collection = firestore_db.collection('route_cache')
         
         logger.info(f"✅ Firestore連接成功，專案ID：{firebase_project_id}")
         print(f"\n✅ Firebase Firestore連接成功！專案ID：{firebase_project_id}\n")
@@ -405,47 +412,100 @@ async def get_chat(chat_id):
             logger.warning(f"對話 {chat_id} 不存在")
             return {"success": False, "error": "對話不存在"}
         
-        chat = doc.to_dict()
+        chat = doc.to_dict() or {}
         chat["chat_id"] = doc.id
-        logger.info(f"獲取到對話 {chat_id}，包含 {len(chat.get('messages', []))} 條消息")
+
+        # 從 messages 集合讀取完整對話（按時間升序）
+        try:
+            from google.cloud import firestore as _fs
+
+            def _fetch_msgs():
+                q = (
+                    messages_collection
+                    .where("chat_id", "==", chat_id)
+                    .order_by("timestamp", direction=_fs.Query.ASCENDING)
+                )
+                return [d.to_dict() for d in q.stream()]
+
+            msgs = await _asyncio.to_thread(_fetch_msgs)
+            chat["messages"] = msgs
+            logger.info(f"獲取到對話 {chat_id}，包含 {len(msgs)} 條消息（messages 集合）")
+        except Exception as _e:
+            # 向後相容：若讀取失敗，退回文件內嵌 messages（若存在）
+            msgs_fallback = chat.get('messages', []) or []
+            chat["messages"] = msgs_fallback
+            logger.warning(f"讀取 messages 集合失敗，使用內嵌 messages。原因: {_e}")
+
         return {"success": True, "chat": chat}
     except Exception as e:
         logger.error(f"獲取對話時發生錯誤: {e}")
         return {"success": False, "error": str(e)}
 
 async def save_chat_message(chat_id, sender, content):
-    if chats_collection is None:
+    """保存對話消息（使用 messages 集合作為單一事實來源）"""
+    if messages_collection is None or chats_collection is None:
         logger.error("Firestore尚未連接，無法保存消息")
         return {"success": False, "error": "數據庫未連接"}
     try:
         import asyncio as _asyncio
 
-        def _update_doc():
+        now = datetime.now()
+        message = {
+            "chat_id": chat_id,
+            "sender": sender,
+            "content": content,
+            "timestamp": now,
+        }
+
+        def _write_message():
+            messages_collection.add(message)
+
+        def _touch_chat():
             doc_ref = chats_collection.document(chat_id)
-            doc = doc_ref.get()
-            if not doc.exists:
-                return None
-            message = {
-                "sender": sender,
-                "content": content,
-                "timestamp": datetime.now(),
-            }
-            doc_ref.update({
-                "messages": ArrayUnion([message]),
-                "updated_at": datetime.now(),
-            })
-            return message
+            snap = doc_ref.get()
+            if not snap.exists:
+                return False
+            doc_ref.update({"updated_at": now})
+            return True
 
-        message = await _asyncio.to_thread(_update_doc)
-        if message is None:
-            logger.warning(f"對話 {chat_id} 不存在，無法保存消息")
-            return {"success": False, "error": "對話不存在"}
+        await _asyncio.to_thread(_write_message)
+        touched = await _asyncio.to_thread(_touch_chat)
+        if not touched:
+            logger.warning(f"對話 {chat_id} 不存在，但消息已寫入 messages 集合")
 
-        logger.info(f"消息已保存到對話 {chat_id}")
+        logger.info(f"消息已保存到 messages 集合（chat_id={chat_id}）")
         return {"success": True, "message": message}
     except Exception as e:
         logger.error(f"保存消息時發生錯誤: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def get_chat_messages(chat_id: str, limit: int | None = None, ascending: bool = True):
+    """讀取指定對話的消息（來自 messages 集合）"""
+    if messages_collection is None:
+        logger.error("Firestore尚未連接，無法讀取消息")
+        return []
+    try:
+        import asyncio as _asyncio
+        from google.cloud import firestore as _fs
+
+        def _query():
+            q = messages_collection.where("chat_id", "==", chat_id)
+            direction = _fs.Query.ASCENDING if ascending else _fs.Query.DESCENDING
+            q = q.order_by("timestamp", direction=direction)
+            if limit and limit > 0:
+                q = q.limit(limit)
+            docs = q.stream()
+            res = [d.to_dict() for d in docs]
+            if not ascending:
+                res.reverse()  # 若取降序+limit，回傳前再反轉為時間正序
+            return res
+
+        messages = await _asyncio.to_thread(_query)
+        return messages
+    except Exception as e:
+        logger.error(f"讀取對話消息失敗: {e}")
+        return []
 
 async def update_chat_title(chat_id, title):
     if chats_collection is None:
@@ -724,6 +784,140 @@ async def save_memory(
     except Exception as e:
         logger.error(f"保存記憶時發生錯誤: {e}")
         return {"success": False, "error": str(e)}
+
+
+# ===== 環境 Context（位置/方位/時序） =====
+
+async def set_user_env_current(user_id: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """更新使用者環境現況 users/{uid}/context/current（含 TTL/新鮮度由讀取端判斷）。"""
+    if users_collection is None:
+        return {"success": False, "error": "數據庫未連接"}
+    try:
+        import asyncio as _asyncio
+        now = datetime.now()
+
+        def _update():
+            user_doc = _get_user_doc_ref(user_id)
+            ctx_ref = user_doc.collection('context').document('current')
+            payload = ctx.copy()
+            payload['updated_at'] = now
+            ctx_ref.set(payload, merge=True)
+            return True
+
+        await _asyncio.to_thread(_update)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"更新環境現況失敗: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def add_user_env_snapshot(user_id: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """新增使用者環境快照 users/{uid}/context/snapshots。僅保留短期歷史。"""
+    if users_collection is None:
+        return {"success": False, "error": "數據庫未連接"}
+    try:
+        import asyncio as _asyncio
+        now = datetime.now()
+
+        def _write():
+            user_doc = _get_user_doc_ref(user_id)
+            col = user_doc.collection('context').document('meta').collection('snapshots')
+            payload = snapshot.copy()
+            payload['created_at'] = now
+            col.add(payload)
+            return True
+
+        await _asyncio.to_thread(_write)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"寫入環境快照失敗: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def get_user_env_current(user_id: str) -> Dict[str, Any]:
+    """讀取使用者環境現況。"""
+    if users_collection is None:
+        return {"success": False, "error": "數據庫未連接"}
+    try:
+        import asyncio as _asyncio
+
+        def _read():
+            user_doc = _get_user_doc_ref(user_id)
+            ctx_ref = user_doc.collection('context').document('current')
+            snap = ctx_ref.get()
+            return snap.to_dict() if snap.exists else None
+
+        data = await _asyncio.to_thread(_read)
+        if not data:
+            return {"success": False, "error": "NOT_FOUND"}
+        return {"success": True, "context": data}
+    except Exception as e:
+        logger.error(f"讀取環境現況失敗: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ===== 反地理/路線 全域快取集合 =====
+
+async def get_geo_cache(geohash7: str) -> Optional[Dict[str, Any]]:
+    if geo_cache_collection is None:
+        return None
+    try:
+        import asyncio as _asyncio
+        def _read():
+            doc = geo_cache_collection.document(geohash7).get()
+            return doc.to_dict() if doc.exists else None
+        return await _asyncio.to_thread(_read)
+    except Exception as e:
+        logger.warning(f"讀取 geo_cache 失敗: {e}")
+        return None
+
+
+async def set_geo_cache(geohash7: str, payload: Dict[str, Any]) -> bool:
+    if geo_cache_collection is None:
+        return False
+    try:
+        import asyncio as _asyncio
+        now = datetime.now()
+        def _write():
+            data = payload.copy()
+            data['cached_at'] = now
+            geo_cache_collection.document(geohash7).set(data, merge=True)
+            return True
+        return await _asyncio.to_thread(_write)
+    except Exception as e:
+        logger.warning(f"寫入 geo_cache 失敗: {e}")
+        return False
+
+
+async def get_route_cache(key: str) -> Optional[Dict[str, Any]]:
+    if route_cache_collection is None:
+        return None
+    try:
+        import asyncio as _asyncio
+        def _read():
+            doc = route_cache_collection.document(key).get()
+            return doc.to_dict() if doc.exists else None
+        return await _asyncio.to_thread(_read)
+    except Exception as e:
+        logger.warning(f"讀取 route_cache 失敗: {e}")
+        return None
+
+
+async def set_route_cache(key: str, payload: Dict[str, Any]) -> bool:
+    if route_cache_collection is None:
+        return False
+    try:
+        import asyncio as _asyncio
+        now = datetime.now()
+        def _write():
+            data = payload.copy()
+            data['cached_at'] = now
+            route_cache_collection.document(key).set(data, merge=True)
+            return True
+        return await _asyncio.to_thread(_write)
+    except Exception as e:
+        logger.warning(f"寫入 route_cache 失敗: {e}")
+        return False
 
 
 async def get_user_memories(

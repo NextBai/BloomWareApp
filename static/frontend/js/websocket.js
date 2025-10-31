@@ -73,6 +73,48 @@ class WebSocketManager {
     if (cid) {
       this.send({ type: 'chat_focus', chat_id: cid });
     }
+
+    // 嘗試上報一次環境快照（位置/方位/時區/語系/裝置）
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const locale = navigator.language || 'zh-TW';
+      const device = `${navigator.platform || ''}`;
+
+      const sendSnapshot = (lat, lon, acc, heading) => {
+        this.send({
+          type: 'env_snapshot',
+          lat, lon,
+          accuracy_m: acc,
+          heading_deg: heading,
+          tz, locale, device
+        });
+      };
+
+      // 裝置方向（可能受限權限）
+      let heading = undefined;
+      try {
+        if (window.screen && window.screen.orientation && window.screen.orientation.angle !== undefined) {
+          heading = window.screen.orientation.angle; // 粗略
+        }
+      } catch (_) {}
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const c = pos.coords || {};
+            sendSnapshot(c.latitude, c.longitude, c.accuracy, heading);
+          },
+          (_err) => {
+            sendSnapshot(undefined, undefined, undefined, heading);
+          },
+          { enableHighAccuracy: true, maximumAge: 60000, timeout: 5000 }
+        );
+      } else {
+        sendSnapshot(undefined, undefined, undefined, heading);
+      }
+    } catch (e) {
+      console.warn('環境快照上報失敗', e);
+    }
   }
 
   // 處理 WebSocket 訊息
@@ -679,6 +721,7 @@ function initializeWebSocket(token) {
           const emotionValue = typeof data.emotion === 'string' ? data.emotion : data.emotion.label;
           console.log('😊 應用情緒主題:', emotionValue);
           applyEmotion(emotionValue);
+          try { if (emotionValue) localStorage.setItem('lastEmotion', String(emotionValue)); } catch(_) {}
         }
         break;
 
@@ -724,6 +767,16 @@ function initializeWebSocket(token) {
         handleVoiceBindingReady();
         break;
 
+      case 'voice_binding_success':
+        // 綁定成功：不重覆顯示訊息，只更新本地狀態（供後續使用）
+        try {
+          if (data.speaker_label) {
+            localStorage.setItem('speaker_label', data.speaker_label);
+          }
+        } catch (_) {}
+        console.log('✅ 語音綁定完成（已更新本地狀態）');
+        break;
+
       default:
         console.log('🔍 未處理的訊息類型:', data.type);
     }
@@ -756,6 +809,8 @@ function handleVoiceLoginResult(data) {
     if (data.emotion) {
       const emotionValue = typeof data.emotion === 'string' ? data.emotion : data.emotion.label;
       applyEmotion(emotionValue);
+      // 持久化情緒以便重新整理或跳頁仍保持主題
+      try { if (emotionValue) localStorage.setItem('lastEmotion', String(emotionValue)); } catch(_) {}
     }
 
     // 顯示歡迎詞
@@ -860,3 +915,4 @@ async function handleVoiceBindingReady() {
 }
 
 console.log('✅ WebSocket 模組已載入（完整版）');
+        break;

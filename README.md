@@ -44,6 +44,7 @@ git push
 ## 🧠 設定小抄
 - `ENABLE_BACKGROUND_JOBS`：在 HuggingFace 建議設 `false`，避免快取維護、批次任務、清理排程耗掉寶貴 CPU；若搬回 Render 或其他長駐環境，再調回 `true`。
 - 其他 Render 時期的環境變數照舊，沒有特別兼容性的 hack。
+- `OPENROUTESERVICE_API_KEY`：啟用路徑規劃工具（OpenRouteService）。
 
 ## 🤝 團隊資訊
 我們是銘傳大學人工智慧應用學系的 **槓上開發**，專注把 AI 工具塞進實際應用。如果覺得好用，請幫 Space 點顆 ⭐️，或開 Issue/PR 跟我們互嗆（友善互動）。歡迎合作 🙌 

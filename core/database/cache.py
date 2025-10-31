@@ -120,7 +120,12 @@ class DatabaseCache:
         # 請求合併（同一查詢只執行一次）
         self.pending_requests: Dict[str, asyncio.Future] = {}
         self.pending_lock = asyncio.Lock()
-        
+
+        # 其他快取：環境、反地理、路徑
+        self.env_ctx_cache = LRUCache(max_size=1000, ttl_seconds=600)     # 使用者環境快取：10 分鐘
+        self.geo_cache = LRUCache(max_size=5000, ttl_seconds=604800)      # 反地理快取：7 天
+        self.route_cache = LRUCache(max_size=5000, ttl_seconds=86400)     # 路線快取：1 天
+
         logger.info("數據庫緩存管理器初始化完成")
     
     def _generate_cache_key(self, operation: str, **kwargs) -> str:
@@ -280,6 +285,9 @@ class DatabaseCache:
             "chat_cache": self.chat_cache.get_stats(),
             "message_cache": self.message_cache.get_stats(),
             "memory_cache": self.memory_cache.get_stats(),
+            "env_ctx_cache": self.env_ctx_cache.get_stats(),
+            "geo_cache": self.geo_cache.get_stats(),
+            "route_cache": self.route_cache.get_stats(),
             "write_buffer": {k: len(v) for k, v in self.write_buffer.items()}
         }
     
@@ -290,6 +298,31 @@ class DatabaseCache:
         await self.message_cache.clear()
         await self.memory_cache.clear()
         logger.info("所有緩存已清空")
+
+    # ===== 環境/地理/路線 快取 API =====
+    async def get_env_ctx_cached(self, user_id: str) -> Optional[Dict[str, Any]]:
+        key = self._generate_cache_key("env_ctx", user_id=user_id)
+        return await self.env_ctx_cache.get(key)
+
+    async def set_env_ctx_cache(self, user_id: str, ctx: Dict[str, Any]):
+        key = self._generate_cache_key("env_ctx", user_id=user_id)
+        await self.env_ctx_cache.set(key, ctx)
+
+    async def get_geo_cached(self, geohash7: str) -> Optional[Dict[str, Any]]:
+        key = self._generate_cache_key("geo", geohash=geohash7)
+        return await self.geo_cache.get(key)
+
+    async def set_geo_cache(self, geohash7: str, payload: Dict[str, Any]):
+        key = self._generate_cache_key("geo", geohash=geohash7)
+        await self.geo_cache.set(key, payload)
+
+    async def get_route_cached(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        key = self._generate_cache_key("route", key=cache_key)
+        return await self.route_cache.get(key)
+
+    async def set_route_cache(self, cache_key: str, payload: Dict[str, Any]):
+        key = self._generate_cache_key("route", key=cache_key)
+        await self.route_cache.set(key, payload)
 
 
 # 全局緩存實例
@@ -314,4 +347,3 @@ async def periodic_cache_maintenance():
         
         except Exception as e:
             logger.error(f"緩存維護任務出錯: {e}")
-

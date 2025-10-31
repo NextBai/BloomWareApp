@@ -18,6 +18,10 @@ class EmotionCareManager:
     # 極端情緒定義（需要進入關懷模式的情緒）
     EXTREME_EMOTIONS = {"sad", "angry", "fear"}
 
+    # 模式存活與冷卻（避免反覆觸發）
+    CARE_TTL_SECONDS = 20 * 60  # 20 分鐘自動失效
+    COOLDOWN_SECONDS = 10 * 60  # 10 分鐘內不重入
+
     # 解除關懷模式的關鍵字
     RELEASE_KEYWORDS = [
         "我沒事了", "我好了", "沒事了", "好多了", "好一點了",
@@ -62,11 +66,20 @@ class EmotionCareManager:
         if not emotion or emotion not in cls.EXTREME_EMOTIONS:
             return False
 
+        # 冷卻期防抖：若剛退出不久，避免馬上重入
+        key = cls._resolve_chat_key(chat_id)
+        user_states = cls._user_states.get(user_id) or {}
+        prev_state = user_states.get(key) or {}
+        last_exit = prev_state.get("last_exit_time", 0.0)
+        if last_exit and (time.time() - last_exit) < cls.COOLDOWN_SECONDS:
+            return False
+
         # 進入關懷模式
         cls._set_state(user_id, chat_id, {
             "in_care_mode": True,
             "emotion": emotion,
-            "start_time": time.time()
+            "start_time": time.time(),
+            "last_exit_time": prev_state.get("last_exit_time", 0.0),
         })
 
         logger.warning(f"⚠️ 用戶 {user_id}（chat={chat_id or 'default'}）偵測到極端情緒 [{emotion}]，進入關懷模式")
@@ -97,6 +110,7 @@ class EmotionCareManager:
                 duration = time.time() - state.get("start_time", 0)
 
                 state["in_care_mode"] = False
+                state["last_exit_time"] = time.time()
 
                 logger.info(f"✅ 用戶 {user_id}（chat={chat_id or 'default'}）情緒恢復（{emotion} → 正常），解除關懷模式（持續 {duration:.1f}秒）")
                 return True
@@ -117,7 +131,16 @@ class EmotionCareManager:
         state = cls._get_state(user_id, chat_id)
         if not state:
             return False
-        return state.get("in_care_mode", False)
+        if not state.get("in_care_mode", False):
+            return False
+        # TTL：超時自動解除
+        start = state.get("start_time", 0.0)
+        if start and (time.time() - start) > cls.CARE_TTL_SECONDS:
+            state["in_care_mode"] = False
+            state["last_exit_time"] = time.time()
+            logger.info(f"⏳ 用戶 {user_id}（chat={chat_id or 'default'}）關懷模式逾時自動解除")
+            return False
+        return True
 
     @classmethod
     def get_care_emotion(cls, user_id: str, chat_id: Optional[str] = None) -> Optional[str]:
