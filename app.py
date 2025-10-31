@@ -1272,6 +1272,13 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                                 "message": str(response),
                                                 "timestamp": time.time()
                                             })
+
+                        except Exception as e:
+                            logger.error(f"語音對話流程失敗: {e}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"語音對話處理失敗: {str(e)}"
+                            })
                                             
             except json.JSONDecodeError:
                 await manager.send_message("消息格式錯誤，無法解析", user_id, "error")
