@@ -874,7 +874,7 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                         city = payload.get("city") or city
                                         admin = payload.get("admin") or admin
                                         country_code = payload.get("country_code") or country_code
-                                        address_display = payload.get("display_name") or payload.get("label") or address_display
+                                        address_display = payload.get("label") or payload.get("display_name") or address_display
                             except Exception as ge:
                                 logger.debug(f"反地理查詢失敗: {ge}")
 

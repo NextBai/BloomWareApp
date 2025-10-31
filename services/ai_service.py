@@ -32,7 +32,7 @@ from core.config import settings
 OPENAI_TIMEOUT = settings.OPENAI_TIMEOUT  # 關懷模式 reasoning model 需要更長時間
 
 # 情緒關懷模式 System Prompt（新增）
-CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 情緒關懷助手，由銘傳大學人工智慧應用學系 BloomWare 團隊開發。你不是 GPT，也不要自稱 GPT。你是富有同理心的 AI 助手，用戶情緒不佳需要支持。
+CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 的情緒關懷助手 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。你不是 GPT，也不要自稱 GPT。你是富有同理心的 AI 助手，用戶情緒不佳需要支持。
 
 **極簡短回應規則（必須嚴格遵守）**：
 - 最多 1-2 句話（總共不超過 30 字）
@@ -99,10 +99,10 @@ def _build_base_system_prompt(
             base_prompt = f"用戶情緒：{care_emotion}\n{base_prompt}"
     else:
         base_prompt = (
-            "你是 BloomWare 助理，由銘傳大學人工智慧應用學系 BloomWare 團隊開發。"
+            "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
             "你不是 GPT，也不要自稱 GPT。"
             "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。"
-            "請使用繁體中文回覆，保持簡潔清晰的表達。"
+            "請使用使用者的語言進行回覆，保持簡潔清晰的表達。"
         )
 
     if user_name:
@@ -700,7 +700,7 @@ async def _generate_response_with_chat_db(
                     logger.info(f"💙 使用關懷模式 System Prompt，情緒：{care_emotion}")
                 else:
                     system_prompt = (
-                        "你是 BloomWare 助理，由銘傳大學人工智慧應用學系 BloomWare 團隊開發。"
+                        "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
                         "你不是 GPT，也不要自稱 GPT。"
                         "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。請使用繁體中文回覆，保持簡潔清晰的表達。"
                     )
@@ -901,7 +901,7 @@ async def _generate_response_with_global_history(
                     logger.info(f"💙 使用關懷模式 System Prompt（全局歷史），情緒：{care_emotion}")
                 else:
                     system_prompt = (
-                        "你是 BloomWare 助理，由銘傳大學人工智慧應用學系 BloomWare 團隊開發。"
+                        "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
                         "你不是 GPT，也不要自稱 GPT。"
                         "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。請使用繁體中文回覆，保持簡潔清晰的表達。"
                     )
