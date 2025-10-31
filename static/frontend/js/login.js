@@ -426,23 +426,31 @@ class VoiceLoginManager {
       console.log('😊 情緒:', data.emotion?.label);
       console.log('💬 歡迎詞:', data.welcome);
 
-      // 顯示歡迎訊息（含情緒）
-      this.showStatus(`✅ ${data.welcome || '登入成功！'}`, 'success');
+      // 成功僅提示登入完成，不在登入頁顯示歡迎詞
+      this.showStatus('✅ 登入成功，正在跳轉…', 'success');
 
       // 模擬生成 JWT（實際應該從後端取得）
       // 這裡假設後端已經將 JWT 包含在 voice_login_result 中
       if (data.token) {
         localStorage.setItem('jwt_token', data.token);
       } else {
-        // 臨時方案：用 user.id 當作 token（實際生產環境需改善）
-        console.warn('⚠️ 後端未返回 JWT，使用臨時方案');
-        // TODO: 後端需要在 voice_login_result 中加入 JWT token
+        console.warn('⚠️ 後端未返回 JWT');
       }
 
-      // 3 秒後跳轉到聊天室
+      // 將辨識到的情緒帶到聊天室主題（由 agent.js 啟動時套用）
+      try {
+        const emo = (data.emotion && (data.emotion.label || data.emotion)) || '';
+        if (emo) localStorage.setItem('lastEmotion', String(emo));
+      } catch (_) {}
+
+      // 關閉 WS 與音訊資源，避免殘留
+      try { this.ws && this.ws.readyState === WebSocket.OPEN && this.ws.close(1000, 'voice login done'); } catch(_) {}
+      this.cleanup();
+
+      // 快速跳轉到聊天室（縮短等待體感更順）
       setTimeout(() => {
         window.location.href = '/static/index.html';
-      }, 3000);
+      }, 800);
 
     } else {
       console.error('❌ 語音登入失敗:', data.error);

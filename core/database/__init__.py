@@ -27,6 +27,7 @@ from .base import (
 from .base import (
     create_chat,
     save_message,
+    get_chat_messages,
     update_chat_title,
     delete_chat,
     set_chat_emotion,
@@ -40,6 +41,15 @@ from .base import (
     cleanup_old_memories,
     get_user_history,
     create_or_login_google_user,
+    # 環境 Context
+    set_user_env_current,
+    add_user_env_snapshot,
+    get_user_env_current,
+    # 地理/路線快取
+    get_geo_cache,
+    set_geo_cache,
+    get_route_cache,
+    set_route_cache,
 )
 
 # 從 optimized 導入優化版操作（帶緩存）
@@ -77,6 +87,7 @@ __all__ = [
     "get_chat",  # 優化版
     "get_user_chats",  # 優化版
     "save_chat_message",  # 優化版
+    "get_chat_messages",
     "update_chat_title",
     "delete_chat",
     "set_chat_emotion",
@@ -100,3 +111,13 @@ __all__ = [
     "db_cache",
     "periodic_cache_maintenance",
 ]
+    # 環境 Context
+    "set_user_env_current",
+    "add_user_env_snapshot",
+    "get_user_env_current",
+
+    # 地理/路線快取
+    "get_geo_cache",
+    "set_geo_cache",
+    "get_route_cache",
+    "set_route_cache",

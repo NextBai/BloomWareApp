@@ -68,7 +68,7 @@ except Exception as e:
 
 # 導入DB函數
 try:
-    from core.database import get_chat, save_chat_message
+    from core.database import get_chat_messages, save_chat_message, get_user_env_current
     db_available = True
 except ImportError:
     db_available = False
@@ -147,6 +147,7 @@ def _compose_messages_with_context(
     base_prompt: str,
     history_entries: List[Dict[str, str]],
     memory_context: str,
+    env_context: str,
     current_request: str,
     user_id: Optional[str],
     chat_id: Optional[str],
@@ -160,6 +161,10 @@ def _compose_messages_with_context(
         sections.append(base_prompt.strip())
 
     sections.append(f"【歷史對話摘要】\n{history_text}")
+
+    env_context = (env_context or "").strip()
+    if env_context:
+        sections.append(f"【環境訊號】\n{env_context}")
 
     memory_context = (memory_context or "").strip()
     if memory_context:
@@ -584,46 +589,51 @@ async def _generate_response_with_chat_db(
                 except Exception as e:
                     logger.warning(f"保存用戶消息到DB失敗: {e}")
 
-            # 從DB加載對話歷史
+            # 從DB加載對話歷史（messages 集合）
             chat_history = []
             if db_available:
                 try:
-                    chat_result = await get_chat(chat_id)
-                    if chat_result.get("success"):
-                        chat_messages = chat_result["chat"].get("messages", [])
+                    history_limit = 3 if use_care_mode else 12
+                    # 取 limit+1 以排除當前 user_message（最後一筆）
+                    msgs = await get_chat_messages(chat_id, limit=history_limit + 1, ascending=True)
+                    historical_messages = msgs[:-1] if len(msgs) > 0 else []
 
-                        # 關懷模式只載入最近 5 條，一般模式載入 10 條（減少上下文）
-                        history_limit = 5 if use_care_mode else 10
+                    def _clean_text(t: str) -> str:
+                        if not t:
+                            return ""
+                        txt = str(t)
+                        for kw in ["關懷模式", "我在這裡陪你", "說「我沒事了」", "退出關懷模式"]:
+                            txt = txt.replace(kw, "")
+                        return txt.strip()
 
-                        # ⚠️ 關鍵修復：排除當前用戶訊息（避免 Agent 混淆歷史對話）
-                        # 只載入歷史對話，不包含剛保存的 user_message
-                        historical_messages = chat_messages[:-1] if len(chat_messages) > 0 else []
+                    for msg in historical_messages:
+                        content = msg.get("content")
+                        if isinstance(content, dict):
+                            content = content.get("message") or content.get("text") or str(content)
+                        elif not isinstance(content, str):
+                            content = str(content) if content else ""
 
-                        # 轉換DB格式到OpenAI格式
-                        for msg in historical_messages[-history_limit:]:
-                            content = msg.get("content")
-                            # 確保 content 是字串（修正）
-                            if isinstance(content, dict):
-                                content = content.get("message") or content.get("text") or str(content)
-                            elif not isinstance(content, str):
-                                content = str(content) if content else ""
+                        # 過濾掉錯誤訊息（避免污染上下文）
+                        if "抱歉，生成回應時遇到問題" in content or "請重試" in content:
+                            continue
 
-                            # 過濾掉錯誤訊息（避免污染上下文）
-                            if "抱歉，生成回應時遇到問題" in content or "請重試" in content:
-                                continue
+                        content = _clean_text(content)
+                        if not content:
+                            continue
 
-                            chat_history.append({
-                                "role": msg.get("sender"),
-                                "content": content
-                            })
+                        chat_history.append({
+                            "role": msg.get("sender"),
+                            "content": content
+                        })
 
-                        logger.debug(f"📚 載入 {len(chat_history)} 條歷史對話（排除當前訊息，確保請求隔離）")
+                    logger.debug(f"📚 載入 {len(chat_history)} 條歷史對話（messages 集合）")
                 except Exception as e:
                     logger.warning(f"從DB加載對話歷史失敗: {e}")
 
             # 載入長期記憶
+            # 關懷模式不帶長期記憶，避免噪音
             memory_context = ""
-            if user_id:
+            if user_id and not use_care_mode:
                 try:
                     from core.memory_system import memory_system
                     context_tags: List[str] = []
@@ -643,6 +653,27 @@ async def _generate_response_with_chat_db(
                 except Exception as e:
                     logger.warning(f"載入記憶失敗: {e}")
 
+            # 讀取環境現況（僅組裝，不外呼）
+            env_context_text = ""
+            if db_available and user_id:
+                try:
+                    env_res = await get_user_env_current(user_id)
+                    if env_res.get("success"):
+                        ctx = env_res.get("context") or {}
+                        city = ctx.get("city")
+                        tz = ctx.get("tz")
+                        heading = ctx.get("heading_cardinal") or ctx.get("heading_deg")
+                        acc = ctx.get("accuracy_m")
+                        freshness = ""  # updated_at 轉 freshness_sec 可在前端或後端計算
+                        parts = []
+                        if city: parts.append(f"城市: {city}")
+                        if tz: parts.append(f"時區: {tz}")
+                        if heading: parts.append(f"方位: {heading}")
+                        if acc is not None: parts.append(f"定位精度±{int(acc)}m")
+                        env_context_text = "\n".join(parts)
+                except Exception as e:
+                    logger.debug(f"讀取環境現況失敗: {e}")
+
             base_prompt = _build_base_system_prompt(
                 use_care_mode=use_care_mode,
                 care_emotion=care_emotion,
@@ -653,6 +684,7 @@ async def _generate_response_with_chat_db(
                 base_prompt=base_prompt,
                 history_entries=chat_history,
                 memory_context=memory_context,
+                env_context=env_context_text,
                 current_request=user_message,
                 user_id=user_id,
                 chat_id=chat_id,
@@ -757,10 +789,30 @@ async def _generate_response_with_global_history(
                 conversation_history[user_id] = []
             conversation_history[user_id].append({"role": "user", "content": user_message})
 
-            history_limit = 5 if use_care_mode else 10
+            history_limit = 3 if use_care_mode else 12
             prior_history = conversation_history[user_id][:-1]
             if prior_history:
                 prior_history = prior_history[-history_limit:]
+
+            # 讀取環境現況
+            env_context_text = ""
+            if db_available and user_id:
+                try:
+                    env_res = await get_user_env_current(user_id)
+                    if env_res.get("success"):
+                        ctx = env_res.get("context") or {}
+                        city = ctx.get("city")
+                        tz = ctx.get("tz")
+                        heading = ctx.get("heading_cardinal") or ctx.get("heading_deg")
+                        acc = ctx.get("accuracy_m")
+                        parts = []
+                        if city: parts.append(f"城市: {city}")
+                        if tz: parts.append(f"時區: {tz}")
+                        if heading: parts.append(f"方位: {heading}")
+                        if acc is not None: parts.append(f"定位精度±{int(acc)}m")
+                        env_context_text = "\n".join(parts)
+                except Exception as ex:
+                    logger.debug(f"讀取環境現況失敗: {ex}")
 
             base_prompt = _build_base_system_prompt(
                 use_care_mode=use_care_mode,
@@ -768,8 +820,9 @@ async def _generate_response_with_global_history(
                 user_name=user_name,
             )
 
+            # 關懷模式不帶長期記憶
             memory_context = ""
-            if user_id:
+            if user_id and not use_care_mode:
                 try:
                     from core.memory_system import memory_system
                     context_tags: List[str] = []
@@ -792,6 +845,7 @@ async def _generate_response_with_global_history(
                 base_prompt=base_prompt,
                 history_entries=prior_history,
                 memory_context=memory_context,
+                env_context=env_context_text,
                 current_request=user_message,
                 user_id=user_id,
                 chat_id=None,
