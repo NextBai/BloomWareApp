@@ -42,6 +42,7 @@
 - 對話：前端以 `/ws?token=JWT` 連上；訊息先經「語音綁定 FSM」攔截（若用語音綁定流程）→ 進入 `ChatPipeline` → 視意圖走 MCP 工具或一般聊天 → 落庫 `chats/messages`。
 - 檔案分析：`/api/upload-file` 或 `/api/analyze-file-base64`，文字/PDF/圖片分流到對應分析邏輯，底層仍透過 OpenAI。
 - 健康資料：建議透過 MCP `healthkit_tool` 查 Firestore（iOS 端直寫 `health_data`）。
+- 位置快照：前端成功取得瀏覽器定位時會透過 `env_snapshot` 送到 WebSocket；後端會自動寫入 Firestore 並呼叫 MCP `reverse_geocode` 反查地點，AI Prompt 只會顯示地點名稱（有 label）或地址（無 label），不再硬編碼地標。
 
 —
 
@@ -102,3 +103,4 @@
 - TDD：先寫測試（紅燈）→ 最小實作（綠燈）→ 重構，每個功能至少跑完一輪。
 - OpenAI 使用：以 Python SDK；模型由 `OPENAI_MODEL` 控制（預設 `gpt-5-nano`）；若改版，請只改環境變數，不要在程式寫死。
 - 測試放置：所有測試集中於 `tests/`，`test_*.py`；結構鏡射模組路徑。
+- 前端語音介面：`static/frontend/index.html` 的 `voice-center-container`、`voice-agent-output`、`voice-transcript` 已改為彈性寬高；打字態訊息只做 opacity/visibility 切換，避免擠壓字幕區。調整樣式時請維持 `clamp` 設定與 wrapper class，確保桌機/平板視窗自適應。
