@@ -832,6 +832,70 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                     import asyncio as _asyncio
                     _asyncio.create_task(_do_process_and_send())
 
+                elif message_type == "env_snapshot":
+                    try:
+                        lat = float(message_data.get("lat")) if message_data.get("lat") is not None else None
+                        lon = float(message_data.get("lon")) if message_data.get("lon") is not None else None
+                        acc = message_data.get("accuracy_m")
+                        acc = float(acc) if acc is not None else None
+                        heading_deg = message_data.get("heading_deg")
+                        heading_deg = float(heading_deg) if heading_deg is not None else None
+                        tz = message_data.get("tz")
+                        locale = message_data.get("locale")
+                        device = message_data.get("device")
+
+                        # 後端節流：距離<100m且方位差<25度則忽略
+                        do_write_snapshot = False
+                        last = manager.last_env.get(user_id)
+                        if last and lat is not None and lon is not None and last.get("lat") is not None:
+                            dist = _haversine_m(last.get("lat", 0), last.get("lon", 0), lat, lon)
+                            deg_diff = abs((heading_deg or 0) - (last.get("heading_deg") or 0))
+                            if dist >= 100 or deg_diff >= 25:
+                                do_write_snapshot = True
+                        else:
+                            do_write_snapshot = True
+
+                        from geohash2 import encode as gh_encode
+                        geohash7 = gh_encode(lat, lon, precision=7) if (lat is not None and lon is not None) else None
+                        heading_cardinal = _heading_to_cardinal(heading_deg) if heading_deg is not None else None
+                        env_payload = {
+                            "lat": lat,
+                            "lon": lon,
+                            "accuracy_m": acc,
+                            "heading_deg": heading_deg,
+                            "heading_cardinal": heading_cardinal,
+                            "tz": tz,
+                            "locale": locale,
+                            "device": device,
+                            "geohash_7": geohash7,
+                        }
+
+                        # 更新會話暫存
+                        manager.last_env[user_id] = env_payload
+                        info = manager.get_client_info(user_id) or {}
+                        info["env_context"] = env_payload
+                        manager.set_client_info(user_id, info)
+
+                        try:
+                            await set_user_env_current(user_id, env_payload)
+                        except Exception as e:
+                            logger.warning(f"寫入環境現況失敗: {e}")
+
+                        if do_write_snapshot:
+                            try:
+                                snap = env_payload.copy()
+                                snap["reason"] = "threshold"
+                                await add_user_env_snapshot(user_id, snap)
+                            except Exception as e:
+                                logger.warning(f"寫入環境快照失敗: {e}")
+
+                        await websocket.send_json(
+                            {"type": "env_ack", "success": True, "geohash_7": geohash7, "heading_cardinal": heading_cardinal}
+                        )
+                    except Exception as e:
+                        logger.error(f"處理 env_snapshot 失敗: {e}")
+                        await websocket.send_json({"type": "env_ack", "success": False, "error": str(e)})
+
                 elif message_type == "chat_focus":
                     try:
                         cid = message_data.get("chat_id")
@@ -1209,70 +1273,6 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                                 "timestamp": time.time()
                                             })
                                             
-                        finally:
-                            pass
-                        # ===== 環境快照上報 =====
-                        if message_type == "env_snapshot":
-                            try:
-                                lat = float(message_data.get("lat")) if message_data.get("lat") is not None else None
-                                lon = float(message_data.get("lon")) if message_data.get("lon") is not None else None
-                                acc = message_data.get("accuracy_m")
-                                acc = float(acc) if acc is not None else None
-                                heading_deg = message_data.get("heading_deg")
-                                heading_deg = float(heading_deg) if heading_deg is not None else None
-                                tz = message_data.get("tz")
-                                locale = message_data.get("locale")
-                                device = message_data.get("device")
-
-                                # 後端節流：距離<100m且方位差<25度則忽略
-                                do_write_snapshot = False
-                                last = manager.last_env.get(user_id)
-                                if last and lat is not None and lon is not None and last.get("lat") is not None:
-                                    dist = _haversine_m(last.get("lat",0), last.get("lon",0), lat, lon)
-                                    deg_diff = abs((heading_deg or 0) - (last.get("heading_deg") or 0))
-                                    if dist >= 100 or deg_diff >= 25:
-                                        do_write_snapshot = True
-                                else:
-                                    do_write_snapshot = True
-
-                                from geohash2 import encode as gh_encode
-                                geohash7 = gh_encode(lat, lon, precision=7) if (lat is not None and lon is not None) else None
-                                heading_cardinal = _heading_to_cardinal(heading_deg) if heading_deg is not None else None
-                                env_payload = {
-                                    "lat": lat,
-                                    "lon": lon,
-                                    "accuracy_m": acc,
-                                    "heading_deg": heading_deg,
-                                    "heading_cardinal": heading_cardinal,
-                                    "tz": tz,
-                                    "locale": locale,
-                                    "device": device,
-                                    "geohash_7": geohash7,
-                                }
-
-                                # 更新會話暫存
-                                manager.last_env[user_id] = env_payload
-                                info = manager.get_client_info(user_id) or {}
-                                info['env_context'] = env_payload
-                                manager.set_client_info(user_id, info)
-
-                                try:
-                                    await set_user_env_current(user_id, env_payload)
-                                except Exception as e:
-                                    logger.warning(f"寫入環境現況失敗: {e}")
-
-                                if do_write_snapshot:
-                                    try:
-                                        snap = env_payload.copy()
-                                        snap['reason'] = 'threshold'
-                                        await add_user_env_snapshot(user_id, snap)
-                                    except Exception as e:
-                                        logger.warning(f"寫入環境快照失敗: {e}")
-
-                                await websocket.send_json({"type": "env_ack", "success": True, "geohash_7": geohash7, "heading_cardinal": heading_cardinal})
-                            except Exception as e:
-                                logger.error(f"處理 env_snapshot 失敗: {e}")
-                                await websocket.send_json({"type": "env_ack", "success": False, "error": str(e)})
             except json.JSONDecodeError:
                 await manager.send_message("消息格式錯誤，無法解析", user_id, "error")
             except Exception as e:
