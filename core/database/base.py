@@ -45,6 +45,12 @@ def _get_user_doc_ref(user_id: str) -> DocumentReference:
 def _get_user_memories_collection(user_id: str) -> CollectionReference:
     return _get_user_doc_ref(user_id).collection("memories")
 
+
+def _get_chat_messages_collection(chat_id: str) -> CollectionReference:
+    if chats_collection is None:
+        raise RuntimeError("Firestore尚未連接，無法取得對話消息集合")
+    return chats_collection.document(chat_id).collection("messages")
+
 def connect_to_firestore():
     """初始化 Firebase Firestore 連接"""
     global firestore_db, messages_collection, users_collection, chats_collection, memories_collection, health_data_collection, device_bindings_collection
@@ -415,26 +421,23 @@ async def get_chat(chat_id):
         chat = doc.to_dict() or {}
         chat["chat_id"] = doc.id
 
-        # 從 messages 集合讀取完整對話（按時間升序）
+        # 從 chat 子集合讀取完整對話（按時間升序）
         try:
-            from google.cloud import firestore as _fs
-
             def _fetch_msgs():
-                q = (
-                    messages_collection
-                    .where(filter=FieldFilter("chat_id", "==", chat_id))
-                    .order_by("timestamp", direction=_fs.Query.ASCENDING)
-                )
-                return [d.to_dict() for d in q.stream()]
+                ref = _get_chat_messages_collection(chat_id)
+                return [
+                    {**doc.to_dict(), "id": doc.id}
+                    for doc in ref.order_by("timestamp").stream()
+                ]
 
             msgs = await _asyncio.to_thread(_fetch_msgs)
             chat["messages"] = msgs
-            logger.info(f"獲取到對話 {chat_id}，包含 {len(msgs)} 條消息（messages 集合）")
+            logger.info(f"獲取到對話 {chat_id}，包含 {len(msgs)} 條消息（chat 子集合）")
         except Exception as _e:
             # 向後相容：若讀取失敗，退回文件內嵌 messages（若存在）
             msgs_fallback = chat.get('messages', []) or []
             chat["messages"] = msgs_fallback
-            logger.warning(f"讀取 messages 集合失敗，使用內嵌 messages。原因: {_e}")
+            logger.warning(f"讀取 chat 子集合失敗，使用內嵌 messages。原因: {_e}")
 
         return {"success": True, "chat": chat}
     except Exception as e:
@@ -442,8 +445,8 @@ async def get_chat(chat_id):
         return {"success": False, "error": str(e)}
 
 async def save_chat_message(chat_id, sender, content):
-    """保存對話消息（使用 messages 集合作為單一事實來源）"""
-    if messages_collection is None or chats_collection is None:
+    """保存對話消息（chat/{chat_id}/messages 子集合作為主要儲存）"""
+    if chats_collection is None:
         logger.error("Firestore尚未連接，無法保存消息")
         return {"success": False, "error": "數據庫未連接"}
     try:
@@ -458,7 +461,16 @@ async def save_chat_message(chat_id, sender, content):
         }
 
         def _write_message():
-            messages_collection.add(message)
+            ref = _get_chat_messages_collection(chat_id)
+            ref.add(message)
+
+        def _write_legacy_copy():
+            if messages_collection is None:
+                return
+            try:
+                messages_collection.add(message)
+            except Exception as legacy_err:  # pragma: no cover
+                logger.debug(f"寫入頂層 messages 集合失敗（兼容用途，可忽略）: {legacy_err}")
 
         def _touch_chat():
             doc_ref = chats_collection.document(chat_id)
@@ -469,11 +481,13 @@ async def save_chat_message(chat_id, sender, content):
             return True
 
         await _asyncio.to_thread(_write_message)
+        # 兼容舊資料模型：非阻塞地寫入頂層 messages 集合，供舊功能查詢使用
+        await _asyncio.to_thread(_write_legacy_copy)
         touched = await _asyncio.to_thread(_touch_chat)
         if not touched:
-            logger.warning(f"對話 {chat_id} 不存在，但消息已寫入 messages 集合")
+            logger.warning(f"對話 {chat_id} 不存在，但消息已寫入 chat 子集合")
 
-        logger.info(f"消息已保存到 messages 集合（chat_id={chat_id}）")
+        logger.info(f"消息已保存到 chat 子集合（chat_id={chat_id}）")
         return {"success": True, "message": message}
     except Exception as e:
         logger.error(f"保存消息時發生錯誤: {e}")
@@ -481,8 +495,8 @@ async def save_chat_message(chat_id, sender, content):
 
 
 async def get_chat_messages(chat_id: str, limit: int | None = None, ascending: bool = True):
-    """讀取指定對話的消息（來自 messages 集合）"""
-    if messages_collection is None:
+    """讀取指定對話的消息（優先使用 chat 子集合）"""
+    if chats_collection is None:
         logger.error("Firestore尚未連接，無法讀取消息")
         return []
     try:
@@ -490,19 +504,57 @@ async def get_chat_messages(chat_id: str, limit: int | None = None, ascending: b
         from google.cloud import firestore as _fs
 
         def _query():
-            q = messages_collection.where(filter=FieldFilter("chat_id", "==", chat_id))
+            ref = _get_chat_messages_collection(chat_id)
             direction = _fs.Query.ASCENDING if ascending else _fs.Query.DESCENDING
-            q = q.order_by("timestamp", direction=direction)
+            q = ref.order_by("timestamp", direction=direction)
             if limit and limit > 0:
                 q = q.limit(limit)
             docs = q.stream()
-            res = [d.to_dict() for d in docs]
+            records = []
+            for doc in docs:
+                data = doc.to_dict()
+                data["id"] = doc.id
+                records.append(data)
             if not ascending:
-                res.reverse()  # 若取降序+limit，回傳前再反轉為時間正序
-            return res
+                records = list(reversed(records))
+            return records
 
         messages = await _asyncio.to_thread(_query)
-        return messages
+        if messages:
+            return messages
+
+        # 向後相容：若子集合無資料，嘗試讀取舊頂層 messages 集合
+        if messages_collection is None:
+            return []
+
+        def _legacy_query():
+            docs = messages_collection.where(filter=FieldFilter("chat_id", "==", chat_id)).stream()
+            legacy = [d.to_dict() for d in docs]
+            legacy.sort(key=lambda item: item.get("timestamp"))
+            if limit and limit > 0:
+                legacy = legacy[:limit]
+            return legacy
+
+        legacy_sorted = await _asyncio.to_thread(_legacy_query)
+        view_messages = list(legacy_sorted)
+        if not ascending:
+            view_messages.reverse()
+        if legacy_sorted:
+            def _backfill():
+                try:
+                    ref = _get_chat_messages_collection(chat_id)
+                    # 若子集合仍為空，將舊資料搬遷過去
+                    has_existing = any(True for _ in ref.limit(1).stream())
+                    if has_existing:
+                        return
+                    for legacy_msg in legacy_sorted:
+                        ref.add(legacy_msg)
+                    logger.info(f"已將 legacy messages 回填至 chat 子集合（chat_id={chat_id}）")
+                except Exception as backfill_err:
+                    logger.warning(f"回填 legacy messages 失敗（可忽略）: {backfill_err}")
+
+            await _asyncio.to_thread(_backfill)
+        return view_messages
     except Exception as e:
         logger.error(f"讀取對話消息失敗: {e}")
         return []
@@ -548,6 +600,13 @@ async def delete_chat(chat_id):
             doc = doc_ref.get()
             if not doc.exists:
                 return False
+            # 先刪除子集合中的消息，避免孤兒資料
+            try:
+                messages_ref = _get_chat_messages_collection(chat_id)
+                for msg_snapshot in messages_ref.stream():
+                    msg_snapshot.reference.delete()
+            except Exception as msg_err:
+                logger.warning(f"刪除對話 {chat_id} 的子消息時發生錯誤：{msg_err}")
             doc_ref.delete()
             return True
 

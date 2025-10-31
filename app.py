@@ -1322,7 +1322,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         logger.info(f"🔧 Pipeline: 功能處理結果='{result}'")
         return result
 
-    async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None):
+    async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None, emotion_label=None):
         # 取得用戶名稱（優先順序：Google 名稱 > 語音 label > "用戶"）
         user_name = "用戶"
         try:
@@ -1342,7 +1342,8 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
                 chat_id=chat_id,
                 use_care_mode=use_care_mode,
                 care_emotion=care_emotion,
-                user_name=user_name
+                user_name=user_name,
+                emotion_label=emotion_label,
             )
         else:
             return await ai_service.generate_response_for_user(
@@ -1353,7 +1354,8 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
                 chat_id=chat_id,
                 use_care_mode=use_care_mode,
                 care_emotion=care_emotion,
-                user_name=user_name
+                user_name=user_name,
+                emotion_label=emotion_label,
             )
 
     model = settings.OPENAI_MODEL

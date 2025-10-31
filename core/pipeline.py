@@ -34,7 +34,7 @@ class ChatPipeline:
         self,
         intent_detector: Callable[[str], Awaitable[Tuple[bool, dict]]],
         feature_processor: Callable[[dict, str, str, Optional[str]], Awaitable[Any]],
-        ai_generator: Callable[[List[dict], str, str, Optional[str], Optional[str]], Awaitable[str]],
+        ai_generator: Callable[..., Awaitable[str]],
         model: str = "gpt-5-nano",
         detect_timeout: float = 5.0,    # 2025 最佳實踐：Structured Outputs 通常 2-3秒
         feature_timeout: float = 10.0,  # MCP 工具已有內部超時（30秒）
@@ -87,7 +87,16 @@ class ChatPipeline:
                 # 直接用關懷模式 AI 回應（不檢測意圖，不調用工具）
                 care_emotion = EmotionCareManager.get_care_emotion(user_id, chat_id)
                 ai_res = await self._with_timeout(
-                    self._ai_generator(user_message, user_id, self._model, request_id, chat_id, use_care_mode=True, care_emotion=care_emotion),
+                    self._ai_generator(
+                        user_message,
+                        user_id,
+                        self._model,
+                        request_id,
+                        chat_id,
+                        use_care_mode=True,
+                        care_emotion=care_emotion,
+                        emotion_label=care_emotion,
+                    ),
                     self._ai_timeout,
                     reason="ai-care",
                 )
@@ -116,7 +125,16 @@ class ChatPipeline:
             logger.warning(f"⚠️ 偵測到極端情緒 [{emotion}]，進入關懷模式")
             # 立即使用關懷模式 AI 回應
             ai_res = await self._with_timeout(
-                self._ai_generator(user_message, user_id, self._model, request_id, chat_id, use_care_mode=True, care_emotion=emotion),
+                self._ai_generator(
+                    user_message,
+                    user_id,
+                    self._model,
+                    request_id,
+                    chat_id,
+                    use_care_mode=True,
+                    care_emotion=emotion,
+                    emotion_label=emotion,
+                ),
                 self._ai_timeout,
                 reason="ai-care",
             )
@@ -178,7 +196,14 @@ class ChatPipeline:
         # 3) 無功能 → 一般聊天（限時）
         # 注意：不傳 messages，改傳 user_message，讓 ai_generator 自動載入歷史對話和記憶
         ai_res = await self._with_timeout(
-            self._ai_generator(user_message, user_id or "default", self._model, request_id, chat_id),
+            self._ai_generator(
+                user_message,
+                user_id or "default",
+                self._model,
+                request_id,
+                chat_id,
+                emotion_label=emotion_value,
+            ),
             self._ai_timeout,
             reason="ai",
         )

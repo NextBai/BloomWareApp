@@ -12,6 +12,7 @@ from .server import FeaturesMCPServer
 import services.ai_service as ai_service
 from services.ai_service import StrictResponseError
 from core.reasoning_strategy import get_optimal_reasoning_effort
+from core.database import get_user_env_current
 
 logger = logging.getLogger("mcp.agent_bridge")
 logger.setLevel(logging.DEBUG)  # 強制設置為 DEBUG 級別
@@ -84,6 +85,60 @@ class MCPAgentBridge:
                 return registered_name
 
         return None
+    async def _fetch_env_context(self, user_id: Optional[str]) -> Dict[str, Any]:
+        """讀取使用者最近的環境資訊（Firestore current snapshot）。"""
+        if not user_id:
+            return {}
+        try:
+            env_res = await get_user_env_current(user_id)
+            if env_res.get("success"):
+                ctx = env_res.get("context") or {}
+                return ctx
+        except Exception as e:
+            logger.debug(f"無法取得使用者 {user_id} 環境資訊: {e}")
+        return {}
+
+    async def _enrich_arguments_with_env(self, tool_name: str, arguments: Dict[str, Any], user_id: Optional[str]) -> Dict[str, Any]:
+        """自動將環境資訊補入 MCP 工具參數，讓位置相關功能更聰明。"""
+        if not user_id:
+            return arguments
+
+        tool_name = (tool_name or "").strip()
+        if tool_name not in {"weather_query"}:
+            return arguments
+
+        ctx = await self._fetch_env_context(user_id)
+        if not ctx:
+            return arguments
+
+        enriched = dict(arguments or {})
+
+        def _safe_float(val):
+            try:
+                if val is None:
+                    return None
+                return float(val)
+            except (TypeError, ValueError):
+                return None
+
+        if tool_name == "weather_query":
+            if enriched.get("lat") is None:
+                lat = _safe_float(ctx.get("lat"))
+                if lat is not None:
+                    enriched["lat"] = lat
+            if enriched.get("lon") is None:
+                lon = _safe_float(ctx.get("lon"))
+                if lon is not None:
+                    enriched["lon"] = lon
+            city_arg = str(enriched.get("city") or "").strip()
+            ctx_city = str(ctx.get("city") or "").strip()
+            if not city_arg and ctx_city:
+                enriched["city"] = ctx_city
+
+        if enriched != arguments:
+            logger.info(f"📍 已自動補齊 {tool_name} 參數: {_safe_json(enriched)}")
+
+        return enriched
 
     def get_current_time_data(self) -> Dict[str, Any]:
         """
@@ -541,6 +596,8 @@ class MCPAgentBridge:
         tool = self.mcp_server.tools[tool_name]
         if not tool.handler:
             return f"⚠️ 工具 {tool_name} 尚未實作，請稍後再試"
+
+        arguments = await self._enrich_arguments_with_env(tool_name, arguments, user_id)
 
         logger.info(f"🔧 調用 MCP 工具: {tool_name}")
         logger.debug("📋 調用參數: %s", _safe_json(arguments))

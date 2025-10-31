@@ -142,12 +142,137 @@ def _format_history_for_prompt(history: List[Dict[str, str]]) -> str:
     return "\n".join(lines) if lines else "（無）"
 
 
+def _format_env_context(ctx: Dict[str, Any]) -> str:
+    """將環境資訊整理成可讀文字，確保 AI 能掌握使用者所在位置。"""
+    if not ctx:
+        return ""
+
+    parts: List[str] = []
+
+    city = (ctx.get("city") or "").strip()
+    admin = (ctx.get("admin") or "").strip()
+    if city and admin:
+        parts.append(f"城市: {city}（{admin}）")
+    elif city:
+        parts.append(f"城市: {city}")
+    elif admin:
+        parts.append(f"行政區: {admin}")
+
+    tz = (ctx.get("tz") or "").strip()
+    if tz:
+        parts.append(f"時區: {tz}")
+
+    heading = ctx.get("heading_cardinal") or ctx.get("heading_deg")
+    if heading is not None:
+        parts.append(f"方位: {heading}")
+
+    acc = ctx.get("accuracy_m")
+    try:
+        if acc is not None:
+            parts.append(f"定位精度: ±{int(round(float(acc)))}m")
+    except (ValueError, TypeError):
+        pass
+
+    lat = ctx.get("lat")
+    lon = ctx.get("lon")
+    try:
+        if lat is not None and lon is not None:
+            lat_f = float(lat)
+            lon_f = float(lon)
+            coord_text = f"{lat_f:.5f}, {lon_f:.5f}"
+            geohash = (ctx.get("geohash_7") or "").strip()
+            if geohash:
+                parts.append(f"座標: {coord_text}（Geohash {geohash}）")
+            else:
+                parts.append(f"座標: {coord_text}")
+    except (ValueError, TypeError):
+        pass
+
+    locale = (ctx.get("locale") or "").strip()
+    if locale:
+        parts.append(f"語系: {locale}")
+
+    device = (ctx.get("device") or "").strip()
+    if device:
+        parts.append(f"裝置: {device}")
+
+    return "\n".join(parts)
+
+
+def _format_time_context(user_tz: Optional[str]) -> str:
+    """生成時間相關提示，優先使用使用者所在時區。"""
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+    except Exception:  # pragma: no cover - 兼容環境
+        ZoneInfo = None  # type: ignore
+
+    tzinfo = None
+    if user_tz and ZoneInfo:
+        try:
+            tzinfo = ZoneInfo(user_tz)
+        except Exception:
+            tzinfo = None
+
+    now = datetime.now(tzinfo) if tzinfo else datetime.now()
+    hour = now.hour
+    if 5 <= hour < 12:
+        day_period = "上午"
+    elif 12 <= hour < 18:
+        day_period = "下午"
+    elif 18 <= hour < 22:
+        day_period = "晚上"
+    else:
+        day_period = "深夜" if hour >= 22 else "凌晨"
+
+    weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    weekday = weekday_names[now.weekday()]
+
+    tz_label = user_tz if user_tz else ("系統時區" if tzinfo is None else user_tz)
+    return (
+        f"當地時間: {now.strftime('%Y-%m-%d %H:%M')}（{weekday}，{day_period}）"
+        + (f"\n時區: {tz_label}" if tz_label else "")
+    )
+
+
+def _format_emotion_context(
+    emotion_label: Optional[str],
+    care_emotion: Optional[str],
+    use_care_mode: bool,
+) -> str:
+    """將情緒訊號轉成對話上下文，關懷模式優先描述 care_emotion。"""
+    emotion = care_emotion if use_care_mode and care_emotion else (emotion_label or "")
+    if not emotion:
+        return ""
+
+    normalized = emotion.lower()
+    allowed_labels = {"neutral", "happy", "sad", "angry", "fear", "surprise"}
+    display_map = {
+        "neutral": "平靜",
+        "happy": "開心",
+        "sad": "難過",
+        "angry": "生氣",
+        "fear": "害怕",
+        "surprise": "驚訝",
+    }
+
+    if normalized not in allowed_labels:
+        logger.debug(f"情緒標籤不在預期集合: {emotion}")
+        return f"偵測情緒: {emotion}"
+
+    translated = display_map.get(normalized, emotion)
+    mode_hint = "（關懷模式）" if use_care_mode else ""
+    # 顯示原始 label 以保持一致性
+    return f"偵測情緒: {emotion}（{translated}）{mode_hint}"
+
+
 def _compose_messages_with_context(
     *,
     base_prompt: str,
     history_entries: List[Dict[str, str]],
     memory_context: str,
     env_context: str,
+    time_context: str,
+    emotion_context: str,
     current_request: str,
     user_id: Optional[str],
     chat_id: Optional[str],
@@ -162,9 +287,17 @@ def _compose_messages_with_context(
 
     sections.append(f"【歷史對話摘要】\n{history_text}")
 
+    time_context = (time_context or "").strip()
+    if time_context:
+        sections.append(f"【時間訊號】\n{time_context}")
+
     env_context = (env_context or "").strip()
     if env_context:
         sections.append(f"【環境訊號】\n{env_context}")
+
+    emotion_context = (emotion_context or "").strip()
+    if emotion_context:
+        sections.append(f"【情緒訊號】\n{emotion_context}")
 
     memory_context = (memory_context or "").strip()
     if memory_context:
@@ -474,6 +607,7 @@ async def generate_response_for_user(
     care_emotion: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     user_name: Optional[str] = None,
+    emotion_label: Optional[str] = None,
 ) -> str:
     """
     為用戶生成AI回應
@@ -503,6 +637,7 @@ async def generate_response_for_user(
                 care_emotion=care_emotion,
                 reasoning_effort=reasoning_effort,
                 user_name=user_name,
+                emotion_label=emotion_label,
             )
         else:
             # 回退到原有的全局歷史管理（用於向後兼容）
@@ -519,6 +654,7 @@ async def generate_response_for_user(
                 care_emotion=care_emotion,
                 reasoning_effort=reasoning_effort,
                 user_name=user_name,
+                emotion_label=emotion_label,
             )
 
         logger.error("未提供消息列表或用戶消息")
@@ -545,6 +681,7 @@ async def _generate_response_with_chat_db(
     care_emotion: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     user_name: Optional[str] = None,
+    emotion_label: Optional[str] = None,
 ):
     """使用DB管理對話歷史的實現"""
     try:
@@ -654,25 +791,17 @@ async def _generate_response_with_chat_db(
                     logger.warning(f"載入記憶失敗: {e}")
 
             # 讀取環境現況（僅組裝，不外呼）
-            env_context_text = ""
+            ctx: Dict[str, Any] = {}
             if db_available and user_id:
                 try:
                     env_res = await get_user_env_current(user_id)
                     if env_res.get("success"):
                         ctx = env_res.get("context") or {}
-                        city = ctx.get("city")
-                        tz = ctx.get("tz")
-                        heading = ctx.get("heading_cardinal") or ctx.get("heading_deg")
-                        acc = ctx.get("accuracy_m")
-                        freshness = ""  # updated_at 轉 freshness_sec 可在前端或後端計算
-                        parts = []
-                        if city: parts.append(f"城市: {city}")
-                        if tz: parts.append(f"時區: {tz}")
-                        if heading: parts.append(f"方位: {heading}")
-                        if acc is not None: parts.append(f"定位精度±{int(acc)}m")
-                        env_context_text = "\n".join(parts)
                 except Exception as e:
                     logger.debug(f"讀取環境現況失敗: {e}")
+            env_context_text = _format_env_context(ctx)
+            time_context_text = _format_time_context(ctx.get("tz") if ctx else None)
+            emotion_context_text = _format_emotion_context(emotion_label, care_emotion, use_care_mode)
 
             base_prompt = _build_base_system_prompt(
                 use_care_mode=use_care_mode,
@@ -685,6 +814,8 @@ async def _generate_response_with_chat_db(
                 history_entries=chat_history,
                 memory_context=memory_context,
                 env_context=env_context_text,
+                time_context=time_context_text,
+                emotion_context=emotion_context_text,
                 current_request=user_message,
                 user_id=user_id,
                 chat_id=chat_id,
@@ -729,6 +860,7 @@ async def _generate_response_with_chat_db(
             care_emotion=care_emotion,
             reasoning_effort=reasoning_effort,
             user_name=user_name,
+            emotion_label=emotion_label,
         )
 
 
@@ -746,6 +878,7 @@ async def _generate_response_with_global_history(
     care_emotion: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     user_name: Optional[str] = None,
+    emotion_label: Optional[str] = None,
 ):
     """使用全局歷史的回退實現（向後兼容）"""
     try:
@@ -795,24 +928,17 @@ async def _generate_response_with_global_history(
                 prior_history = prior_history[-history_limit:]
 
             # 讀取環境現況
-            env_context_text = ""
+            ctx: Dict[str, Any] = {}
             if db_available and user_id:
                 try:
                     env_res = await get_user_env_current(user_id)
                     if env_res.get("success"):
                         ctx = env_res.get("context") or {}
-                        city = ctx.get("city")
-                        tz = ctx.get("tz")
-                        heading = ctx.get("heading_cardinal") or ctx.get("heading_deg")
-                        acc = ctx.get("accuracy_m")
-                        parts = []
-                        if city: parts.append(f"城市: {city}")
-                        if tz: parts.append(f"時區: {tz}")
-                        if heading: parts.append(f"方位: {heading}")
-                        if acc is not None: parts.append(f"定位精度±{int(acc)}m")
-                        env_context_text = "\n".join(parts)
                 except Exception as ex:
                     logger.debug(f"讀取環境現況失敗: {ex}")
+            env_context_text = _format_env_context(ctx)
+            time_context_text = _format_time_context(ctx.get("tz") if ctx else None)
+            emotion_context_text = _format_emotion_context(emotion_label, care_emotion, use_care_mode)
 
             base_prompt = _build_base_system_prompt(
                 use_care_mode=use_care_mode,
@@ -846,6 +972,8 @@ async def _generate_response_with_global_history(
                 history_entries=prior_history,
                 memory_context=memory_context,
                 env_context=env_context_text,
+                time_context=time_context_text,
+                emotion_context=emotion_context_text,
                 current_request=user_message,
                 user_id=user_id,
                 chat_id=None,
