@@ -522,7 +522,9 @@ function renderExchangeRate(data) {
  * 渲染地理定位數據（forward_geocode / reverse_geocode）
  */
 function renderLocationData(data) {
-  const bestMatch = data.best_match || {};
+  // reverse_geocode: 扁平結構（欄位在第一層）
+  // forward_geocode: 巢狀結構（best_match + results）
+  const bestMatch = data.best_match || data;  // ← 兼容兩種結構
   const results = data.results || [];
   const query = data.query || '';
   
@@ -538,32 +540,42 @@ function renderLocationData(data) {
     `;
   }
 
-  // 最佳匹配地點
-  if (bestMatch.label || bestMatch.display_name) {
+  // 地點名稱（POI、建築物等）
+  if (bestMatch.name && bestMatch.name !== bestMatch.road) {
     html += `
       <div class="data-row">
-        <span class="data-label">📍 地點</span>
-        <span class="data-value">${bestMatch.label || bestMatch.display_name}</span>
+        <span class="data-label">� 地點</span>
+        <span class="data-value">${bestMatch.name}</span>
       </div>
     `;
   }
 
-  // 座標
-  if (bestMatch.lat !== undefined && bestMatch.lon !== undefined) {
+  // 地址（路名 + 門牌號）
+  if (bestMatch.road) {
+    const address = bestMatch.house_number 
+      ? `${bestMatch.road}${bestMatch.house_number}號`
+      : bestMatch.road;
     html += `
       <div class="data-row">
-        <span class="data-label">🌐 座標</span>
-        <span class="data-value">${bestMatch.lat.toFixed(6)}, ${bestMatch.lon.toFixed(6)}</span>
+        <span class="data-label">� 地址</span>
+        <span class="data-value">${address}</span>
       </div>
     `;
   }
 
-  // 詳細地址（如果與 label 不同）
-  if (bestMatch.detailed_address && bestMatch.detailed_address !== bestMatch.label) {
+  // 區域 + 城市
+  const locationParts = [];
+  if (bestMatch.suburb) locationParts.push(bestMatch.suburb);
+  if (bestMatch.city_district && bestMatch.city_district !== bestMatch.suburb) {
+    locationParts.push(bestMatch.city_district);
+  }
+  if (bestMatch.city) locationParts.push(bestMatch.city);
+  
+  if (locationParts.length > 0) {
     html += `
       <div class="data-row">
-        <span class="data-label">🏠 詳細</span>
-        <span class="data-value" style="font-size: 0.9em;">${bestMatch.detailed_address}</span>
+        <span class="data-label">📍 位置</span>
+        <span class="data-value">${locationParts.join(', ')}</span>
       </div>
     `;
   }

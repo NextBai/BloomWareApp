@@ -57,6 +57,20 @@ class ReverseGeocodeTool(MCPTool):
         # 記憶體快取
         cached = await db_cache.get_geo_cached(geokey)
         if cached:
+            # 補齊缺失欄位（兼容舊版快取）
+            cached.setdefault("lat", lat)  # ← 補上座標
+            cached.setdefault("lon", lon)  # ← 補上座標
+            cached.setdefault("name", "")
+            cached.setdefault("detailed_address", cached.get("label") or cached.get("display_name") or "")
+            cached.setdefault("postcode", "")
+            cached.setdefault("city_district", "")
+            cached.setdefault("amenity", "")
+            cached.setdefault("shop", "")
+            cached.setdefault("building", "")
+            cached.setdefault("office", "")
+            cached.setdefault("leisure", "")
+            cached.setdefault("tourism", "")
+            
             return cls.create_success_response(
                 content=cached.get("display_name") or f"{cached.get('city')}, {cached.get('admin')}",
                 data=cached
@@ -65,6 +79,20 @@ class ReverseGeocodeTool(MCPTool):
         # DB 快取
         db_cached = await get_geo_cache(geokey)
         if db_cached:
+            # 補齊缺失欄位（兼容舊版快取）
+            db_cached.setdefault("lat", lat)  # ← 補上座標
+            db_cached.setdefault("lon", lon)  # ← 補上座標
+            db_cached.setdefault("name", "")
+            db_cached.setdefault("detailed_address", db_cached.get("label") or db_cached.get("display_name") or "")
+            db_cached.setdefault("postcode", "")
+            db_cached.setdefault("city_district", "")
+            db_cached.setdefault("amenity", "")
+            db_cached.setdefault("shop", "")
+            db_cached.setdefault("building", "")
+            db_cached.setdefault("office", "")
+            db_cached.setdefault("leisure", "")
+            db_cached.setdefault("tourism", "")
+            
             await db_cache.set_geo_cache(geokey, db_cached)
             return cls.create_success_response(
                 content=db_cached.get("display_name") or f"{db_cached.get('city')}, {db_cached.get('admin')}",
@@ -176,6 +204,8 @@ class ReverseGeocodeTool(MCPTool):
                 detailed_address = " | ".join(detailed_address_parts) if detailed_address_parts else label
                 
                 payload = {
+                    "lat": lat,  # ← 新增：補上座標
+                    "lon": lon,  # ← 新增：補上座標
                     "city": city or "",
                     "admin": admin or "",
                     "country_code": country_code,

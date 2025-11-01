@@ -69,6 +69,37 @@ from core.database import set_user_env_current, add_user_env_snapshot
 
 
 # -----------------------------
+# 工具函式
+# -----------------------------
+def serialize_for_json(obj: Any) -> Any:
+    """
+    遞迴序列化物件，將不可 JSON 序列化的型別轉換為可序列化格式
+    - DatetimeWithNanoseconds → ISO 字串
+    - datetime → ISO 字串
+    - bytes → base64 字串
+    - 其他物件 → str()
+    """
+    from google.cloud.firestore_v1._helpers import DatetimeWithNanoseconds
+    from datetime import datetime, date
+    
+    if isinstance(obj, (DatetimeWithNanoseconds, datetime, date)):
+        return obj.isoformat()
+    elif isinstance(obj, bytes):
+        return base64.b64encode(obj).decode('utf-8')
+    elif isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [serialize_for_json(item) for item in obj]
+    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    else:
+        # 未知型別：嘗試轉字串
+        try:
+            return str(obj)
+        except Exception:
+            return None
+
+# -----------------------------
 # Pydantic 模型
 # -----------------------------
 class UserCreate(BaseModel):
@@ -812,6 +843,10 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                             emotion = response.get('emotion')  # 新增：提取情緒
                             care_mode = response.get('care_mode', False)  # 新增：提取關懷模式
 
+                            # 序列化 tool_data（避免 DatetimeWithNanoseconds 等不可序列化物件）
+                            if tool_data is not None:
+                                tool_data = serialize_for_json(tool_data)
+
                             # 先發送情緒資訊（如果有）
                             if emotion:
                                 await websocket.send_json({
@@ -840,8 +875,11 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                 "title": new_chat_info["title"]
                             })
 
+                        # 保存訊息（只儲存文字內容）
                         await save_message_to_db(user_id, chat_id, "user", user_message)
-                        await save_message_to_db(user_id, chat_id, "assistant", response)
+                        # 如果 response 是 dict，只保存 message 欄位
+                        message_to_save = response.get('message', response) if isinstance(response, dict) else response
+                        await save_message_to_db(user_id, chat_id, "assistant", message_to_save)
 
                     import asyncio as _asyncio
                     _asyncio.create_task(_do_process_and_send())
