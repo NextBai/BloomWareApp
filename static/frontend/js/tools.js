@@ -177,9 +177,16 @@ function getIconForTool(toolName, category) {
   const iconMap = {
     // 分類映射
     '健康': '❤️',
+    '健康數據': '❤️',
     '天氣': '🌤️',
     '新聞': '📰',
     '匯率': '💱',
+    '生活資訊': '💬',
+    '地理定位': '📍',
+    '軌道運輸': '🚇',
+    '道路運輸': '🚌',
+    '微型運具': '🚲',
+    '停車與充電': '🅿️',
     '時間': '⏰',
     '提醒': '⏰',
     '日曆': '📅',
@@ -192,7 +199,16 @@ function getIconForTool(toolName, category) {
     'healthkit_query': '❤️',
     'weather_query': '🌤️',
     'news_query': '📰',
-    'exchange_rate': '💱',
+    'exchange_query': '💱',
+    'forward_geocode': '📍',
+    'reverse_geocode': '📍',
+    'directions': '🗺️',
+    'tdx_bus_arrival': '🚌',
+    'tdx_metro': '�',
+    'tdx_train': '🚆',
+    'tdx_thsr': '🚄',
+    'tdx_youbike': '🚲',
+    'tdx_parking': '🅿️',
     'time_query': '⏰',
     'reminder': '⏰',
     'calendar': '📅'
@@ -292,9 +308,15 @@ function renderCardContent(toolName, toolData) {
     return renderExchangeRate(toolData);
   }
 
-  // 模式 5：通用 raw_data 物件
+  // 模式 5：地理定位數據（forward_geocode / reverse_geocode）
+  if (toolData.best_match && toolData.best_match.lat && toolData.best_match.lon) {
+    console.log('✅ 匹配到模式 5: 地理定位數據');
+    return renderLocationData(toolData);
+  }
+
+  // 模式 6：通用 raw_data 物件
   if (toolData.raw_data && typeof toolData.raw_data === 'object') {
-    console.log('✅ 匹配到模式 5: 通用 raw_data');
+    console.log('✅ 匹配到模式 6: 通用 raw_data');
     return renderKeyValuePairs(toolData.raw_data);
   }
 
@@ -494,6 +516,92 @@ function renderExchangeRate(data) {
   }
 
   return html || '<p>無匯率數據</p>';
+}
+
+/**
+ * 渲染地理定位數據（forward_geocode / reverse_geocode）
+ */
+function renderLocationData(data) {
+  const bestMatch = data.best_match || {};
+  const results = data.results || [];
+  const query = data.query || '';
+  
+  let html = '';
+
+  // 顯示查詢字串（如果有）
+  if (query) {
+    html += `
+      <div class="data-row">
+        <span class="data-label">🔍 查詢</span>
+        <span class="data-value">${query}</span>
+      </div>
+    `;
+  }
+
+  // 最佳匹配地點
+  if (bestMatch.label || bestMatch.display_name) {
+    html += `
+      <div class="data-row">
+        <span class="data-label">📍 地點</span>
+        <span class="data-value">${bestMatch.label || bestMatch.display_name}</span>
+      </div>
+    `;
+  }
+
+  // 座標
+  if (bestMatch.lat !== undefined && bestMatch.lon !== undefined) {
+    html += `
+      <div class="data-row">
+        <span class="data-label">🌐 座標</span>
+        <span class="data-value">${bestMatch.lat.toFixed(6)}, ${bestMatch.lon.toFixed(6)}</span>
+      </div>
+    `;
+  }
+
+  // 詳細地址（如果與 label 不同）
+  if (bestMatch.detailed_address && bestMatch.detailed_address !== bestMatch.label) {
+    html += `
+      <div class="data-row">
+        <span class="data-label">🏠 詳細</span>
+        <span class="data-value" style="font-size: 0.9em;">${bestMatch.detailed_address}</span>
+      </div>
+    `;
+  }
+
+  // 郵遞區號
+  if (bestMatch.postcode) {
+    html += `
+      <div class="data-row">
+        <span class="data-label">📮 郵遞區號</span>
+        <span class="data-value">${bestMatch.postcode}</span>
+      </div>
+    `;
+  }
+
+  // 如果有多個結果，顯示數量
+  if (results.length > 1) {
+    html += `
+      <div class="data-row" style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+        <span class="data-label">📊 其他結果</span>
+        <span class="data-value">共 ${results.length} 個地點</span>
+      </div>
+    `;
+  }
+
+  // Google Maps 連結（可選）
+  if (bestMatch.lat && bestMatch.lon) {
+    const mapsUrl = `https://www.google.com/maps?q=${bestMatch.lat},${bestMatch.lon}`;
+    html += `
+      <div class="data-row" style="margin-top: 8px;">
+        <a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" 
+           style="color: #4fc3f7; text-decoration: none; font-size: 0.9em;">
+          🗺️ 在 Google Maps 中查看
+        </a>
+      </div>
+    `;
+  }
+
+  return html || '<p>無地理數據</p>';
 }
 
 /**
