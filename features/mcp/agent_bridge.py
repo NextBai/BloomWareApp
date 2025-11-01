@@ -275,6 +275,74 @@ class MCPAgentBridge:
 
         return polite_message, sanitized_tool_data
 
+    @staticmethod
+    def _haversine_km(lat1: Optional[float], lon1: Optional[float], lat2: Optional[float], lon2: Optional[float]) -> Optional[float]:
+        """計算兩點之間的近似球面距離（公里）。"""
+        try:
+            from math import radians, sin, cos, sqrt, atan2
+
+            if None in (lat1, lon1, lat2, lon2):
+                return None
+
+            rlat1, rlon1, rlat2, rlon2 = map(radians, [lat1, lon1, lat2, lon2])
+            dlat = rlat2 - rlat1
+            dlon = rlon2 - rlon1
+            a = sin(dlat / 2) ** 2 + cos(rlat1) * cos(rlat2) * sin(dlon / 2) ** 2
+            c = 2 * atan2(sqrt(a), sqrt(1 - a))
+            earth_radius_km = 6371.0
+            return earth_radius_km * c
+        except Exception:
+            return None
+
+    def _build_directions_failure_response(
+        self,
+        arguments: Dict[str, Any],
+        labels: Dict[str, str],
+        error_message: str,
+    ) -> Dict[str, Any]:
+        """建立 directions 工具失敗時的替代回傳內容。"""
+        origin_label = labels.get("origin_label") or arguments.get("origin_label") or "起點"
+        dest_label = labels.get("dest_label") or arguments.get("dest_label") or "目的地"
+
+        o_lat = arguments.get("origin_lat")
+        o_lon = arguments.get("origin_lon")
+        d_lat = arguments.get("dest_lat")
+        d_lon = arguments.get("dest_lon")
+
+        distance_km = self._haversine_km(o_lat, o_lon, d_lat, d_lon)
+        distance_m = distance_km * 1000 if distance_km is not None else None
+        distance_str = self._format_distance(distance_m)
+
+        # 推估行駛時間：假設平均速率 35km/h
+        duration_seconds = None
+        if distance_km is not None:
+            duration_minutes = max(5, int(round((distance_km / 35) * 60)))
+            duration_seconds = duration_minutes * 60
+
+        duration_str = self._format_duration(duration_seconds)
+
+        message = (
+            f"目前無法向路線服務取得詳細路線，但從 {origin_label} 前往 {dest_label} 直線距離約 {distance_str}，"
+            f"若以車輛移動約需 {duration_str}。建議在 Google 地圖或 Apple 地圖輸入上述地點，以獲得即時的轉乘與路況。"
+        )
+
+        fallback_payload = {
+            "fallback": True,
+            "origin_label": origin_label,
+            "dest_label": dest_label,
+            "distance_estimated_m": distance_m,
+            "distance_readable": distance_str,
+            "duration_estimated_s": duration_seconds,
+            "duration_readable": duration_str,
+            "error": error_message,
+        }
+
+        return {
+            "message": message,
+            "tool_name": "directions",
+            "tool_data": fallback_payload,
+        }
+
     def get_current_time_data(self) -> Dict[str, Any]:
         """
         獲取當前時間數據，用於生成個性化歡迎詞
@@ -392,6 +460,21 @@ class MCPAgentBridge:
   * 任何提到「新聞」「消息」「報導」的請求都使用 news_query
   * 參數：query（關鍵詞）、country（國家，預設 tw）、category（分類，預設 top）、language（語言，預設 zh）
   * 今日新聞、科技新聞、台灣新聞都應該調用此工具
+
+- 地點查詢與導航（重要！）：
+  * **導航需求判斷**：
+    - 問「怎麼去 X」「如何去 X」「去 X 怎麼走」「到 X 怎麼走」→ 使用 forward_geocode 查詢目的地座標
+    - 問「從 A 到 B 要多久」「A 到 B 怎麼走」→ 同時使用 forward_geocode 查詢起點與終點
+  * **不要猜測座標**：
+    - ❌ 錯誤：directions:origin_lat=25.1288,origin_lon=121.9234,dest_lat=24.9932,dest_lon=121.3261
+    - ✅ 正確：forward_geocode:query=銘傳大學桃園校區
+  * **工具使用順序**：
+    1. 先使用 forward_geocode 將地點名稱轉換為座標
+    2. 再使用 directions 規劃路線（系統會自動處理）
+  * **範例**：
+    - 「怎麼去桃園火車站」→ forward_geocode:query=桃園火車站
+    - 「從銘傳大學到桃園火車站」→ forward_geocode:query=銘傳大學桃園校區
+    - 「台北車站到淡水捷運站」→ forward_geocode:query=台北車站
 
 情緒判斷（emotion）：
 根據文字的語氣、用詞、標點符號判斷用戶情緒，選擇以下之一：
@@ -722,8 +805,8 @@ class MCPAgentBridge:
     async def _call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any],
                            user_id: str = None, original_message: str = "") -> str:
         """
-        調用 MCP 工具（帶智慧重試機制 + 統一格式化）
-        2025年最佳實踐：指數退避重試 + 錯誤分類 + AI 格式化
+        調用 MCP 工具（帶智慧重試機制 + 統一格式化 + 智能地點查詢）
+        2025年最佳實踐：指數退避重試 + 錯誤分類 + AI 格式化 + 自動 geocoding
         """
         if tool_name not in self.mcp_server.tools:
             return self._generate_tool_not_found_error(tool_name)
@@ -731,6 +814,69 @@ class MCPAgentBridge:
         tool = self.mcp_server.tools[tool_name]
         if not tool.handler:
             return f"⚠️ 工具 {tool_name} 尚未實作，請稍後再試"
+
+        # 智能地點查詢：如果是 forward_geocode，且用戶有位置導航需求，自動串接 directions
+        is_navigation_intent = False
+        geocode_result = None
+        
+        if tool_name == "forward_geocode":
+            # 判斷是否為導航意圖（「怎麼去」「如何去」「到 X」）
+            nav_keywords = ["怎麼去", "如何去", "怎麼走", "到哪", "去哪", "要多久", "多遠"]
+            is_navigation_intent = any(keyword in original_message for keyword in nav_keywords)
+            
+            if is_navigation_intent:
+                logger.info(f"🗺️ 檢測到導航意圖，先執行地點查詢: {arguments.get('query')}")
+                
+                # 執行 geocoding
+                geocode_tool = self.mcp_server.tools.get("forward_geocode")
+                if geocode_tool and geocode_tool.handler:
+                    try:
+                        geocode_result = await asyncio.wait_for(
+                            geocode_tool.handler(arguments),
+                            timeout=15.0
+                        )
+                        
+                        if geocode_result.get("success"):
+                            best_match = geocode_result.get("data", {}).get("best_match", {})
+                            dest_lat = best_match.get("lat")
+                            dest_lon = best_match.get("lon")
+                            dest_label = best_match.get("label", arguments.get("query"))
+                            
+                            # 取得用戶當前位置
+                            env_ctx = await self._fetch_env_context(user_id)
+                            origin_lat = env_ctx.get("lat")
+                            origin_lon = env_ctx.get("lon")
+                            origin_label = env_ctx.get("label") or env_ctx.get("address_display") or "您的位置"
+                            
+                            if origin_lat and origin_lon and dest_lat and dest_lon:
+                                logger.info(f"🚗 自動串接導航: {origin_label} → {dest_label}")
+                                
+                                # 自動調用 directions
+                                directions_tool = self.mcp_server.tools.get("directions")
+                                if directions_tool and directions_tool.handler:
+                                    directions_args = {
+                                        "origin_lat": float(origin_lat),
+                                        "origin_lon": float(origin_lon),
+                                        "dest_lat": float(dest_lat),
+                                        "dest_lon": float(dest_lon),
+                                        "origin_label": origin_label,
+                                        "dest_label": dest_label,
+                                        "mode": "foot-walking"  # 預設步行
+                                    }
+                                    
+                                    # 遞迴調用 directions（會走下面的正常流程）
+                                    return await self._call_mcp_tool(
+                                        "directions",
+                                        directions_args,
+                                        user_id,
+                                        original_message
+                                    )
+                            else:
+                                logger.warning("⚠️ 無法取得完整位置資訊，返回地點查詢結果")
+                        else:
+                            logger.warning(f"⚠️ 地點查詢失敗: {geocode_result.get('error')}")
+                    except Exception as e:
+                        logger.error(f"❌ 自動地點查詢失敗: {e}", exc_info=True)
 
         arguments = await self._enrich_arguments_with_env(tool_name, arguments, user_id)
         route_labels: Dict[str, str] = {}
@@ -861,7 +1007,12 @@ class MCPAgentBridge:
             except Exception as e:
                 error_msg = str(e)
                 error_lower = error_msg.lower()
-                
+
+                if tool_name == "directions":
+                    logger.error(f"❌ directions 工具失敗，啟用替代回覆: {error_msg}")
+                    fallback_result = self._build_directions_failure_response(arguments, route_labels, error_msg)
+                    return fallback_result
+
                 # 判斷是否值得重試
                 is_retryable = any(keyword in error_lower for keyword in ["timeout", "network", "connection"])
                 

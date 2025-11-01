@@ -885,12 +885,60 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                     geo_res = await reverse_tool.handler({"lat": lat, "lon": lon})
                                     if isinstance(geo_res, dict) and geo_res.get("success"):
                                         payload = geo_res.get("data") or geo_res
+                                        # 取得所有詳細欄位
                                         city = payload.get("city") or city
                                         admin = payload.get("admin") or admin
                                         country_code = payload.get("country_code") or country_code
                                         address_display = payload.get("label") or payload.get("display_name") or address_display
+                                        
+                                        # 新增：精確地址資訊
+                                        detailed_address = payload.get("detailed_address")
+                                        label = payload.get("label")
+                                        road = payload.get("road")
+                                        house_number = payload.get("house_number")
+                                        suburb = payload.get("suburb")
+                                        city_district = payload.get("city_district")
+                                        postcode = payload.get("postcode")
+                                        amenity = payload.get("amenity")
+                                        shop = payload.get("shop")
+                                        building = payload.get("building")
+                                        office = payload.get("office")
+                                        leisure = payload.get("leisure")
+                                        tourism = payload.get("tourism")
+                                        name = payload.get("name")
                             except Exception as ge:
                                 logger.debug(f"反地理查詢失敗: {ge}")
+                                # 如果 reverse_geocode 失敗，保持原有變數為 None
+                                detailed_address = None
+                                label = None
+                                road = None
+                                house_number = None
+                                suburb = None
+                                city_district = None
+                                postcode = None
+                                amenity = None
+                                shop = None
+                                building = None
+                                office = None
+                                leisure = None
+                                tourism = None
+                                name = None
+                        else:
+                            # 如果沒有執行 reverse_geocode，初始化為 None
+                            detailed_address = None
+                            label = None
+                            road = None
+                            house_number = None
+                            suburb = None
+                            city_district = None
+                            postcode = None
+                            amenity = None
+                            shop = None
+                            building = None
+                            office = None
+                            leisure = None
+                            tourism = None
+                            name = None
 
                         env_payload = {
                             "lat": lat,
@@ -906,6 +954,21 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                             "admin": admin,
                             "country_code": country_code,
                             "address_display": address_display,
+                            # 新增：精確地址欄位
+                            "detailed_address": detailed_address,
+                            "label": label,
+                            "road": road,
+                            "house_number": house_number,
+                            "suburb": suburb,
+                            "city_district": city_district,
+                            "postcode": postcode,
+                            "amenity": amenity,
+                            "shop": shop,
+                            "building": building,
+                            "office": office,
+                            "leisure": leisure,
+                            "tourism": tourism,
+                            "name": name,
                         }
 
                         # 更新會話暫存

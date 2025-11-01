@@ -145,20 +145,85 @@ def _format_history_for_prompt(history: List[Dict[str, str]]) -> str:
 
 
 def _format_env_context(ctx: Dict[str, Any]) -> str:
-    """將環境資訊整理成可讀文字，確保 AI 能掌握使用者所在位置。"""
+    """將環境資訊整理成可讀文字，確保 AI 能掌握使用者所在位置（精確到路口、門牌號）。"""
     if not ctx:
         return ""
 
     parts: List[str] = []
 
+    # 優先顯示詳細地址（最重要）
+    detailed_address = (ctx.get("detailed_address") or "").strip()
+    label = (ctx.get("label") or "").strip()
+    address_display = (ctx.get("address_display") or "").strip()
+    
+    if detailed_address:
+        parts.append(f"📍 精確位置:\n{detailed_address}")
+    elif label:
+        parts.append(f"📍 當前位置: {label}")
+    elif address_display:
+        parts.append(f"📍 當前位置: {address_display}")
+    
+    # 如果有門牌資訊，額外強調
+    road = (ctx.get("road") or "").strip()
+    house_number = (ctx.get("house_number") or "").strip()
+    postcode = (ctx.get("postcode") or "").strip()
+    
+    if road and house_number and not detailed_address:
+        address_line = f"{road}{house_number}號"
+        if postcode:
+            address_line = f"〒{postcode} {address_line}"
+        parts.append(f"門牌地址: {address_line}")
+    
+    # 區域資訊（如果沒有在 detailed_address 中顯示）
+    city_district = (ctx.get("city_district") or "").strip()
+    suburb = (ctx.get("suburb") or "").strip()
     city = (ctx.get("city") or "").strip()
     admin = (ctx.get("admin") or "").strip()
-    if city and admin:
-        parts.append(f"城市: {city}（{admin}）")
-    elif city:
-        parts.append(f"城市: {city}")
-    elif admin:
-        parts.append(f"行政區: {admin}")
+    
+    if not detailed_address:
+        if city_district:
+            parts.append(f"行政區: {city_district}")
+        elif suburb:
+            parts.append(f"區域: {suburb}")
+        
+        if city and admin:
+            parts.append(f"城市: {city}（{admin}）")
+        elif city:
+            parts.append(f"城市: {city}")
+        elif admin:
+            parts.append(f"省份: {admin}")
+
+    # 座標資訊（供工具使用）
+    lat = ctx.get("lat")
+    lon = ctx.get("lon")
+    try:
+        if lat is not None and lon is not None:
+            lat_f = float(lat)
+            lon_f = float(lon)
+            coord_text = f"緯度 {lat_f:.6f}, 經度 {lon_f:.6f}"
+            geohash = (ctx.get("geohash_7") or "").strip()
+            if geohash:
+                parts.append(f"座標: {coord_text}（Geohash {geohash}）")
+            else:
+                parts.append(f"座標: {coord_text}")
+    except (ValueError, TypeError):
+        pass
+
+    # POI 資訊（如果是特殊地點）
+    amenity = (ctx.get("amenity") or "").strip()
+    shop = (ctx.get("shop") or "").strip()
+    building = (ctx.get("building") or "").strip()
+    
+    poi_info = []
+    if amenity:
+        poi_info.append(f"設施: {amenity}")
+    if shop:
+        poi_info.append(f"商店: {shop}")
+    if building and building not in ["yes", "residential"]:
+        poi_info.append(f"建築: {building}")
+    
+    if poi_info:
+        parts.append(" | ".join(poi_info))
 
     tz = (ctx.get("tz") or "").strip()
     if tz:
@@ -175,21 +240,6 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     except (ValueError, TypeError):
         pass
 
-    lat = ctx.get("lat")
-    lon = ctx.get("lon")
-    try:
-        if lat is not None and lon is not None:
-            lat_f = float(lat)
-            lon_f = float(lon)
-            coord_text = f"{lat_f:.5f}, {lon_f:.5f}"
-            geohash = (ctx.get("geohash_7") or "").strip()
-            if geohash:
-                parts.append(f"座標: {coord_text}（Geohash {geohash}）")
-            else:
-                parts.append(f"座標: {coord_text}")
-    except (ValueError, TypeError):
-        pass
-
     locale = (ctx.get("locale") or "").strip()
     if locale:
         parts.append(f"語系: {locale}")
@@ -197,10 +247,6 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     device = (ctx.get("device") or "").strip()
     if device:
         parts.append(f"裝置: {device}")
-
-    address_display = (ctx.get("address_display") or "").strip()
-    if address_display:
-        parts.append(f"地點: {address_display}")
 
     return "\n".join(parts)
 

@@ -979,85 +979,89 @@
     .voice-transcript-wrapper {
       position: relative;
       width: 100%;
+      max-width: 680px; /* 限制最大寬度（從 100% 改為固定上限）*/
+      margin: 0 auto; /* 置中對齊 */
+      padding: 0 20px; /* 左右留白 */
       display: flex;
       justify-content: center;
     }
 
     .voice-transcript {
-      width: min(100%, 560px);
+      width: 100%; /* 填滿 wrapper（受 max-width 限制）*/
       flex-shrink: 0;
-      padding: 24px 32px;
-      background: rgba(255, 255, 255, 0.95);
-      border: 1px solid rgba(0, 0, 0, 0.08);
-      border-radius: 16px;
-      backdrop-filter: blur(20px) saturate(180%);
-      font-size: 20px;
+      padding: 20px 28px; /* 減少內距（原 24px 32px）*/
+      background: rgba(255, 255, 255, 0.96);
+      border: 1.5px solid rgba(0, 0, 0, 0.06); /* 更細的邊框 */
+      border-radius: 14px; /* 稍微減少圓角（原 16px）*/
+      backdrop-filter: blur(24px) saturate(180%);
+      font-size: 18px; /* 減小字體（原 20px）*/
       font-weight: 400;
       color: #1A1A1A;
       text-align: center;
-      line-height: 1.6;
-      min-height: 80px;
-      max-height: 160px; /* 固定最大高度約 3-4 行文字 */
+      line-height: 1.5; /* 稍微緊湊（原 1.6）*/
+      min-height: 72px; /* 減少最小高度（原 80px）*/
+      max-height: 140px; /* 減少最大高度（原 160px）*/
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.3s;
-      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 3px 16px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04); /* 更柔和的陰影 */
       outline: none;
       resize: none;
       overflow-y: auto;
     }
 
     .voice-transcript.provisional {
-      color: rgba(0, 0, 0, 0.4);
+      color: rgba(0, 0, 0, 0.35); /* 稍微降低對比（原 0.4）*/
       font-style: italic;
     }
 
     .voice-transcript.final {
       color: #1A1A1A;
-      border-color: rgba(0, 0, 0, 0.12);
-      box-shadow: 0 6px 32px rgba(0, 0, 0, 0.12);
+      border-color: rgba(0, 0, 0, 0.10); /* 稍微淡化（原 0.12）*/
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
     }
 
     /* 文字輸入模式 */
     .voice-transcript.text-input-mode {
       cursor: text;
       text-align: left;
-      border-color: rgba(59, 130, 246, 0.5);
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1), 0 6px 32px rgba(0, 0, 0, 0.12);
+      border-color: rgba(59, 130, 246, 0.4); /* 稍微淡化聚焦顏色 */
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.08), 0 4px 20px rgba(0, 0, 0, 0.08); /* 減少光暈範圍 */
       background: rgba(255, 255, 255, 0.98);
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 160px; /* 與基礎樣式保持一致 */
+      max-height: 140px; /* 與基礎樣式保持一致 */
     }
 
     .voice-transcript.text-input-mode:focus {
-      border-color: rgba(59, 130, 246, 0.8);
-      box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15), 0 8px 40px rgba(0, 0, 0, 0.15);
+      border-color: rgba(59, 130, 246, 0.7); /* 稍微降低強度（原 0.8）*/
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12), 0 6px 28px rgba(0, 0, 0, 0.12); /* 調整光暈 */
     }
 
     .voice-transcript.text-input-mode:empty:before {
       content: attr(data-placeholder);
-      color: rgba(0, 0, 0, 0.3);
+      color: rgba(0, 0, 0, 0.28); /* 稍微淡化（原 0.3）*/
       font-style: italic;
     }
 
     /* 文字輸入模式下的提示文字 */
     .input-mode-hint {
       position: absolute;
-      bottom: -40px;
+      bottom: -36px; /* 調整位置（原 -40px）*/
       left: 50%;
       transform: translateX(-50%);
-      font-size: 13px;
-      color: rgba(0, 0, 0, 0.4);
-      background: rgba(255, 255, 255, 0.9);
-      padding: 8px 16px;
-      border-radius: 12px;
+      font-size: 12px; /* 減小字體（原 13px）*/
+      color: rgba(0, 0, 0, 0.38); /* 稍微提高對比（原 0.4）*/
+      background: rgba(255, 255, 255, 0.92);
+      padding: 6px 14px; /* 減少內距（原 8px 16px）*/
+      border-radius: 10px; /* 減少圓角（原 12px）*/
       backdrop-filter: blur(10px);
       opacity: 0;
-      transition: opacity 0.3s;
+      transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       pointer-events: none;
       white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); /* 添加微陰影 */
     }
 
     .voice-transcript.text-input-mode + .input-mode-hint {
@@ -1067,6 +1071,28 @@
     /* 文字輸入模式下確保波形容器保持可見 */
     .text-input-active .voice-waveform-container {
       opacity: 1 !important;
+    }
+
+    /* 手機版優化 */
+    @media (max-width: 768px) {
+      .voice-transcript-wrapper {
+        max-width: 100%; /* 手機版全寬 */
+        padding: 0 16px; /* 減少左右留白 */
+      }
+
+      .voice-transcript {
+        font-size: 16px; /* 手機版縮小字體 */
+        padding: 16px 20px; /* 減少內距 */
+        min-height: 64px; /* 減少最小高度 */
+        max-height: 120px; /* 減少最大高度 */
+        border-radius: 12px; /* 減少圓角 */
+      }
+
+      .input-mode-hint {
+        font-size: 11px;
+        padding: 5px 12px;
+        bottom: -32px;
+      }
     }
 
     /* === 工具卡片 === */

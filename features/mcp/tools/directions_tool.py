@@ -161,22 +161,65 @@ class DirectionsTool(MCPTool):
         async with aiohttp.ClientSession() as session:
             async with session.post(url, headers=headers, data=json.dumps(body), timeout=15) as resp:
                 if resp.status != 200:
-                    raise ExecutionError(f"ORS 失敗: HTTP {resp.status}")
+                    text = await resp.text()
+                    raise ExecutionError(f"OpenRouteService HTTP {resp.status}: {text[:200]}")
                 data = await resp.json()
 
         try:
+            # 檢查 API 回應是否包含錯誤訊息
+            if not isinstance(data, dict):
+                raise ExecutionError(f"OpenRouteService 回應格式錯誤: 非字典類型")
+            
+            # 優先處理 error 欄位（API 標準錯誤格式）
+            if "error" in data:
+                error_payload = data["error"]
+                if isinstance(error_payload, dict):
+                    code = error_payload.get("code", "unknown")
+                    message = error_payload.get("message", "未知錯誤")
+                    raise ExecutionError(f"路線規劃失敗: {message} (錯誤碼: {code})")
+                else:
+                    raise ExecutionError(f"路線規劃失敗: {error_payload}")
+            
+            # 檢查是否有 features（標準成功格式）
+            if "features" not in data or not data["features"]:
+                # 提供友善的錯誤訊息
+                if o_lat == d_lat and o_lon == d_lon:
+                    raise ExecutionError("起點與終點相同，無需導航")
+                else:
+                    raise ExecutionError("找不到可行的路線，請確認起點與終點是否在可達範圍內")
+
             feat = data["features"][0]
+            
+            # 檢查必要欄位
+            if "properties" not in feat or "summary" not in feat["properties"]:
+                raise ExecutionError("路線資料缺少必要欄位（summary）")
+            
+            if "geometry" not in feat or "coordinates" not in feat["geometry"]:
+                raise ExecutionError("路線資料缺少必要欄位（geometry）")
+            
             summary = feat["properties"]["summary"]
             distance_m = float(summary["distance"])  # meters
             duration_s = float(summary["duration"])  # seconds
             polyline = feat["geometry"]["coordinates"]  # LineString 座標
+            
             base_payload = {
                 "distance_m": distance_m,
                 "duration_s": duration_s,
                 "polyline": json.dumps(polyline),
             }
+        except ExecutionError:
+            # 重新拋出已知錯誤
+            raise
+        except KeyError as e:
+            # 捕捉欄位缺失錯誤，提供更友善的訊息
+            raise ExecutionError(f"路線資料格式錯誤: 缺少欄位 {e}")
+        except (ValueError, TypeError) as e:
+            # 捕捉資料型別轉換錯誤
+            raise ExecutionError(f"路線資料解析失敗: {e}")
         except Exception as e:
-            raise ExecutionError(f"解析 ORS 回應失敗: {e}")
+            # 捕捉所有其他未預期錯誤
+            logger.error(f"❌ ORS 回應解析異常: {e}", exc_info=True)
+            raise ExecutionError(f"路線資料處理失敗: {type(e).__name__}: {e}")
 
         # 回寫快取
         await db_cache.set_route_cache(key, base_payload)
