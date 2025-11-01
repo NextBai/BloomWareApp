@@ -40,7 +40,9 @@ class DirectionsTool(MCPTool):
             "origin_lon": {"type": "number"},
             "dest_lat": {"type": "number"},
             "dest_lon": {"type": "number"},
-            "mode": {"type": "string", "enum": ["driving-car", "foot-walking", "cycling-regular"], "default": "foot-walking"}
+            "mode": {"type": "string", "enum": ["driving-car", "foot-walking", "cycling-regular"], "default": "foot-walking"},
+            "origin_label": {"type": "string"},
+            "dest_label": {"type": "string"},
         }, required=["origin_lat", "origin_lon", "dest_lat", "dest_lon"])
 
     @classmethod
@@ -49,7 +51,9 @@ class DirectionsTool(MCPTool):
         schema["properties"].update({
             "distance_m": {"type": "number"},
             "duration_s": {"type": "number"},
-            "polyline": {"type": "string"}
+            "polyline": {"type": "string"},
+            "origin_label": {"type": "string"},
+            "dest_label": {"type": "string"},
         })
         return schema
 
@@ -109,6 +113,16 @@ class DirectionsTool(MCPTool):
         d_lat = float(arguments.get("dest_lat"))
         d_lon = float(arguments.get("dest_lon"))
         mode = arguments.get("mode", "foot-walking")
+        origin_label = (arguments.get("origin_label") or "").strip()
+        dest_label = (arguments.get("dest_label") or "").strip()
+
+        def _attach_labels(data: Dict[str, Any]) -> Dict[str, Any]:
+            enriched = dict(data)
+            if origin_label:
+                enriched["origin_label"] = origin_label
+            if dest_label:
+                enriched["dest_label"] = dest_label
+            return enriched
 
         # 快取鍵（geohash 簡化）
         try:
@@ -119,12 +133,20 @@ class DirectionsTool(MCPTool):
 
         cached = await db_cache.get_route_cached(key)
         if cached:
-            return cls.create_success_response(content=f"距離 {int(cached['distance_m'])}m，約 {int(cached['duration_s']/60)} 分鐘", data=cached)
+            cached_payload = _attach_labels(cached)
+            return cls.create_success_response(
+                content=f"距離 {int(cached['distance_m'])}m，約 {int(cached['duration_s']/60)} 分鐘",
+                data=cached_payload,
+            )
 
         db_cached = await get_route_cache(key)
         if db_cached:
             await db_cache.set_route_cache(key, db_cached)
-            return cls.create_success_response(content=f"距離 {int(db_cached['distance_m'])}m，約 {int(db_cached['duration_s']/60)} 分鐘", data=db_cached)
+            db_payload = _attach_labels(db_cached)
+            return cls.create_success_response(
+                content=f"距離 {int(db_cached['distance_m'])}m，約 {int(db_cached['duration_s']/60)} 分鐘",
+                data=db_payload,
+            )
 
         # 呼叫 ORS Directions
         url = f"https://api.openrouteservice.org/v2/directions/{mode}"
@@ -148,12 +170,19 @@ class DirectionsTool(MCPTool):
             distance_m = float(summary["distance"])  # meters
             duration_s = float(summary["duration"])  # seconds
             polyline = feat["geometry"]["coordinates"]  # LineString 座標
-            payload = {"distance_m": distance_m, "duration_s": duration_s, "polyline": json.dumps(polyline)}
+            base_payload = {
+                "distance_m": distance_m,
+                "duration_s": duration_s,
+                "polyline": json.dumps(polyline),
+            }
         except Exception as e:
             raise ExecutionError(f"解析 ORS 回應失敗: {e}")
 
         # 回寫快取
-        await db_cache.set_route_cache(key, payload)
-        await set_route_cache(key, payload)
+        await db_cache.set_route_cache(key, base_payload)
+        await set_route_cache(key, base_payload)
 
-        return cls.create_success_response(content=f"距離 {int(distance_m)}m，約 {int(duration_s/60)} 分鐘", data=payload)
+        return cls.create_success_response(
+            content=f"距離 {int(distance_m)}m，約 {int(duration_s/60)} 分鐘",
+            data=_attach_labels(base_payload),
+        )

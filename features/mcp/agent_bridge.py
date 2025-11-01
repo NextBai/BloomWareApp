@@ -140,6 +140,141 @@ class MCPAgentBridge:
 
         return enriched
 
+    async def _resolve_coordinate_label(self, lat: Any, lon: Any) -> Optional[str]:
+        """透過 reverse_geocode 將座標轉換為可朗讀的地點名稱。"""
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            return None
+
+        reverse_tool = self.mcp_server.tools.get("reverse_geocode")
+        if not reverse_tool or not reverse_tool.handler:
+            return None
+
+        try:
+            res = await reverse_tool.handler({"lat": lat_f, "lon": lon_f})
+        except Exception as ge:
+            logger.debug(f"reverse_geocode 失敗: {ge}")
+            return None
+
+        if not isinstance(res, dict):
+            return None
+        if not res.get("success"):
+            return None
+
+        payload = res.get("data") or res
+        label = (
+            payload.get("label")
+            or payload.get("display_name")
+            or ", ".join(
+                part for part in [payload.get("city"), payload.get("admin")] if part
+            )
+        )
+        return label.strip() if label else None
+
+    async def _prepare_route_arguments(self, arguments: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        """為 directions 工具補齊可讀地點名稱並正規化座標。"""
+        prepared = dict(arguments or {})
+        labels: Dict[str, str] = {}
+
+        def _normalize_coord(value: Any) -> Optional[float]:
+            try:
+                if value is None:
+                    return None
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        for prefix, default_label in (("origin", "起點"), ("dest", "目的地")):
+            lat_key = f"{prefix}_lat"
+            lon_key = f"{prefix}_lon"
+            label_key = f"{prefix}_label"
+
+            lat_val = _normalize_coord(prepared.get(lat_key))
+            lon_val = _normalize_coord(prepared.get(lon_key))
+            if lat_val is not None:
+                prepared[lat_key] = lat_val
+            if lon_val is not None:
+                prepared[lon_key] = lon_val
+
+            label_val = str(prepared.get(label_key) or "").strip()
+            if not label_val and lat_val is not None and lon_val is not None:
+                label_val = await self._resolve_coordinate_label(lat_val, lon_val) or ""
+
+            if not label_val:
+                label_val = default_label
+
+            prepared[label_key] = label_val
+            labels[label_key] = label_val
+
+        return prepared, labels
+
+    @staticmethod
+    def _format_distance(distance_m: Optional[float]) -> str:
+        """將距離換算為人類可讀格式。"""
+        if distance_m is None:
+            return "未知距離"
+        try:
+            distance = float(distance_m)
+        except (TypeError, ValueError):
+            return "未知距離"
+
+        if distance >= 1000:
+            return f"{distance / 1000:.1f} 公里"
+        return f"{round(distance)} 公尺"
+
+    @staticmethod
+    def _format_duration(duration_s: Optional[float]) -> str:
+        """將秒數換算為人類可讀格式。"""
+        if duration_s is None:
+            return "未知時間"
+        try:
+            total_seconds = int(round(float(duration_s)))
+        except (TypeError, ValueError):
+            return "未知時間"
+
+        minutes = total_seconds // 60
+        if minutes < 1:
+            return "不到 1 分鐘"
+
+        hours = minutes // 60
+        remaining_minutes = minutes % 60
+
+        if hours and remaining_minutes:
+            return f"{hours} 小時 {remaining_minutes} 分"
+        if hours:
+            return f"{hours} 小時"
+        return f"{minutes} 分鐘"
+
+    def _build_directions_message(
+        self,
+        tool_data: Dict[str, Any],
+        labels: Dict[str, str],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """依據 directions 工具回傳資料，產出友善訊息與乾淨的 tool_data。"""
+        origin_label = labels.get("origin_label") or tool_data.get("origin_label") or "起點"
+        dest_label = labels.get("dest_label") or tool_data.get("dest_label") or "目的地"
+
+        distance_m = tool_data.get("distance_m")
+        duration_s = tool_data.get("duration_s")
+
+        distance_str = self._format_distance(distance_m)
+        duration_str = self._format_duration(duration_s)
+
+        polite_message = (
+            f"從 {origin_label} 前往 {dest_label} 大約需要 {duration_str}，"
+            f"總距離約 {distance_str}。"
+        )
+
+        sanitized_tool_data = dict(tool_data or {})
+        sanitized_tool_data["origin_label"] = origin_label
+        sanitized_tool_data["dest_label"] = dest_label
+        sanitized_tool_data["distance_readable"] = distance_str
+        sanitized_tool_data["duration_readable"] = duration_str
+
+        return polite_message, sanitized_tool_data
+
     def get_current_time_data(self) -> Dict[str, Any]:
         """
         獲取當前時間數據，用於生成個性化歡迎詞
@@ -598,6 +733,9 @@ class MCPAgentBridge:
             return f"⚠️ 工具 {tool_name} 尚未實作，請稍後再試"
 
         arguments = await self._enrich_arguments_with_env(tool_name, arguments, user_id)
+        route_labels: Dict[str, str] = {}
+        if tool_name == "directions":
+            arguments, route_labels = await self._prepare_route_arguments(arguments)
 
         logger.info(f"🔧 調用 MCP 工具: {tool_name}")
         logger.debug("📋 調用參數: %s", _safe_json(arguments))
@@ -638,6 +776,14 @@ class MCPAgentBridge:
                             tool_data = result.get("data") or result.get("raw_data")
 
                         logger.debug(f"📊 提取的 tool_data: {type(tool_data)} = {tool_data if tool_data is None or isinstance(tool_data, (str, int, bool)) else '<dict/list>'}")
+
+                        if tool_name == "directions":
+                            message, sanitized_tool_data = self._build_directions_message(
+                                tool_data if isinstance(tool_data, dict) else {},
+                                route_labels,
+                            )
+                            content = message
+                            tool_data = sanitized_tool_data
 
                         if self._should_reformat(tool_name, content):
                             logger.info(f"🎨 啟用 AI 格式化: {tool_name}")
