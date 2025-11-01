@@ -31,10 +31,15 @@ class NewsTool(MCPTool):
     """新聞查詢 MCP 工具 - 使用 NewsData.io（更好的台灣與繁中新聞支援）"""
 
     NAME = "news_query"
-    DESCRIPTION = "查詢最新新聞資訊，支援關鍵詞搜尋、台灣新聞和分類篩選，提供可靠的繁體中文新聞來源"
-    CATEGORY = "新聞"
-    TAGS = ["news", "information", "current events", "taiwan", "chinese"]
-    USAGE_TIPS = ["直接說「科技新聞」或「今日新聞」", "支援台灣本地新聞", "繁體中文新聞源豐富"]
+    DESCRIPTION = "查詢最新新聞（可指定類別、語言、數量）"
+    CATEGORY = "生活資訊"
+    TAGS = ["news", "新聞", "資訊"]
+    KEYWORDS = ["新聞", "消息", "報導", "news", "頭條", "時事"]
+    USAGE_TIPS = [
+        "可指定新聞類別（科技、商業、娛樂等）",
+        "支援多國新聞（台灣、美國、日本等）",
+        "可限制返回數量"
+    ]
 
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:

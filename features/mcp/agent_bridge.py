@@ -685,33 +685,98 @@ class MCPAgentBridge:
         }
 
     def _get_tools_description(self) -> str:
-        """獲取簡化的工具描述，專注於核心信息"""
-        descriptions = []
-
-        for tool_name, tool in self.mcp_server.tools.items():
-            # 簡化描述格式
-            desc = f"{tool_name}: {tool.description}"
-
-            # 只保留最重要的參數信息
-            input_schema = tool.inputSchema
-            properties = input_schema.get("properties", {})
-
-            if properties:
-                # 只顯示必需參數
-                required = input_schema.get("required", [])
-                if required:
-                    params = []
-                    for param_name in required:
-                        if param_name in properties:
-                            param_info = properties[param_name]
-                            param_type = param_info.get("type", "string")
-                            params.append(f"{param_name}({param_type})")
-                    if params:
-                        desc += f" | 參數: {', '.join(params)}"
-
-            descriptions.append(desc)
-
-        return "\n".join(descriptions)
+        """獲取分類整理的工具摘要（使用輕量級摘要，減少 token 消耗 60-70%）"""
+        # 使用 MCPServer 的 get_tools_summary() 獲取輕量級摘要
+        try:
+            tools_summary = self.mcp_server.get_tools_summary()
+        except Exception as e:
+            logger.error(f"獲取工具摘要失敗: {e}")
+            # 降級：使用舊邏輯
+            tools_summary = []
+            for tool_name, tool in self.mcp_server.tools.items():
+                tools_summary.append({
+                    "name": tool_name,
+                    "description": tool.description if hasattr(tool, 'description') else "",
+                    "category": "其他",
+                    "keywords": [],
+                    "is_complex": False
+                })
+        
+        # 按類別組織工具
+        categorized_tools = {
+            "地理定位": [],
+            "軌道運輸": [],
+            "道路運輸": [],
+            "微型運具": [],
+            "停車與充電": [],
+            "生活資訊": [],
+            "健康數據": [],
+            "其他": []
+        }
+        
+        for summary in tools_summary:
+            category = summary.get("category", "其他")
+            name = summary.get("name", "unknown")
+            desc = summary.get("description", "")
+            keywords = summary.get("keywords", [])
+            is_complex = summary.get("is_complex", False)
+            
+            # 格式化：工具名 - 描述 | 關鍵字
+            keywords_str = ", ".join(keywords[:5]) if keywords else ""  # 最多顯示 5 個關鍵字
+            if keywords_str:
+                line = f"- {name}: {desc} | 關鍵字: {keywords_str}"
+            else:
+                line = f"- {name}: {desc}"
+            
+            # 標記複雜工具
+            if is_complex:
+                line += " [複雜]"
+            
+            # 將工具加入對應類別
+            if category in categorized_tools:
+                categorized_tools[category].append(line)
+            else:
+                categorized_tools["其他"].append(line)
+        
+        # 構建分類描述
+        result = []
+        
+        # 定義類別順序和說明
+        category_order = [
+            ("地理定位", "【地理定位與導航】地點查詢、路線規劃"),
+            ("軌道運輸", "【軌道運輸】捷運、台鐵、高鐵"),
+            ("道路運輸", "【道路運輸】公車、客運"),
+            ("微型運具", "【微型運具】YouBike 共享單車"),
+            ("停車與充電", "【停車與充電】停車場、充電站"),
+            ("生活資訊", "【生活資訊】天氣、新聞、匯率"),
+            ("健康數據", "【健康數據】心率、步數、血氧、睡眠"),
+            ("其他", "【其他功能】")
+        ]
+        
+        for category, header in category_order:
+            tools = categorized_tools.get(category, [])
+            if tools:
+                result.append(f"\n{header}")
+                result.extend(tools)
+        
+        # 添加工具選擇指引
+        result.append("\n【工具選擇指引】")
+        result.append("1. 導航問題（「怎麼去」「路線」「導航」） → directions")
+        result.append("2. 地點查詢（「XXX在哪」「地址」） → forward_geocode")
+        result.append("3. 公共運輸查詢 → 根據運具類型選擇對應工具")
+        result.append("   - 公車 → tdx_bus_arrival")
+        result.append("   - 捷運 → tdx_metro")
+        result.append("   - 台鐵 → tdx_train")
+        result.append("   - 高鐵 → tdx_thsr")
+        result.append("   - YouBike → tdx_youbike")
+        result.append("   - 停車場/充電站 → tdx_parking")
+        result.append("4. 所有 tdx 工具都會自動感知用戶位置，無需手動提供座標")
+        result.append("5. 健康數據查詢 → healthkit_query（心率、步數、血氧等）")
+        result.append("6. 生活資訊 → weather_query（天氣）、news_query（新聞）、exchange_query（匯率）")
+        result.append("7. 標記 [複雜] 的工具只需返回工具名稱，參數稍後填充")
+        
+        logger.debug(f"工具描述已生成，總長度: {len(''.join(result))} 字元")
+        return "\n".join(result)
 
     def _keyword_intent_detection(self, message: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """關鍵詞匹配檢測 (備用方案)"""

@@ -7,7 +7,8 @@ import json
 import sys
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional, Callable
+import time
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from enum import Enum
 from .types import Tool
 from .auto_registry import MCPAutoRegistry
@@ -50,6 +51,10 @@ class FeaturesMCPServer:
         self.version = version
         self.tools: Dict[str, Tool] = {}
         self.handlers: Dict[str, Callable] = {}
+
+        # Schema 快取（用於 Lazy Loading）
+        self._schema_cache: Dict[str, Tuple[Dict, float]] = {}  # {tool_name: (schema, timestamp)}
+        self._schema_cache_ttl = 600  # 10 分鐘
 
         # 保存註冊器引用以便清理
         self._registry = None
@@ -208,6 +213,108 @@ class FeaturesMCPServer:
         """註冊工具"""
         self.tools[tool.name] = tool
         logger.info(f"註冊工具: {tool.name}")
+    
+    def get_tools_summary(self) -> List[Dict[str, Any]]:
+        """
+        獲取所有工具的摘要（用於 Intent Detection，減少 token 消耗）
+        
+        返回輕量級工具列表，只包含：
+        - name, description_short, category, keywords, is_complex
+        - 簡單工具額外包含 params 列表
+        
+        相比完整 schema，節省約 60-70% tokens
+        """
+        summaries = []
+        
+        for tool_name, tool in self.tools.items():
+            try:
+                # 檢查工具是否有 get_summary 方法（新工具）
+                if hasattr(tool, 'get_summary') and callable(tool.get_summary):
+                    summary = tool.get_summary()
+                else:
+                    # 向後兼容：為舊工具生成簡化摘要
+                    summary = {
+                        "name": tool_name,
+                        "description": tool.description[:50] + "..." if len(tool.description) > 50 else tool.description,
+                        "category": tool.metadata.get('category', 'general') if hasattr(tool, 'metadata') and tool.metadata else 'general',
+                        "keywords": tool.metadata.get('keywords', []) if hasattr(tool, 'metadata') and tool.metadata else [],
+                        "is_complex": False  # 舊工具預設為簡單工具
+                    }
+                
+                summaries.append(summary)
+                
+            except Exception as e:
+                logger.error(f"生成工具摘要失敗: {tool_name}, 錯誤: {e}")
+                # 降級：返回最基本的資訊
+                summaries.append({
+                    "name": tool_name,
+                    "description": tool.description if hasattr(tool, 'description') else "未知工具",
+                    "category": "其他",
+                    "keywords": [],
+                    "is_complex": False
+                })
+        
+        logger.debug(f"生成工具摘要: {len(summaries)} 個工具")
+        return summaries
+    
+    def get_tool_full_schema(self, tool_name: str) -> Dict[str, Any]:
+        """
+        獲取工具的完整 Schema（Lazy Loading，按需載入）
+        
+        使用快取機制：
+        - 首次調用：載入完整 schema 並快取 10 分鐘
+        - 後續調用：直接從快取返回（節省計算）
+        - 快取過期：重新載入
+        
+        Args:
+            tool_name: 工具名稱
+            
+        Returns:
+            完整的工具定義（包含 inputSchema, outputSchema 等）
+            
+        Raises:
+            ValueError: 工具不存在
+        """
+        # 檢查快取
+        if tool_name in self._schema_cache:
+            schema, timestamp = self._schema_cache[tool_name]
+            if time.time() - timestamp < self._schema_cache_ttl:
+                logger.debug(f"Schema 快取命中: {tool_name}")
+                return schema
+            else:
+                # 快取過期，刪除
+                del self._schema_cache[tool_name]
+                logger.debug(f"Schema 快取過期: {tool_name}")
+        
+        # 快取未命中，載入完整 schema
+        if tool_name not in self.tools:
+            raise ValueError(f"工具不存在: {tool_name}")
+        
+        tool = self.tools[tool_name]
+        
+        try:
+            # 檢查工具是否有 get_full_definition 方法（新工具）
+            if hasattr(tool, 'get_full_definition') and callable(tool.get_full_definition):
+                schema = tool.get_full_definition()
+            else:
+                # 向後兼容：從現有屬性構建完整定義
+                schema = {
+                    "name": tool_name,
+                    "description": tool.description if hasattr(tool, 'description') else "",
+                    "inputSchema": tool.inputSchema if hasattr(tool, 'inputSchema') else {},
+                    "outputSchema": getattr(tool, 'outputSchema', {}),
+                    "metadata": getattr(tool, 'metadata', {})
+                }
+            
+            # 更新快取
+            self._schema_cache[tool_name] = (schema, time.time())
+            logger.debug(f"Schema 已快取: {tool_name}")
+            
+            return schema
+            
+        except Exception as e:
+            logger.error(f"載入工具 Schema 失敗: {tool_name}, 錯誤: {e}")
+            raise ValueError(f"無法載入工具 {tool_name} 的 Schema: {e}")
 
     async def _handle_initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """處理初始化請求"""

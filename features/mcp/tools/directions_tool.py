@@ -23,8 +23,9 @@ ORS_API_KEY = os.getenv("OPENROUTESERVICE_API_KEY", "")
 class DirectionsTool(MCPTool):
     NAME = "directions"
     DESCRIPTION = "規劃兩點之間的路線（walk/drive/cycle），返回距離、時間與 polyline"
-    CATEGORY = "地理"
+    CATEGORY = "地理定位"
     TAGS = ["route", "navigation", "directions"]
+    KEYWORDS = ["導航", "路線", "怎麼去", "怎麼走", "規劃", "開車", "步行", "騎車"]
     USAGE_TIPS = ["提供起訖兩點經緯度"]
     _COORDINATE_FIELDS = {
         "origin_lat": "起點緯度",

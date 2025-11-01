@@ -30,10 +30,15 @@ class WeatherTool(MCPTool):
     """天氣查詢 MCP 工具"""
 
     NAME = "weather_query"
-    DESCRIPTION = "查詢指定城市的天氣資訊，支援城市名稱或座標查詢"
-    CATEGORY = "天氣"
-    TAGS = ["weather", "climate", "forecast"]
-    USAGE_TIPS = ["直接說「台北天氣」或「東京天氣」"]
+    DESCRIPTION = "查詢指定城市的即時天氣資訊（溫度、濕度、天氣狀況等）"
+    CATEGORY = "生活資訊"
+    TAGS = ["weather", "天氣", "氣象"]
+    KEYWORDS = ["天氣", "氣溫", "下雨", "晴天", "陰天", "weather", "溫度"]
+    USAGE_TIPS = [
+        "提供城市名稱（英文）如 Taipei, Tokyo",
+        "支援經緯度查詢",
+        "可指定語言 (zh_tw, en, zh_cn)"
+    ]
 
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:
