@@ -309,7 +309,10 @@ function renderCardContent(toolName, toolData) {
   }
 
   // 模式 5：地理定位數據（forward_geocode / reverse_geocode）
-  if (toolData.best_match && toolData.best_match.lat && toolData.best_match.lon) {
+  // forward_geocode: 有 best_match.lat/lon
+  // reverse_geocode: 直接有 lat/lon + display_name
+  if ((toolData.best_match && toolData.best_match.lat && toolData.best_match.lon) ||
+      (toolData.lat !== undefined && toolData.lon !== undefined && toolData.display_name)) {
     console.log('✅ 匹配到模式 5: 地理定位數據');
     return renderLocationData(toolData);
   }
