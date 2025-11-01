@@ -52,24 +52,60 @@ class MCPTool(ABC):
     # 工具基本信息
     NAME: str = ""
     DESCRIPTION: str = ""
+    DESCRIPTION_SHORT: str = ""  # 簡短描述（用於 Intent Detection，10-20 tokens）
     CATEGORY: str = "general"
     TAGS: List[str] = []
+    KEYWORDS: List[str] = []  # 用於快速意圖匹配的關鍵字
     USAGE_TIPS: List[str] = []
+    IS_COMPLEX: bool = False  # 標記是否為複雜工具（需要兩階段參數填充）
 
     @classmethod
-    def get_definition(cls) -> Dict[str, Any]:
-        """獲取工具定義"""
+    def get_summary(cls) -> Dict[str, Any]:
+        """獲取工具摘要（用於 Intent Detection，減少 token 消耗）"""
+        # 自動生成簡短描述（截取前 50 字元或使用自訂）
+        short_desc = cls.DESCRIPTION_SHORT or (
+            cls.DESCRIPTION[:47] + "..." if len(cls.DESCRIPTION) > 50 else cls.DESCRIPTION
+        )
+        
+        summary = {
+            "name": cls.NAME,
+            "description": short_desc,
+            "category": cls.CATEGORY,
+            "keywords": cls.KEYWORDS,
+            "is_complex": cls.IS_COMPLEX
+        }
+        
+        # 簡單工具：提供簡化參數列表（只有參數名，不含詳細 schema）
+        if not cls.IS_COMPLEX:
+            try:
+                schema = cls.get_input_schema()
+                summary["params"] = list(schema.get("properties", {}).keys())
+            except:
+                summary["params"] = []
+        
+        return summary
+    
+    @classmethod
+    def get_full_definition(cls) -> Dict[str, Any]:
+        """獲取完整工具定義（用於實際調用，包含完整 schema）"""
         return {
             "name": cls.NAME,
             "description": cls.DESCRIPTION,
             "metadata": {
                 "category": cls.CATEGORY,
                 "tags": cls.TAGS,
+                "keywords": cls.KEYWORDS,
+                "is_complex": cls.IS_COMPLEX,
                 "usage_tips": cls.USAGE_TIPS
             },
             "inputSchema": cls.get_input_schema(),
             "outputSchema": cls.get_output_schema()
         }
+
+    @classmethod
+    def get_definition(cls) -> Dict[str, Any]:
+        """獲取工具定義（向後兼容，使用完整定義）"""
+        return cls.get_full_definition()
 
     @classmethod
     @abstractmethod

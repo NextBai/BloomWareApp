@@ -28,10 +28,15 @@ class ExchangeTool(MCPTool):
     """匯率查詢 MCP 工具"""
 
     NAME = "exchange_query"
-    DESCRIPTION = "查詢匯率資訊，支援即時匯率查詢和貨幣轉換計算"
-    CATEGORY = "匯率"
-    TAGS = ["exchange", "currency", "finance"]
-    USAGE_TIPS = ["直接說「美元匯率」或「美金對台幣」"]
+    DESCRIPTION = "查詢即時匯率（支援主要貨幣兌換）"
+    CATEGORY = "生活資訊"
+    TAGS = ["exchange", "匯率", "貨幣"]
+    KEYWORDS = ["匯率", "美元", "台幣", "exchange", "USD", "TWD", "貨幣", "換算"]
+    USAGE_TIPS = [
+        "提供源貨幣和目標貨幣代碼（如 USD, TWD）",
+        "支援主要國際貨幣",
+        "可查詢即時匯率與歷史趨勢"
+    ]
 
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:

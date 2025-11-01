@@ -21,8 +21,14 @@ class HealthKitTool(MCPTool):
     
     NAME = "healthkit_query"
     DESCRIPTION = "查詢用戶的健康數據，包括心率、步數、血氧、呼吸頻率等（數據由iOS設備自動同步到Firestore）"
-    CATEGORY = "health"
+    CATEGORY = "健康數據"
     TAGS = ["health", "fitness", "database", "firestore"]
+    KEYWORDS = ["健康", "心率", "步數", "血氧", "睡眠", "health", "運動", "卡路里", "呼吸"]
+    USAGE_TIPS = [
+        "可查詢心率、步數、血氧、呼吸頻率、睡眠等",
+        "支援指定查詢天數（1-365天）",
+        "數據由 iOS 設備自動同步"
+    ]
     
     def __init__(self):
         super().__init__()
