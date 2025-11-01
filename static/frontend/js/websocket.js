@@ -107,7 +107,11 @@ class WebSocketManager {
           (_err) => {
             sendSnapshot(undefined, undefined, undefined, heading);
           },
-          { enableHighAccuracy: true, maximumAge: 60000, timeout: 5000 }
+          { 
+            enableHighAccuracy: true,  // 啟用高精度模式（GPS 優先於 WiFi/Cell）
+            maximumAge: 0,             // 不使用快取，強制取得最新位置
+            timeout: 15000             // 延長超時到 15 秒（GPS 冷啟動需要時間）
+          }
         );
       } else {
         sendSnapshot(undefined, undefined, undefined, heading);
