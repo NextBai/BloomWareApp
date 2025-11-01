@@ -6,6 +6,7 @@
 import os
 import json
 import logging
+import re
 import aiohttp
 from typing import Dict, Any
 
@@ -25,6 +26,12 @@ class DirectionsTool(MCPTool):
     CATEGORY = "地理"
     TAGS = ["route", "navigation", "directions"]
     USAGE_TIPS = ["提供起訖兩點經緯度"]
+    _COORDINATE_FIELDS = {
+        "origin_lat": "起點緯度",
+        "origin_lon": "起點經度",
+        "dest_lat": "目的地緯度",
+        "dest_lon": "目的地經度",
+    }
 
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:
@@ -45,6 +52,52 @@ class DirectionsTool(MCPTool):
             "polyline": {"type": "string"}
         })
         return schema
+
+    @classmethod
+    def _parse_coordinate(cls, field: str, value: Any) -> float:
+        """將輸入座標柔性轉為浮點數，必要時嘗試從字串萃取第一個數字。"""
+        if value is None:
+            raise ValidationError(field, f"{cls._COORDINATE_FIELDS[field]}不得為空")
+
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                raise ValidationError(field, f"{cls._COORDINATE_FIELDS[field]}不得為空")
+
+            match = re.search(r"-?\d+(?:\.\d+)?", stripped.replace(",", " "))
+            if match:
+                try:
+                    return float(match.group())
+                except (TypeError, ValueError):
+                    pass
+
+        raise ValidationError(field, f"{cls._COORDINATE_FIELDS[field]}需為有效的數值座標")
+
+    @classmethod
+    def validate_input(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(arguments or {})
+
+        for field in cls._COORDINATE_FIELDS:
+            if field not in normalized:
+                raise ValidationError(field, f"{cls._COORDINATE_FIELDS[field]}缺失，請提供完整座標")
+            normalized[field] = cls._parse_coordinate(field, normalized[field])
+
+        mode = normalized.get("mode")
+        if isinstance(mode, str) and not mode.strip():
+            normalized.pop("mode")
+
+        try:
+            return super().validate_input(normalized)
+        except ValidationError as exc:
+            # 補上更友善的錯誤訊息
+            message = str(exc)
+            for field, description in cls._COORDINATE_FIELDS.items():
+                if field in message:
+                    raise ValidationError(field, f"{description}需為有效的數值座標")
+            raise
 
     @classmethod
     async def execute(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,4 +157,3 @@ class DirectionsTool(MCPTool):
         await set_route_cache(key, payload)
 
         return cls.create_success_response(content=f"距離 {int(distance_m)}m，約 {int(duration_s/60)} 分鐘", data=payload)
-
