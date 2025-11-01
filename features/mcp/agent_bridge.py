@@ -104,7 +104,7 @@ class MCPAgentBridge:
             return arguments
 
         tool_name = (tool_name or "").strip()
-        if tool_name not in {"weather_query"}:
+        if tool_name not in {"weather_query", "reverse_geocode"}:
             return arguments
 
         ctx = await self._fetch_env_context(user_id)
@@ -134,6 +134,17 @@ class MCPAgentBridge:
             ctx_city = str(ctx.get("city") or "").strip()
             if not city_arg and ctx_city:
                 enriched["city"] = ctx_city
+
+        # 🔥 新增：reverse_geocode 自動注入當前 GPS 座標
+        if tool_name == "reverse_geocode":
+            if enriched.get("lat") is None:
+                lat = _safe_float(ctx.get("lat"))
+                if lat is not None:
+                    enriched["lat"] = lat
+            if enriched.get("lon") is None:
+                lon = _safe_float(ctx.get("lon"))
+                if lon is not None:
+                    enriched["lon"] = lon
 
         if enriched != arguments:
             logger.info(f"📍 已自動補齊 {tool_name} 參數: {_safe_json(enriched)}")
@@ -462,6 +473,10 @@ class MCPAgentBridge:
   * 今日新聞、科技新聞、台灣新聞都應該調用此工具
 
 - 地點查詢與導航（重要！）：
+  * **當前位置查詢**：
+    - 問「我在哪」「這是哪裡」「現在在哪」「我的位置」→ 使用 reverse_geocode（不需參數，系統自動用 GPS 座標）
+    - ❌ 錯誤：forward_geocode:query=我在哪
+    - ✅ 正確：reverse_geocode
   * **導航需求判斷**：
     - 問「怎麼去 X」「如何去 X」「去 X 怎麼走」「到 X 怎麼走」→ 使用 forward_geocode 查詢目的地座標
     - 問「從 A 到 B 要多久」「A 到 B 怎麼走」→ 同時使用 forward_geocode 查詢起點與終點
@@ -472,6 +487,7 @@ class MCPAgentBridge:
     1. 先使用 forward_geocode 將地點名稱轉換為座標
     2. 再使用 directions 規劃路線（系統會自動處理）
   * **範例**：
+    - 「我在哪」→ reverse_geocode（系統自動補 lat/lon）
     - 「怎麼去桃園火車站」→ forward_geocode:query=桃園火車站
     - 「從銘傳大學到桃園火車站」→ forward_geocode:query=銘傳大學桃園校區
     - 「台北車站到淡水捷運站」→ forward_geocode:query=台北車站
@@ -491,6 +507,8 @@ class MCPAgentBridge:
 - emotion: 用戶情緒標籤（必填）
 
 示例：
+- "我在哪" → {{"is_tool_call": true, "tool_name": "reverse_geocode", "emotion": "neutral"}}
+- "這是哪裡" → {{"is_tool_call": true, "tool_name": "reverse_geocode", "emotion": "neutral"}}
 - "台北天氣" → {{"is_tool_call": true, "tool_name": "weather_query:city=Taipei", "emotion": "neutral"}}
 - "好開心！今天天氣好嗎" → {{"is_tool_call": true, "tool_name": "weather_query:city=Taipei", "emotion": "happy"}}
 - "美元匯率" → {{"is_tool_call": true, "tool_name": "exchange_query:from_currency=USD,to_currency=TWD,amount=1.0", "emotion": "neutral"}}
