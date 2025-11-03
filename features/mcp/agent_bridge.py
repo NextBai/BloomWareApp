@@ -6,13 +6,15 @@ MCP + Agent 橋接層
 import json
 import logging
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable, Awaitable
 from datetime import datetime
 from .server import FeaturesMCPServer
 import services.ai_service as ai_service
 from services.ai_service import StrictResponseError
 from core.reasoning_strategy import get_optimal_reasoning_effort
 from core.database import get_user_env_current
+from .coordinator import ToolCoordinator
+from .tool_models import ToolMetadata, ToolResult
 
 logger = logging.getLogger("mcp.agent_bridge")
 logger.setLevel(logging.DEBUG)  # 強制設置為 DEBUG 級別
@@ -30,10 +32,13 @@ def _safe_json(data: Any, limit: int = 1200) -> str:
     return text
 
 
+EnvProvider = Callable[[Optional[str]], Awaitable[Dict[str, Any]]]
+
+
 class MCPAgentBridge:
     """MCP + Agent 橋接器，提供與舊 FeatureRouter 相同的介面"""
 
-    def __init__(self):
+    def __init__(self, env_provider: Optional[EnvProvider] = None):
         # 初始化 MCP 服務器
         self.mcp_server = FeaturesMCPServer()
 
@@ -48,8 +53,112 @@ class MCPAgentBridge:
         self._intent_cache: Dict[str, Tuple[bool, Optional[Dict[str, Any]], float]] = {}
         self._intent_cache_ttl = 300.0  # 5分鐘（60s → 300s，提升命中率 40-60%）
 
+        self._env_provider: EnvProvider = env_provider or self._default_env_provider
+        self._tool_coordinator = ToolCoordinator(
+            env_provider=self._delegated_env_provider,
+            tool_lookup=self._lookup_tool_handler,
+            formatter=self._format_with_ai,
+            failure_handlers={
+                'directions': self._directions_failure_fallback,
+            },
+        )
+        self._register_tool_metadata()
+
         logger.info("MCP Agent 橋接層初始化完成")
         logger.info(f"初始可用 MCP 工具數量: {len(self.mcp_server.tools)} (將在異步發現後更新)")
+
+    async def _default_env_provider(self, user_id: Optional[str]) -> Dict[str, Any]:
+        if not user_id:
+            return {}
+        try:
+            env_res = await get_user_env_current(user_id)
+            if env_res.get("success"):
+                return env_res.get("context") or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("讀取使用者 %s 環境資訊失敗: %s", user_id, exc)
+        return {}
+
+    async def _delegated_env_provider(self, user_id: Optional[str]) -> Dict[str, Any]:
+        provider = self._env_provider or self._default_env_provider
+        return await provider(user_id)
+
+    def bind_env_provider(self, provider: EnvProvider) -> None:
+        self._env_provider = provider
+
+    def _lookup_tool_handler(self, tool_name: str):
+        tool = self.mcp_server.tools.get(tool_name)
+        return getattr(tool, "handler", None) if tool else None
+
+    async def _format_with_ai(
+        self,
+        tool_name: str,
+        message: str,
+        payload: Dict[str, Any],
+        original_message: str,
+    ) -> str:
+        return await self._format_tool_response(tool_name, message, original_message)
+
+    def _register_tool_metadata(self) -> None:
+        register = self._tool_coordinator.register
+        register(
+            ToolMetadata(
+                name="weather_query",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
+        register(
+            ToolMetadata(
+                name="reverse_geocode",
+                requires_env={"lat", "lon"},
+            )
+        )
+        register(
+            ToolMetadata(
+                name="exchange_query",
+                enable_reformat=True,
+            )
+        )
+        register(
+            ToolMetadata(
+                name="news_query",
+                enable_reformat=True,
+            )
+        )
+        register(
+            ToolMetadata(
+                name="healthkit_query",
+                enable_reformat=True,
+            )
+        )
+        register(
+            ToolMetadata(
+                name="directions",
+                enable_reformat=True,
+            )
+        )
+        register(
+            ToolMetadata(
+                name="forward_geocode",
+                flow="navigation",
+            )
+        )
+
+    def _directions_failure_fallback(self, arguments: Dict[str, Any], exc: Exception) -> ToolResult:
+        labels = {
+            "origin_label": arguments.get("origin_label") or "起點",
+            "dest_label": arguments.get("dest_label") or "目的地",
+        }
+        fallback = self._build_directions_failure_response(
+            arguments,
+            labels,
+            str(exc),
+        )
+        return ToolResult(
+            name="directions",
+            message=fallback["message"],
+            data=fallback.get("tool_data"),
+        )
 
     async def async_initialize(self):
         """異步初始化，發現所有工具 + 快取預熱"""
@@ -85,142 +194,6 @@ class MCPAgentBridge:
                 return registered_name
 
         return None
-    async def _fetch_env_context(self, user_id: Optional[str]) -> Dict[str, Any]:
-        """讀取使用者最近的環境資訊（Firestore current snapshot）。"""
-        if not user_id:
-            return {}
-        try:
-            env_res = await get_user_env_current(user_id)
-            if env_res.get("success"):
-                ctx = env_res.get("context") or {}
-                return ctx
-        except Exception as e:
-            logger.debug(f"無法取得使用者 {user_id} 環境資訊: {e}")
-        return {}
-
-    async def _enrich_arguments_with_env(self, tool_name: str, arguments: Dict[str, Any], user_id: Optional[str]) -> Dict[str, Any]:
-        """自動將環境資訊補入 MCP 工具參數，讓位置相關功能更聰明。"""
-        if not user_id:
-            return arguments
-
-        tool_name = (tool_name or "").strip()
-        if tool_name not in {"weather_query", "reverse_geocode"}:
-            return arguments
-
-        ctx = await self._fetch_env_context(user_id)
-        if not ctx:
-            return arguments
-
-        enriched = dict(arguments or {})
-
-        def _safe_float(val):
-            try:
-                if val is None:
-                    return None
-                return float(val)
-            except (TypeError, ValueError):
-                return None
-
-        if tool_name == "weather_query":
-            if enriched.get("lat") is None:
-                lat = _safe_float(ctx.get("lat"))
-                if lat is not None:
-                    enriched["lat"] = lat
-            if enriched.get("lon") is None:
-                lon = _safe_float(ctx.get("lon"))
-                if lon is not None:
-                    enriched["lon"] = lon
-            city_arg = str(enriched.get("city") or "").strip()
-            ctx_city = str(ctx.get("city") or "").strip()
-            if not city_arg and ctx_city:
-                enriched["city"] = ctx_city
-
-        # 🔥 新增：reverse_geocode 自動注入當前 GPS 座標
-        if tool_name == "reverse_geocode":
-            if enriched.get("lat") is None:
-                lat = _safe_float(ctx.get("lat"))
-                if lat is not None:
-                    enriched["lat"] = lat
-            if enriched.get("lon") is None:
-                lon = _safe_float(ctx.get("lon"))
-                if lon is not None:
-                    enriched["lon"] = lon
-
-        if enriched != arguments:
-            logger.info(f"📍 已自動補齊 {tool_name} 參數: {_safe_json(enriched)}")
-
-        return enriched
-
-    async def _resolve_coordinate_label(self, lat: Any, lon: Any) -> Optional[str]:
-        """透過 reverse_geocode 將座標轉換為可朗讀的地點名稱。"""
-        try:
-            lat_f = float(lat)
-            lon_f = float(lon)
-        except (TypeError, ValueError):
-            return None
-
-        reverse_tool = self.mcp_server.tools.get("reverse_geocode")
-        if not reverse_tool or not reverse_tool.handler:
-            return None
-
-        try:
-            res = await reverse_tool.handler({"lat": lat_f, "lon": lon_f})
-        except Exception as ge:
-            logger.debug(f"reverse_geocode 失敗: {ge}")
-            return None
-
-        if not isinstance(res, dict):
-            return None
-        if not res.get("success"):
-            return None
-
-        payload = res.get("data") or res
-        label = (
-            payload.get("label")
-            or payload.get("display_name")
-            or ", ".join(
-                part for part in [payload.get("city"), payload.get("admin")] if part
-            )
-        )
-        return label.strip() if label else None
-
-    async def _prepare_route_arguments(self, arguments: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
-        """為 directions 工具補齊可讀地點名稱並正規化座標。"""
-        prepared = dict(arguments or {})
-        labels: Dict[str, str] = {}
-
-        def _normalize_coord(value: Any) -> Optional[float]:
-            try:
-                if value is None:
-                    return None
-                return float(value)
-            except (TypeError, ValueError):
-                return None
-
-        for prefix, default_label in (("origin", "起點"), ("dest", "目的地")):
-            lat_key = f"{prefix}_lat"
-            lon_key = f"{prefix}_lon"
-            label_key = f"{prefix}_label"
-
-            lat_val = _normalize_coord(prepared.get(lat_key))
-            lon_val = _normalize_coord(prepared.get(lon_key))
-            if lat_val is not None:
-                prepared[lat_key] = lat_val
-            if lon_val is not None:
-                prepared[lon_key] = lon_val
-
-            label_val = str(prepared.get(label_key) or "").strip()
-            if not label_val and lat_val is not None and lon_val is not None:
-                label_val = await self._resolve_coordinate_label(lat_val, lon_val) or ""
-
-            if not label_val:
-                label_val = default_label
-
-            prepared[label_key] = label_val
-            labels[label_key] = label_val
-
-        return prepared, labels
-
     @staticmethod
     def _format_distance(distance_m: Optional[float]) -> str:
         """將距離換算為人類可讀格式。"""
@@ -781,17 +754,10 @@ class MCPAgentBridge:
         result.append("\n【工具選擇指引】")
         result.append("1. 導航問題（「怎麼去」「路線」「導航」） → directions")
         result.append("2. 地點查詢（「XXX在哪」「地址」） → forward_geocode")
-        result.append("3. 公共運輸查詢 → 根據運具類型選擇對應工具")
-        result.append("   - 公車 → tdx_bus_arrival")
-        result.append("   - 捷運 → tdx_metro")
-        result.append("   - 台鐵 → tdx_train")
-        result.append("   - 高鐵 → tdx_thsr")
-        result.append("   - YouBike → tdx_youbike")
-        result.append("   - 停車場/充電站 → tdx_parking")
-        result.append("4. 所有 tdx 工具都會自動感知用戶位置，無需手動提供座標")
-        result.append("5. 健康數據查詢 → healthkit_query（心率、步數、血氧等）")
-        result.append("6. 生活資訊 → weather_query（天氣）、news_query（新聞）、exchange_query（匯率）")
-        result.append("7. 標記 [複雜] 的工具只需返回工具名稱，參數稍後填充")
+        result.append("3. 公共運輸查詢 → TDX 相關工具暫時停用（待取得替代 API）")
+        result.append("4. 健康數據查詢 → healthkit_query（心率、步數、血氧等）")
+        result.append("5. 生活資訊 → weather_query（天氣）、news_query（新聞）、exchange_query（匯率）")
+        result.append("6. 標記 [複雜] 的工具只需返回工具名稱，參數稍後填充")
         
         logger.debug(f"工具描述已生成，總長度: {len(''.join(result))} 字元")
         return "\n".join(result)
@@ -871,246 +837,32 @@ class MCPAgentBridge:
             tool_name = intent_data.get("tool_name")
             arguments = intent_data.get("arguments", {})
 
-            # 補齊健康工具必要參數
-            if tool_name == "healthkit_query":
-                if (not arguments.get("user_id")) and user_id:
-                    arguments = {**arguments, "user_id": user_id}
-                    logger.info("自動補齊 healthkit_query user_id")
-                if "metric_type" not in arguments or not arguments["metric_type"]:
-                    arguments = {**arguments, "metric_type": "all"}
+            try:
+                result = await self._tool_coordinator.invoke(
+                    tool_name,
+                    arguments or {},
+                    user_id=user_id,
+                    original_message=original_message,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("工具 %s 執行失敗: %s", tool_name, exc)
+                return self._generate_tool_error_message(tool_name, exc, original_message)
 
-            return await self._call_mcp_tool(tool_name, arguments, user_id, original_message)
+            if isinstance(result, ToolResult):
+                if result.name == 'directions' and isinstance(result.data, dict):
+                    message, sanitized = self._build_directions_message(result.data, {})
+                    result.message = message
+                    result.data = sanitized
+                return result.to_dict()
+            return result
 
         else:
             logger.warning(f"未知意圖類型: {intent_type}")
             return f"抱歉，無法理解您的請求。"
 
     async def _call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any],
-                           user_id: str = None, original_message: str = "") -> str:
-        """
-        調用 MCP 工具（帶智慧重試機制 + 統一格式化 + 智能地點查詢）
-        2025年最佳實踐：指數退避重試 + 錯誤分類 + AI 格式化 + 自動 geocoding
-        """
-        if tool_name not in self.mcp_server.tools:
-            return self._generate_tool_not_found_error(tool_name)
-
-        tool = self.mcp_server.tools[tool_name]
-        if not tool.handler:
-            return f"⚠️ 工具 {tool_name} 尚未實作，請稍後再試"
-
-        # 智能地點查詢：如果是 forward_geocode，且用戶有位置導航需求，自動串接 directions
-        is_navigation_intent = False
-        geocode_result = None
-        
-        if tool_name == "forward_geocode":
-            # 判斷是否為導航意圖（「怎麼去」「如何去」「到 X」）
-            nav_keywords = ["怎麼去", "如何去", "怎麼走", "到哪", "去哪", "要多久", "多遠"]
-            is_navigation_intent = any(keyword in original_message for keyword in nav_keywords)
-            
-            if is_navigation_intent:
-                logger.info(f"🗺️ 檢測到導航意圖，先執行地點查詢: {arguments.get('query')}")
-                
-                # 執行 geocoding
-                geocode_tool = self.mcp_server.tools.get("forward_geocode")
-                if geocode_tool and geocode_tool.handler:
-                    try:
-                        geocode_result = await asyncio.wait_for(
-                            geocode_tool.handler(arguments),
-                            timeout=15.0
-                        )
-                        
-                        if geocode_result.get("success"):
-                            best_match = geocode_result.get("data", {}).get("best_match", {})
-                            dest_lat = best_match.get("lat")
-                            dest_lon = best_match.get("lon")
-                            dest_label = best_match.get("label", arguments.get("query"))
-                            
-                            # 取得用戶當前位置
-                            env_ctx = await self._fetch_env_context(user_id)
-                            origin_lat = env_ctx.get("lat")
-                            origin_lon = env_ctx.get("lon")
-                            origin_label = env_ctx.get("label") or env_ctx.get("address_display") or "您的位置"
-                            
-                            if origin_lat and origin_lon and dest_lat and dest_lon:
-                                logger.info(f"🚗 自動串接導航: {origin_label} → {dest_label}")
-                                
-                                # 自動調用 directions
-                                directions_tool = self.mcp_server.tools.get("directions")
-                                if directions_tool and directions_tool.handler:
-                                    directions_args = {
-                                        "origin_lat": float(origin_lat),
-                                        "origin_lon": float(origin_lon),
-                                        "dest_lat": float(dest_lat),
-                                        "dest_lon": float(dest_lon),
-                                        "origin_label": origin_label,
-                                        "dest_label": dest_label,
-                                        "mode": "foot-walking"  # 預設步行
-                                    }
-                                    
-                                    # 遞迴調用 directions（會走下面的正常流程）
-                                    return await self._call_mcp_tool(
-                                        "directions",
-                                        directions_args,
-                                        user_id,
-                                        original_message
-                                    )
-                            else:
-                                logger.warning("⚠️ 無法取得完整位置資訊，返回地點查詢結果")
-                        else:
-                            logger.warning(f"⚠️ 地點查詢失敗: {geocode_result.get('error')}")
-                    except Exception as e:
-                        logger.error(f"❌ 自動地點查詢失敗: {e}", exc_info=True)
-
-        arguments = await self._enrich_arguments_with_env(tool_name, arguments, user_id)
-        route_labels: Dict[str, str] = {}
-        if tool_name == "directions":
-            arguments, route_labels = await self._prepare_route_arguments(arguments)
-
-        logger.info(f"🔧 調用 MCP 工具: {tool_name}")
-        logger.debug("📋 調用參數: %s", _safe_json(arguments))
-
-        # 重試設定
-        max_retries = 3
-        retry_delays = [1, 2, 5]  # 指數退避（秒）
-        
-        for attempt in range(max_retries):
-            try:
-                # 調用工具
-                result = await asyncio.wait_for(
-                    tool.handler(arguments),
-                    timeout=30.0  # 30秒超時
-                )
-                logger.debug("📤 工具回傳: %s", _safe_json(result))
-
-                # 處理結果
-                if isinstance(result, dict):
-                    if result.get("success"):
-                        content = result.get("content", "")
-
-                        # 檢查內容是否有效
-                        if not content or content.strip() == "":
-                            logger.warning(f"⚠️ 工具 {tool_name} 返回空內容")
-                            return f"✓ 工具 {tool_name} 執行成功，但沒有返回內容"
-
-                        # 成功!決策是否需要 AI 二次格式化
-                        logger.info(f"✅ 工具 {tool_name} 執行成功")
-
-                        # 保留原始數據供前端使用
-                        # 排除標準回應欄位，保留業務資料（如 rate, health_data, raw_data 等）
-                        excluded_keys = {'success', 'content', 'error', 'error_code', 'metadata'}
-                        tool_data = {k: v for k, v in result.items() if k not in excluded_keys}
-
-                        # 如果沒有業務資料，fallback 到 data 或 raw_data
-                        if not tool_data:
-                            tool_data = result.get("data") or result.get("raw_data")
-
-                        logger.debug(f"📊 提取的 tool_data: {type(tool_data)} = {tool_data if tool_data is None or isinstance(tool_data, (str, int, bool)) else '<dict/list>'}")
-
-                        if tool_name == "directions":
-                            message, sanitized_tool_data = self._build_directions_message(
-                                tool_data if isinstance(tool_data, dict) else {},
-                                route_labels,
-                            )
-                            content = message
-                            tool_data = sanitized_tool_data
-
-                        if self._should_reformat(tool_name, content):
-                            logger.info(f"🎨 啟用 AI 格式化: {tool_name}")
-                            try:
-                                formatted_content = await self._format_tool_response(
-                                    tool_name, content, original_message
-                                )
-                                # 返回擴充格式（dict），包含工具資訊
-                                result_dict = {
-                                    "message": formatted_content,
-                                    "tool_name": tool_name,
-                                    "tool_data": tool_data
-                                }
-                                logger.debug(f"🔙 返回格式化結果: message=<{len(formatted_content)} chars>, tool_name={tool_name}, tool_data={'None' if tool_data is None else 'present'}")
-                                return result_dict
-                            except Exception as e:
-                                logger.warning(f"⚠️ AI 格式化失敗，返回原始內容: {e}")
-                                # 格式化失敗仍然返回擴充格式
-                                result_dict = {
-                                    "message": content,
-                                    "tool_name": tool_name,
-                                    "tool_data": tool_data
-                                }
-                                logger.debug(f"🔙 返回原始結果: message=<{len(content)} chars>, tool_name={tool_name}, tool_data={'None' if tool_data is None else 'present'}")
-                                return result_dict
-                        else:
-                            # 直接返回工具自己的格式化結果（擴充格式）
-                            result_dict = {
-                                "message": content,
-                                "tool_name": tool_name,
-                                "tool_data": tool_data
-                            }
-                            logger.debug(f"🔙 返回直接結果: message=<{len(content)} chars>, tool_name={tool_name}, tool_data={'None' if tool_data is None else 'present'}")
-                            return result_dict
-                    
-                    else:
-                        # 失敗：檢查是否值得重試
-                        error = result.get("error", "工具執行失敗")
-                        error_lower = error.lower()
-                        
-                        # 可重試的錯誤類型
-                        retryable_errors = [
-                            "timeout", "網路", "network", "連接", "connection",
-                            "暫時", "temporary", "unavailable", "不可用"
-                        ]
-                        
-                        is_retryable = any(keyword in error_lower for keyword in retryable_errors)
-                        
-                        if is_retryable and attempt < max_retries - 1:
-                            delay = retry_delays[attempt]
-                            logger.warning(f"⚠️ 工具 {tool_name} 執行失敗（可重試）: {error}")
-                            logger.info(f"🔄 等待 {delay} 秒後重試... (嘗試 {attempt + 1}/{max_retries})")
-                            await asyncio.sleep(delay)
-                            continue  # 重試
-                        else:
-                            # 不可重試的錯誤或已達最大重試次數
-                            logger.error(f"❌ 工具 {tool_name} 執行失敗: {error}")
-                            return self._generate_helpful_error(tool_name, error, original_message)
-                
-                else:
-                    # 非標準格式回應
-                    logger.debug("工具回傳非標準格式，直接返回")
-                    return str(result)
-
-            except asyncio.TimeoutError:
-                if attempt < max_retries - 1:
-                    delay = retry_delays[attempt]
-                    logger.warning(f"⏱️ 工具 {tool_name} 超時，{delay} 秒後重試... (嘗試 {attempt + 1}/{max_retries})")
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    logger.error(f"❌ 工具 {tool_name} 多次超時")
-                    return f"⏱️ 操作超時，請稍後再試\n\n建議：\n• 檢查網路連接\n• 稍等片刻後重新嘗試\n• 或試試其他功能"
-
-            except Exception as e:
-                error_msg = str(e)
-                error_lower = error_msg.lower()
-
-                if tool_name == "directions":
-                    logger.error(f"❌ directions 工具失敗，啟用替代回覆: {error_msg}")
-                    fallback_result = self._build_directions_failure_response(arguments, route_labels, error_msg)
-                    return fallback_result
-
-                # 判斷是否值得重試
-                is_retryable = any(keyword in error_lower for keyword in ["timeout", "network", "connection"])
-                
-                if is_retryable and attempt < max_retries - 1:
-                    delay = retry_delays[attempt]
-                    logger.warning(f"⚠️ 工具 {tool_name} 調用異常: {e}，{delay} 秒後重試...")
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    logger.exception(f"❌ 調用 MCP 工具失敗: {e}")
-                    return self._generate_helpful_error(tool_name, error_msg, original_message)
-
-        # 所有重試都失敗
-        logger.error(f"❌ 工具 {tool_name} 在 {max_retries} 次嘗試後仍然失敗")
-        return f"❌ 調用 {tool_name} 失敗\n\n已嘗試 {max_retries} 次，建議：\n• 檢查網路連接\n• 稍後再試\n• 或聯繫管理員"
+                           user_id: str = None, original_message: str = '') -> str:
+        raise RuntimeError('legacy tool invocation path已移除，請改用 ToolCoordinator.invoke')
 
     def _generate_tool_not_found_error(self, tool_name: str) -> str:
         """生成工具不存在的友善錯誤訊息"""
@@ -1142,6 +894,13 @@ class MCPAgentBridge:
         
         error_msg += "\n輸入「/功能」查看完整功能列表"
         return error_msg
+
+    def _generate_tool_error_message(self, tool_name: str, error: Exception, original_message: str) -> str:
+        try:
+            return self._generate_helpful_error(tool_name, str(error), original_message)
+        except Exception as fallback_err:
+            logger.error('生成工具錯誤訊息失敗: %s', fallback_err)
+            return f'抱歉，{tool_name} 執行失敗：{error}'
 
     def _generate_helpful_error(self, tool_name: str, error: str, original_message: str) -> str:
         """生成有幫助的錯誤訊息"""

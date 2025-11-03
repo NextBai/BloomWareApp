@@ -660,6 +660,7 @@ async def generate_response_for_user(
     reasoning_effort: Optional[str] = None,
     user_name: Optional[str] = None,
     emotion_label: Optional[str] = None,
+    env_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     為用戶生成AI回應
@@ -690,6 +691,7 @@ async def generate_response_for_user(
                 reasoning_effort=reasoning_effort,
                 user_name=user_name,
                 emotion_label=emotion_label,
+                env_context=env_context,
             )
         else:
             # 回退到原有的全局歷史管理（用於向後兼容）
@@ -707,6 +709,7 @@ async def generate_response_for_user(
                 reasoning_effort=reasoning_effort,
                 user_name=user_name,
                 emotion_label=emotion_label,
+                env_context=env_context,
             )
 
         logger.error("未提供消息列表或用戶消息")
@@ -734,6 +737,7 @@ async def _generate_response_with_chat_db(
     reasoning_effort: Optional[str] = None,
     user_name: Optional[str] = None,
     emotion_label: Optional[str] = None,
+    env_context: Optional[Dict[str, Any]] = None,
 ):
     """使用DB管理對話歷史的實現"""
     try:
@@ -847,8 +851,8 @@ async def _generate_response_with_chat_db(
                     logger.warning(f"載入記憶失敗: {e}")
 
             # 讀取環境現況（僅組裝，不外呼）
-            ctx: Dict[str, Any] = {}
-            if db_available and user_id:
+            ctx: Dict[str, Any] = dict(env_context or {})
+            if not ctx and db_available and user_id:
                 try:
                     env_res = await get_user_env_current(user_id)
                     if env_res.get("success"):
@@ -917,6 +921,7 @@ async def _generate_response_with_chat_db(
             reasoning_effort=reasoning_effort,
             user_name=user_name,
             emotion_label=emotion_label,
+            env_context=env_context,
         )
 
 
@@ -935,6 +940,7 @@ async def _generate_response_with_global_history(
     reasoning_effort: Optional[str] = None,
     user_name: Optional[str] = None,
     emotion_label: Optional[str] = None,
+    env_context: Optional[Dict[str, Any]] = None,
 ):
     """使用全局歷史的回退實現（向後兼容）"""
     try:
@@ -988,8 +994,8 @@ async def _generate_response_with_global_history(
                 prior_history = prior_history[-history_limit:]
 
             # 讀取環境現況
-            ctx: Dict[str, Any] = {}
-            if db_available and user_id:
+            ctx: Dict[str, Any] = dict(env_context or {})
+            if not ctx and db_available and user_id:
                 try:
                     env_res = await get_user_env_current(user_id)
                     if env_res.get("success"):

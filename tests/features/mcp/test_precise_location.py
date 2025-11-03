@@ -4,6 +4,10 @@
 驗證 reverse_geocode 與 forward_geocode 是否能正確提取門牌、路口資訊
 """
 
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Integration script - skipped in automated suite')
+
 import asyncio
 import logging
 from features.mcp.tools.geocode_tool import ReverseGeocodeTool
