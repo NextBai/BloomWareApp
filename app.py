@@ -934,8 +934,6 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                     except Exception as e:
                         logger.error(f"處理 env_snapshot 失敗: {e}")
                         await websocket.send_json({"type": "env_ack", "success": False, "error": str(e)})
-
-                elif message_type == "chat_focus":
                 elif message_type == "chat_focus":
                     try:
                         cid = message_data.get("chat_id")
