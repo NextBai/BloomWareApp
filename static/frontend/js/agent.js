@@ -1,3 +1,14 @@
+// 全域控制：除非啟用 window.BLOOMWARE_DEBUG，否則靜音 console.log/info/debug
+(function silenceConsoleLogs() {
+  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
+    const noop = () => {};
+    console.log = noop;
+    console.info = noop;
+    console.debug = noop;
+    console.__bloomwareSilenced = true;
+  }
+})();
+
 // ========== Agent 狀態管理（單一狀態機）==========
 // 狀態定義：idle | recording | thinking | speaking | disconnected
 let currentState = 'idle';

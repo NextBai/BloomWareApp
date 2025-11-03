@@ -1,3 +1,14 @@
+// 全域控制：僅保留錯誤/重要訊息的 console 輸出
+(function silenceConsoleLogs() {
+  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
+    const noop = () => {};
+    console.log = noop;
+    console.info = noop;
+    console.debug = noop;
+    console.__bloomwareSilenced = true;
+  }
+})();
+
 /**
  * Bloom Ware WebSocket 通訊管理模組（完整版）
  * 處理 WebSocket 連接、訊息收發、重連機制
@@ -687,6 +698,10 @@ function initializeWebSocket(token) {
           has_tool_data: !!data.tool_data,
           tool_data_keys: data.tool_data ? Object.keys(data.tool_data) : null
         });
+        const inCareMode = Boolean(data.care_mode);
+        if (inCareMode) {
+          console.log('💙 關懷模式啟動：隱藏工具卡片');
+        }
         
         // 同時啟動：文字打字效果 + 語音播放
         setState('speaking', {
@@ -694,12 +709,15 @@ function initializeWebSocket(token) {
           enableTTS: true  // 啟用語音（異步並行）
         });
 
-        // 如果有工具資料，顯示對應卡片
-        if (data.tool_name && data.tool_data) {
+        const shouldShowToolCard = !inCareMode && data.tool_name && data.tool_data;
+        if (shouldShowToolCard) {
           console.log('📊 準備顯示工具卡片:', data.tool_name);
           displayToolCard(data.tool_name, data.tool_data);
         } else {
-          console.log('⚠️ 無工具資料，不顯示卡片');
+          console.log('⚠️ 不顯示工具卡片：', inCareMode ? '關懷模式' : '缺少工具資料');
+          if (typeof clearAllCards === 'function') {
+            clearAllCards();
+          }
         }
 
         // 不自動返回 idle，保持回應顯示

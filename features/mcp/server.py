@@ -8,18 +8,20 @@ import sys
 import asyncio
 import logging
 import time
+import os
 from typing import Dict, Any, List, Optional, Callable, Tuple
 from enum import Enum
 from .types import Tool
 from .auto_registry import MCPAutoRegistry
 
-logger = logging.getLogger("mcp.server")
-
-# 設置日誌級別
+LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
 logging.basicConfig(
-    level=logging.INFO,
+    level=LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger("mcp.server")
+logger.setLevel(LOG_LEVEL)
 
 
 class JSONRPCError(Exception):

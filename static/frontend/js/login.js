@@ -1,3 +1,14 @@
+// 全域控制：預設靜音 console.log/info/debug，僅保留錯誤與重要訊息
+(function silenceConsoleLogs() {
+  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
+    const noop = () => {};
+    console.log = noop;
+    console.info = noop;
+    console.debug = noop;
+    console.__bloomwareSilenced = true;
+  }
+})();
+
 // ========== Google OAuth PKCE 登入流程 ==========
 
 /**
