@@ -12,8 +12,11 @@ import asyncio
 import hashlib
 
 # 設置日誌
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
+logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("Firestore")
+logger.setLevel(LOG_LEVEL)
 
 # 載入環境變數
 load_dotenv()

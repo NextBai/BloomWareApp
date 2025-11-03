@@ -1,3 +1,14 @@
+// 全域控制：未開啟 window.BLOOMWARE_DEBUG 時靜音一般 console 輸出
+(function silenceConsoleLogs() {
+  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
+    const noop = () => {};
+    console.log = noop;
+    console.info = noop;
+    console.debug = noop;
+    console.__bloomwareSilenced = true;
+  }
+})();
+
 // ========== Canvas 波形渲染（效能優化版 + 真實音訊整合）==========
 
 const canvas = document.getElementById('waveform-canvas');

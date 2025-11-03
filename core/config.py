@@ -184,5 +184,5 @@ if __name__ != "__main__":
         logger.warning("⚠️ 配置驗證失敗，部分功能可能無法正常運作")
 
     # 開發環境下列印配置摘要
-    if not settings.IS_PRODUCTION:
+    if not settings.IS_PRODUCTION and os.getenv("BLOOMWARE_SHOW_CONFIG", "false").lower() == "true":
         settings.print_summary()

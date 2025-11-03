@@ -9,18 +9,22 @@ import json
 from typing import Dict, List, Any, Optional
 
 # 設置日誌
+# 設定日誌等級：預設 WARNING，可透過 BLOOMWARE_LOG_LEVEL 覆寫
+LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
 logging.basicConfig(
-    level=logging.INFO,
+    level=LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("AI_Service")
-# 將終端日誌級別設置為ERROR
+# 將終端日誌級別設置為 ERROR（保留重要訊息）
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.ERROR)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 logger.propagate = False  # 防止日誌重複輸出
+logger.setLevel(LOG_LEVEL)
 
 # 載入環境變數
 load_dotenv()
@@ -32,23 +36,24 @@ from core.config import settings
 OPENAI_TIMEOUT = settings.OPENAI_TIMEOUT  # 關懷模式 reasoning model 需要更長時間
 
 # 情緒關懷模式 System Prompt（新增）
-CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 的情緒關懷助手 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。你不是 GPT，也不要自稱 GPT。你是富有同理心的 AI 助手，用戶情緒不佳需要支持。
+CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」，由銘傳大學人工智慧應用學系槓上開發團隊打造。你不是 GPT，也不要自稱 GPT；你的任務是在情緒低落時傾聽、陪伴。
 
-**極簡短回應規則（必須嚴格遵守）**：
-- 最多 1-2 句話（總共不超過 30 字）
-- 語氣溫和、關懷
-- 使用「我聽到了」、「我理解」、「我在這裡陪你」等同理語句
-- 允許用戶表達負面情緒
+【回應原則】
+1. 第一句必須貼近用戶訊息中的核心事件或感受，必要時引用對方用詞，讓對方感受到被理解。
+2. 第二句提供溫柔的陪伴或追問，邀請對方分享需要或下一步；若用戶提出明確請求（如想聽笑話），可在保持關懷語氣下予以回應或確認。
+3. 句式要自然口語並隨內容調整字詞，避免反覆使用同一套罐頭話術。
 
-**嚴格禁止**：
-- 提供任何建議、練習、資源
-- 超過 2 句話的回應
-- 說教或過度正面的語氣
+【長度限制】
+- 回覆最多 2 句話、總字數不超過 60 字。
 
-**範例**：
-用戶：「我好難過」 → 你：「我聽到了，我在這裡陪你。」
-用戶：「我很生氣」 → 你：「我理解，想聊聊嗎？」
-用戶：「講笑話給我聽」 → 你：「好的，想先讓你開心一點。」"""
+【嚴格禁止】
+- 提供指示性建議、醫療/心理診斷或引導用戶求助的教科書式說法。
+- 連續重複完全相同的句型，例如一再出現「我在這裡陪你」而沒有結合具體情境。
+
+【範例】
+用戶：「我好難過」 → 你：「聽見你說自己好難過，心裡一定很不好受。想聊聊剛剛發生了什麼嗎？」
+用戶：「我很生氣」 → 你：「這件事讓你超級生氣，情緒一定卡著。要不要跟我說說最困擾你的地方？」
+用戶：「講笑話給我聽」 → 你：「你想聽點輕鬆的，我當然可以陪你。想先聽小笑話還是先聊聊怎麼了？」"""
 
 # 導入時間服務模組
 # from features.daily_life.time_service import get_current_time_data, format_time_for_messages  # 已整合到 MCPAgentBridge
@@ -336,6 +341,16 @@ def _compose_messages_with_context(
     sections: List[str] = []
     if base_prompt.strip():
         sections.append(base_prompt.strip())
+
+    if isinstance(current_request, str):
+        raw_request = current_request
+    elif current_request is None:
+        raw_request = ""
+    else:
+        raw_request = json.dumps(current_request, ensure_ascii=False)
+    current_request_text = raw_request.strip()
+    if current_request_text:
+        sections.append(f"【當前請求】\n{current_request_text}")
 
     sections.append(f"【歷史對話摘要】\n{history_text}")
 

@@ -22,9 +22,11 @@ from google.cloud.firestore import FieldFilter
 
 # 本專案整合版：單一 app.py 作為後端入口，前端靜態檔（index.html/app.js/style.css）放在根目錄
 
-# 日誌設定 (生產模式：只記錄 INFO 以上的訊息)
+# 日誌設定 (預設僅顯示 WARNING 以上，如需調整透過 BLOOMWARE_LOG_LEVEL)
+LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
 logging.basicConfig(
-    level=logging.INFO,  # 改為 INFO（不再顯示 DEBUG）
+    level=LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # 輸出到終端
@@ -33,6 +35,7 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(LOG_LEVEL)
 
 # 匯入統一配置管理
 from core.config import settings
@@ -838,6 +841,10 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                             emotion = response.get('emotion')  # 新增：提取情緒
                             care_mode = response.get('care_mode', False)  # 新增：提取關懷模式
 
+                            if care_mode:
+                                tool_name = None
+                                tool_data = None
+
                             # 序列化 tool_data（避免 DatetimeWithNanoseconds 等不可序列化物件）
                             if tool_data is not None:
                                 tool_data = serialize_for_json(tool_data)
@@ -857,7 +864,9 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                 "message": message_text,
                                 "timestamp": time.time(),
                                 "tool_name": tool_name,
-                                "tool_data": tool_data
+                                "tool_data": tool_data,
+                                "care_mode": care_mode,
+                                "emotion": emotion,
                             })
                         else:
                             # 舊格式（純文字）
