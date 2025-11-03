@@ -3,46 +3,19 @@ from pathlib import Path
 import sys
 import types
 
-ROOT_DIR = Path(__file__).resolve().parents[4]
+ROOT_DIR = Path(__file__).resolve().parents[3]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
 from features.mcp.agent_bridge import MCPAgentBridge  # noqa: E402
 from features.mcp.tools.base_tool import ExecutionError  # noqa: E402
-
-
-def test_prepare_route_arguments_injects_labels():
-    bridge = MCPAgentBridge.__new__(MCPAgentBridge)
-
-    async def fake_resolve(_self, _lat, _lon):
-        return "測試地點"
-
-    bridge._resolve_coordinate_label = fake_resolve.__get__(bridge, MCPAgentBridge)  # type: ignore[attr-defined]
-
-    prepared, labels = asyncio.run(
-        bridge._prepare_route_arguments(
-            {
-                "origin_lat": "24.9915",
-                "origin_lon": "121.3423",
-                "dest_lat": "24.9891",
-                "dest_lon": "121.3134",
-                # 未提供 label，應自動補上
-            }
-        )
-    )
-
-    assert prepared["origin_label"] == "測試地點"
-    assert prepared["dest_label"] == "測試地點"
-    assert isinstance(prepared["origin_lat"], float)
-    assert isinstance(prepared["dest_lon"], float)
-    assert labels["origin_label"] == "測試地點"
-    assert labels["dest_label"] == "測試地點"
+from features.mcp.tool_models import ToolMetadata  # noqa: E402
 
 
 def test_build_directions_message_returns_human_friendly_text():
     bridge = MCPAgentBridge.__new__(MCPAgentBridge)
 
-    message, tool_data = bridge._build_directions_message(
+    message, tool_data = bridge._build_directions_message(  # type: ignore[attr-defined]
         {"distance_m": 1450.0, "duration_s": 840.0, "polyline": "[]"},
         {"origin_label": "測試起點 A", "dest_label": "測試目的地 B"},
     )
@@ -58,7 +31,7 @@ def test_build_directions_message_returns_human_friendly_text():
 def test_build_directions_failure_response_generates_fallback_message():
     bridge = MCPAgentBridge.__new__(MCPAgentBridge)
 
-    result = bridge._build_directions_failure_response(
+    result = bridge._build_directions_failure_response(  # type: ignore[attr-defined]
         {
             "origin_lat": 25.045,
             "origin_lon": 121.516,
@@ -79,42 +52,76 @@ def test_build_directions_failure_response_generates_fallback_message():
     assert "地圖" in message
 
 
-def test_call_mcp_tool_returns_fallback_when_directions_fails():
-    bridge = MCPAgentBridge.__new__(MCPAgentBridge)
+def test_tool_coordinator_navigation_flow_uses_env_context():
+    async def _run():
+        async def env_provider(user_id):
+            return {"lat": 25.0, "lon": 121.5, "label": "目前位置"}
 
-    async def fake_enrich(tool_name, arguments, user_id):
-        return arguments
+        bridge = MCPAgentBridge(env_provider=env_provider)
+        bridge._tool_coordinator.register(ToolMetadata(name='directions', enable_reformat=False))  # type: ignore[attr-defined]
 
-    async def fake_handler(_arguments):
-        raise ExecutionError("OpenRouteService 無法提供路線")
+        async def forward_handler(arguments):
+            return {
+                "success": True,
+                "content": "定位完成",
+                "data": {"best_match": {"lat": 24.9, "lon": 121.3, "label": arguments.get("query")}},
+            }
 
-    async def fake_resolve(_self, _lat, _lon):
-        return "測試地點"
+        async def directions_handler(arguments):
+            assert arguments["origin_label"] == "目前位置"
+            assert arguments["dest_label"] == "桃園火車站"
+            return {"success": True, "content": "沿著高速公路前進", "distance_m": 1000.0}
 
-    bridge._enrich_arguments_with_env = fake_enrich  # type: ignore[attr-defined]
-    bridge._resolve_coordinate_label = fake_resolve.__get__(bridge, MCPAgentBridge)  # type: ignore[attr-defined]
-
-    bridge.mcp_server = types.SimpleNamespace(
-        tools={
-            "directions": types.SimpleNamespace(
-                handler=fake_handler,
-                description="Route",
-                metadata={"category": "地理"},
-                inputSchema={"properties": {}, "required": []},
-            )
+        bridge.mcp_server.tools = {
+            "forward_geocode": types.SimpleNamespace(handler=forward_handler),
+            "directions": types.SimpleNamespace(handler=directions_handler),
         }
-    )
 
-    result = asyncio.run(
-        bridge._call_mcp_tool(
-            "directions",
-            {"origin_lat": 25.045, "origin_lon": 121.516, "dest_lat": 24.993, "dest_lon": 121.324},
-            user_id="u123",
-            original_message="測試路線",
-        )
-    )
+        intent = {
+            "type": "mcp_tool",
+            "tool_name": "forward_geocode",
+            "arguments": {"query": "桃園火車站"},
+        }
 
-    assert isinstance(result, dict)
-    assert result["tool_name"] == "directions"
-    assert result["tool_data"]["fallback"] is True
-    assert "目前無法向路線服務取得詳細路線" in result["message"]
+        result = await bridge.process_intent(intent, user_id="u1", original_message="怎麼去桃園火車站")
+        assert result["tool_name"] == "directions"
+        assert '距離約' in result['message']
+
+    asyncio.run(_run())
+
+
+def test_directions_failure_produces_fallback_tool_result():
+    async def _run():
+        async def env_provider(user_id):
+            return {"lat": 25.0, "lon": 121.5, "label": "目前位置"}
+
+        bridge = MCPAgentBridge(env_provider=env_provider)
+        bridge._tool_coordinator.register(ToolMetadata(name='directions', enable_reformat=False))  # type: ignore[attr-defined]
+
+        async def forward_handler(arguments):
+            return {
+                "success": True,
+                "content": "定位完成",
+                "data": {"best_match": {"lat": 24.9, "lon": 121.3, "label": arguments.get("query")}},
+            }
+
+        async def directions_handler(arguments):
+            raise ExecutionError("OpenRouteService 無法提供路線")
+
+        bridge.mcp_server.tools = {
+            "forward_geocode": types.SimpleNamespace(handler=forward_handler),
+            "directions": types.SimpleNamespace(handler=directions_handler),
+        }
+
+        intent = {
+            "type": "mcp_tool",
+            "tool_name": "forward_geocode",
+            "arguments": {"query": "桃園火車站"},
+        }
+
+        result = await bridge.process_intent(intent, user_id="u1", original_message="怎麼去桃園火車站")
+        assert isinstance(result, dict)
+        assert result["tool_name"] == "directions"
+        assert result['tool_data']['fallback'] is True
+
+    asyncio.run(_run())

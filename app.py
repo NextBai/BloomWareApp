@@ -66,6 +66,7 @@ from core.pipeline import ChatPipeline, PipelineResult
 from core.memory_system import memory_manager
 # 環境 Context 寫入 API
 from core.database import set_user_env_current, add_user_env_snapshot
+from core.environment import EnvironmentContextService
 
 
 # -----------------------------
@@ -241,7 +242,20 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("✅ Firestore 已成功連接並可用")
 
+        app.state.env_service = EnvironmentContextService(
+            min_distance_m=settings.ENV_CONTEXT_DISTANCE_THRESHOLD,
+            min_heading_deg=settings.ENV_CONTEXT_HEADING_THRESHOLD,
+            ttl_seconds=settings.ENV_CONTEXT_TTL_SECONDS,
+            env_fetcher=get_user_env_current,
+            env_writer=set_user_env_current,
+            snapshot_writer=add_user_env_snapshot,
+        )
+        await app.state.env_service.start()
+
         app.state.feature_router = MCPAgentBridge()
+        app.state.feature_router.bind_env_provider(
+            lambda user_id: app.state.env_service.get_context(user_id, allow_stale=True)
+        )
         
         # 異步初始化 MCP 橋接層（發現所有工具）
         if hasattr(app.state.feature_router, 'async_initialize'):
@@ -295,6 +309,13 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        env_service = getattr(app.state, "env_service", None)
+        if env_service:
+            try:
+                await env_service.shutdown()
+            except Exception as shutdown_err:
+                logger.warning(f"環境服務關閉失敗: {shutdown_err}")
+
         # Shutdown cleanup
         if getattr(app.state, "enable_background_jobs", False):
             try:
@@ -491,32 +512,6 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-
-
-# 地理工具函式（內部使用）
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    from math import radians, sin, cos, asin, sqrt
-    if None in (lat1, lon1, lat2, lon2):
-        return 0.0
-    R = 6371000.0
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    return R * c
-
-
-def _heading_to_cardinal(deg: float) -> str:
-    try:
-        val = float(deg)
-    except Exception:
-        return ""
-    dirs = [
-        "N","NNE","NE","ENE","E","ESE","SE","SSE",
-        "S","SSW","SW","WSW","W","WNW","NW","NNW"
-    ]
-    ix = int((val % 360) / 22.5 + 0.5) % 16
-    return dirs[ix]
 
 
 # -----------------------------
@@ -886,155 +881,61 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
 
                 elif message_type == "env_snapshot":
                     try:
-                        lat = float(message_data.get("lat")) if message_data.get("lat") is not None else None
-                        lon = float(message_data.get("lon")) if message_data.get("lon") is not None else None
-                        acc = message_data.get("accuracy_m")
-                        acc = float(acc) if acc is not None else None
-                        heading_deg = message_data.get("heading_deg")
-                        heading_deg = float(heading_deg) if heading_deg is not None else None
-                        tz = message_data.get("tz")
-                        locale = message_data.get("locale")
-                        device = message_data.get("device")
+                        env_service: EnvironmentContextService = app.state.env_service
 
-                        # 後端節流：距離<100m且方位差<25度則忽略
-                        do_write_snapshot = False
-                        last = manager.last_env.get(user_id)
-                        if last and lat is not None and lon is not None and last.get("lat") is not None:
-                            dist = _haversine_m(last.get("lat", 0), last.get("lon", 0), lat, lon)
-                            deg_diff = abs((heading_deg or 0) - (last.get("heading_deg") or 0))
-                            if dist >= 100 or deg_diff >= 25:
-                                do_write_snapshot = True
-                        else:
-                            do_write_snapshot = True
-
-                        from geohash2 import encode as gh_encode
-                        geohash7 = gh_encode(lat, lon, precision=7) if (lat is not None and lon is not None) else None
-                        heading_cardinal = _heading_to_cardinal(heading_deg) if heading_deg is not None else None
-                        city = message_data.get("city")
-                        admin = message_data.get("admin")
-                        country_code = message_data.get("country_code")
-                        address_display = message_data.get("address_display")
-                        # 若前端未提供城市資訊，嘗試透過 MCP reverse_geocode 取得
-                        if (not city) and lat is not None and lon is not None:
+                        async def _reverse_geocode(lat: float, lon: float):
+                            feature_router: MCPAgentBridge = app.state.feature_router
+                            tool = feature_router.mcp_server.tools.get("reverse_geocode")
+                            if not tool or not tool.handler:
+                                return None
                             try:
-                                feature_router: MCPAgentBridge = app.state.feature_router
-                                reverse_tool = feature_router.mcp_server.tools.get("reverse_geocode")
-                                if reverse_tool and reverse_tool.handler:
-                                    geo_res = await reverse_tool.handler({"lat": lat, "lon": lon})
-                                    if isinstance(geo_res, dict) and geo_res.get("success"):
-                                        payload = geo_res.get("data") or geo_res
-                                        # 取得所有詳細欄位
-                                        city = payload.get("city") or city
-                                        admin = payload.get("admin") or admin
-                                        country_code = payload.get("country_code") or country_code
-                                        address_display = payload.get("label") or payload.get("display_name") or address_display
-                                        
-                                        # 新增：精確地址資訊
-                                        detailed_address = payload.get("detailed_address")
-                                        label = payload.get("label")
-                                        road = payload.get("road")
-                                        house_number = payload.get("house_number")
-                                        suburb = payload.get("suburb")
-                                        city_district = payload.get("city_district")
-                                        postcode = payload.get("postcode")
-                                        amenity = payload.get("amenity")
-                                        shop = payload.get("shop")
-                                        building = payload.get("building")
-                                        office = payload.get("office")
-                                        leisure = payload.get("leisure")
-                                        tourism = payload.get("tourism")
-                                        name = payload.get("name")
-                            except Exception as ge:
-                                logger.debug(f"反地理查詢失敗: {ge}")
-                                # 如果 reverse_geocode 失敗，保持原有變數為 None
-                                detailed_address = None
-                                label = None
-                                road = None
-                                house_number = None
-                                suburb = None
-                                city_district = None
-                                postcode = None
-                                amenity = None
-                                shop = None
-                                building = None
-                                office = None
-                                leisure = None
-                                tourism = None
-                                name = None
-                        else:
-                            # 如果沒有執行 reverse_geocode，初始化為 None
-                            detailed_address = None
-                            label = None
-                            road = None
-                            house_number = None
-                            suburb = None
-                            city_district = None
-                            postcode = None
-                            amenity = None
-                            shop = None
-                            building = None
-                            office = None
-                            leisure = None
-                            tourism = None
-                            name = None
+                                result = await tool.handler({"lat": lat, "lon": lon})
+                            except Exception as geo_exc:
+                                logger.debug(f"反地理查詢失敗: {geo_exc}")
+                                return None
+                            if not isinstance(result, dict) or not result.get("success"):
+                                return None
+                            payload = result.get("data") or result
+                            enriched = {
+                                "city": payload.get("city"),
+                                "admin": payload.get("admin"),
+                                "country_code": payload.get("country_code"),
+                                "address_display": payload.get("label") or payload.get("display_name"),
+                                "detailed_address": payload.get("detailed_address"),
+                                "label": payload.get("label"),
+                                "road": payload.get("road"),
+                                "house_number": payload.get("house_number"),
+                                "suburb": payload.get("suburb"),
+                                "city_district": payload.get("city_district"),
+                                "postcode": payload.get("postcode"),
+                                "amenity": payload.get("amenity"),
+                                "shop": payload.get("shop"),
+                                "building": payload.get("building"),
+                                "office": payload.get("office"),
+                                "leisure": payload.get("leisure"),
+                                "tourism": payload.get("tourism"),
+                                "name": payload.get("name"),
+                            }
+                            return {k: v for k, v in enriched.items() if v is not None}
 
-                        env_payload = {
-                            "lat": lat,
-                            "lon": lon,
-                            "accuracy_m": acc,
-                            "heading_deg": heading_deg,
-                            "heading_cardinal": heading_cardinal,
-                            "tz": tz,
-                            "locale": locale,
-                            "device": device,
-                            "geohash_7": geohash7,
-                            "city": city,
-                            "admin": admin,
-                            "country_code": country_code,
-                            "address_display": address_display,
-                            # 新增：精確地址欄位
-                            "detailed_address": detailed_address,
-                            "label": label,
-                            "road": road,
-                            "house_number": house_number,
-                            "suburb": suburb,
-                            "city_district": city_district,
-                            "postcode": postcode,
-                            "amenity": amenity,
-                            "shop": shop,
-                            "building": building,
-                            "office": office,
-                            "leisure": leisure,
-                            "tourism": tourism,
-                            "name": name,
-                        }
-
-                        # 更新會話暫存
-                        manager.last_env[user_id] = env_payload
-                        info = manager.get_client_info(user_id) or {}
-                        info["env_context"] = env_payload
-                        manager.set_client_info(user_id, info)
-
-                        try:
-                            await set_user_env_current(user_id, env_payload)
-                        except Exception as e:
-                            logger.warning(f"寫入環境現況失敗: {e}")
-
-                        if do_write_snapshot:
-                            try:
-                                snap = env_payload.copy()
-                                snap["reason"] = "threshold"
-                                await add_user_env_snapshot(user_id, snap)
-                            except Exception as e:
-                                logger.warning(f"寫入環境快照失敗: {e}")
-
-                        await websocket.send_json(
-                            {"type": "env_ack", "success": True, "geohash_7": geohash7, "heading_cardinal": heading_cardinal}
+                        geocode_provider = _reverse_geocode if app.state.feature_router else None
+                        ack = await env_service.ingest_snapshot(
+                            user_id,
+                            message_data,
+                            geocode_provider=geocode_provider,
                         )
+                        ctx = await env_service.get_context(user_id, allow_stale=True)
+                        if ctx:
+                            manager.last_env[user_id] = ctx
+                            info = manager.get_client_info(user_id) or {}
+                            info["env_context"] = ctx
+                            manager.set_client_info(user_id, info)
+                        await websocket.send_json({"type": "env_ack", **ack})
                     except Exception as e:
                         logger.error(f"處理 env_snapshot 失敗: {e}")
                         await websocket.send_json({"type": "env_ack", "success": False, "error": str(e)})
 
+                elif message_type == "chat_focus":
                 elif message_type == "chat_focus":
                     try:
                         cid = message_data.get("chat_id")
@@ -1481,6 +1382,14 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         return result
 
     async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None, emotion_label=None):
+        env_context = {}
+        env_service = getattr(app.state, 'env_service', None)
+        if env_service:
+            try:
+                env_context = await env_service.get_context(cid, allow_stale=True)
+            except Exception as env_err:
+                logger.debug(f'讀取環境快取失敗: {env_err}')
+
         # 取得用戶名稱（優先順序：Google 名稱 > 語音 label > "用戶"）
         user_name = "用戶"
         try:
@@ -1502,6 +1411,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
                 care_emotion=care_emotion,
                 user_name=user_name,
                 emotion_label=emotion_label,
+                env_context=env_context,
             )
         else:
             return await ai_service.generate_response_for_user(
@@ -1514,6 +1424,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
                 care_emotion=care_emotion,
                 user_name=user_name,
                 emotion_label=emotion_label,
+                env_context=env_context,
             )
 
     model = settings.OPENAI_MODEL

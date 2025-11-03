@@ -97,6 +97,11 @@ class Settings:
     # ===== 背景任務開關 =====
     ENABLE_BACKGROUND_JOBS: bool = os.getenv("ENABLE_BACKGROUND_JOBS", "true").lower() == "true"
 
+    # ===== 環境感知參數 =====
+    ENV_CONTEXT_DISTANCE_THRESHOLD: float = float(os.getenv("ENV_CONTEXT_DISTANCE_THRESHOLD", "100"))
+    ENV_CONTEXT_HEADING_THRESHOLD: float = float(os.getenv("ENV_CONTEXT_HEADING_THRESHOLD", "25"))
+    ENV_CONTEXT_TTL_SECONDS: float = float(os.getenv("ENV_CONTEXT_TTL_SECONDS", "300"))
+
     @classmethod
     def validate(cls) -> bool:
         """
@@ -160,6 +165,9 @@ class Settings:
         print(f"Weather API Key: {'已設定 ✅' if cls.WEATHER_API_KEY else '未設定 ❌'}")
         print(f"NewsData API Key: {'已設定 ✅' if cls.NEWSDATA_API_KEY else '未設定 ❌'}")
         print(f"Exchange API Key: {'已設定 ✅' if cls.EXCHANGE_API_KEY else '未設定 ❌'}")
+        print(f"環境節流距離: {cls.ENV_CONTEXT_DISTANCE_THRESHOLD} m")
+        print(f"環境節流方位差: {cls.ENV_CONTEXT_HEADING_THRESHOLD}°")
+        print(f"環境快取 TTL: {cls.ENV_CONTEXT_TTL_SECONDS} 秒")
         print("=" * 60 + "\n")
 
 

@@ -4,6 +4,10 @@
 驗證地點查詢與導航是否正常工作
 """
 
+import pytest
+
+pytestmark = pytest.mark.skip(reason='Integration script - skipped in automated suite')
+
 import asyncio
 import logging
 from features.mcp.agent_bridge import MCPAgentBridge

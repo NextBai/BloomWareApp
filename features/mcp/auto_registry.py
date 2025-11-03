@@ -23,6 +23,14 @@ class MCPAutoRegistry:
         self.tools: Dict[str, Tool] = {}
         self.config: Dict[str, Any] = {}
         self.client_manager = MCPClientManager()
+        self._disabled_tools = {
+            "tdx_bus_arrival",
+            "tdx_metro",
+            "tdx_parking",
+            "tdx_thsr",
+            "tdx_train",
+            "tdx_youbike",
+        }
 
         # 載入配置
         self._load_config()
@@ -81,6 +89,10 @@ class MCPAutoRegistry:
                             #     continue
 
                             # 創建標準化工具實例
+                            if definition["name"] in self._disabled_tools:
+                                logger.info(f"跳過已禁用工具: {definition['name']}")
+                                continue
+
                             tool_instance = obj()
                             tool = self._create_tool_from_instance(tool_instance, definition)
                             if tool:
@@ -109,6 +121,9 @@ class MCPAutoRegistry:
 
                 if module_path and class_name:
                     # 從配置指定的模組載入
+                    if tool_name in self._disabled_tools:
+                        logger.info(f"跳過已禁用工具: {tool_name}")
+                        continue
                     tool = self._create_tool_from_config(tool_name, tool_info)
                     if tool:
                         discovered_tools.append(tool)
@@ -131,6 +146,9 @@ class MCPAutoRegistry:
         try:
             # 獲取工具定義
             definition = tool_class.get_definition()
+            if definition["name"] in self._disabled_tools:
+                logger.info(f"跳過已禁用工具: {definition['name']}")
+                return None
 
             # 檢查是否有模組級別的execute函數
             module = inspect.getmodule(tool_class)
