@@ -1331,6 +1331,7 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                                 "message": str(response),
                                                 "timestamp": time.time()
                                             })
+                                    await _process_voice_chat()
 
                         except Exception as e:
                             logger.error(f"語音對話流程失敗: {e}")
