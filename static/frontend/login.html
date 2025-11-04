@@ -222,9 +222,211 @@
     .voice-status.active {
       display: block;
     }
+
+    /* === 頁面過渡動畫 === */
+    @keyframes fadeOut {
+      from {
+        opacity: 1;
+        transform: scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: scale(0.98);
+      }
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: scale(1.02);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    /* 頁面淡出狀態 */
+    body.page-transitioning {
+      animation: fadeOut 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    /* 頁面淡入狀態 */
+    body.page-entering {
+      animation: fadeIn 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+
+    /* 載入覆蓋層 */
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(135deg, #FFF8E7 0%, #F5F1ED 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), 
+                  visibility 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .loading-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* 蓮花載入動畫 */
+    .loading-lotus {
+      width: 80px;
+      height: 80px;
+      position: relative;
+      margin-bottom: 2rem;
+    }
+
+    .lotus-petal {
+      position: absolute;
+      width: 24px;
+      height: 40px;
+      background: linear-gradient(180deg, 
+        rgba(255, 255, 255, 0.95) 0%,
+        rgba(249, 250, 251, 0.9) 100%
+      );
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+      top: 50%;
+      left: 50%;
+      transform-origin: 50% 100%;
+      animation: petalPulse 1.6s ease-in-out infinite;
+    }
+
+    .lotus-petal:nth-child(1) {
+      transform: translate(-50%, -50%) rotate(0deg);
+      animation-delay: 0s;
+    }
+
+    .lotus-petal:nth-child(2) {
+      transform: translate(-50%, -50%) rotate(45deg);
+      animation-delay: 0.2s;
+    }
+
+    .lotus-petal:nth-child(3) {
+      transform: translate(-50%, -50%) rotate(90deg);
+      animation-delay: 0.4s;
+    }
+
+    .lotus-petal:nth-child(4) {
+      transform: translate(-50%, -50%) rotate(135deg);
+      animation-delay: 0.6s;
+    }
+
+    .lotus-petal:nth-child(5) {
+      transform: translate(-50%, -50%) rotate(180deg);
+      animation-delay: 0.8s;
+    }
+
+    .lotus-petal:nth-child(6) {
+      transform: translate(-50%, -50%) rotate(225deg);
+      animation-delay: 1.0s;
+    }
+
+    .lotus-petal:nth-child(7) {
+      transform: translate(-50%, -50%) rotate(270deg);
+      animation-delay: 1.2s;
+    }
+
+    .lotus-petal:nth-child(8) {
+      transform: translate(-50%, -50%) rotate(315deg);
+      animation-delay: 1.4s;
+    }
+
+    /* 花蕊 */
+    .lotus-core {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%,
+        #FEF9E7 0%,
+        #FCD34D 50%,
+        #F59E0B 100%
+      );
+      box-shadow: 
+        0 2px 8px rgba(245, 158, 11, 0.4),
+        inset 0 1px 4px rgba(255, 255, 255, 0.6);
+      animation: coreBreath 1.6s ease-in-out infinite;
+    }
+
+    @keyframes petalPulse {
+      0%, 100% {
+        opacity: 0.7;
+        transform: translate(-50%, -50%) rotate(var(--rotate, 0deg)) translateY(-5px);
+      }
+      50% {
+        opacity: 1;
+        transform: translate(-50%, -50%) rotate(var(--rotate, 0deg)) translateY(-8px);
+      }
+    }
+
+    @keyframes coreBreath {
+      0%, 100% {
+        transform: translate(-50%, -50%) scale(1);
+        box-shadow: 
+          0 2px 8px rgba(245, 158, 11, 0.4),
+          inset 0 1px 4px rgba(255, 255, 255, 0.6);
+      }
+      50% {
+        transform: translate(-50%, -50%) scale(1.1);
+        box-shadow: 
+          0 3px 12px rgba(245, 158, 11, 0.6),
+          inset 0 1px 6px rgba(255, 255, 255, 0.8);
+      }
+    }
+
+    /* 載入文字 */
+    .loading-text {
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 1.5rem;
+      color: #2C2C2C;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.5rem;
+      animation: textFade 1.6s ease-in-out infinite;
+    }
+
+    .loading-subtext {
+      font-size: 0.875rem;
+      color: rgba(0, 0, 0, 0.5);
+      letter-spacing: 0.1em;
+    }
+
+    @keyframes textFade {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
   </style>
 </head>
-<body>
+<body class="page-entering">
+  <!-- 載入覆蓋層 -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-lotus">
+      <div class="lotus-petal" style="--rotate: 0deg;"></div>
+      <div class="lotus-petal" style="--rotate: 45deg;"></div>
+      <div class="lotus-petal" style="--rotate: 90deg;"></div>
+      <div class="lotus-petal" style="--rotate: 135deg;"></div>
+      <div class="lotus-petal" style="--rotate: 180deg;"></div>
+      <div class="lotus-petal" style="--rotate: 225deg;"></div>
+      <div class="lotus-petal" style="--rotate: 270deg;"></div>
+      <div class="lotus-petal" style="--rotate: 315deg;"></div>
+      <div class="lotus-core"></div>
+    </div>
+    <div class="loading-text">Bloom Ware</div>
+    <div class="loading-subtext">正在進入...</div>
+  </div>
+
   <!-- 背景裝飾鬱金香 -->
   <div class="tulip-decoration top-left">
     <svg viewBox="0 0 180 240" fill="none" xmlns="http://www.w3.org/2000/svg" width="80" height="100">

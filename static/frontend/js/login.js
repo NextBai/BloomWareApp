@@ -9,6 +9,27 @@
   }
 })();
 
+/**
+ * 平滑跳轉到聊天室（帶過渡動畫）
+ */
+function smoothTransitionToChatRoom(delay = 800) {
+  console.log('🌸 開始平滑過渡到聊天室...');
+  
+  // 顯示載入覆蓋層
+  const loadingOverlay = document.getElementById('loadingOverlay');
+  if (loadingOverlay) {
+    loadingOverlay.classList.add('active');
+  }
+
+  // 觸發頁面淡出動畫
+  document.body.classList.add('page-transitioning');
+
+  // 延遲跳轉，讓動畫完成
+  setTimeout(() => {
+    window.location.href = '/static/index.html';
+  }, delay);
+}
+
 // ========== Google OAuth PKCE 登入流程 ==========
 
 /**
@@ -168,8 +189,8 @@ async function handleOAuthCallback() {
       console.log('✅ 登入成功！導向聊天室...');
       console.log('🔑 JWT Token 已存儲，長度:', data.access_token.length);
 
-      // 導向聊天室
-      window.location.href = '/static/index.html';
+      // 使用平滑過渡
+      smoothTransitionToChatRoom(600);
     } else {
       throw new Error('Token 交換失敗');
     }
@@ -338,11 +359,20 @@ const iosPermissionManager = new IOSPermissionManager();
 
 // ========== 頁面初始化 ==========
 
+// 頁面載入時的淡入動畫
+window.addEventListener('load', () => {
+  // 移除淡入動畫類別（避免重複觸發）
+  setTimeout(() => {
+    document.body.classList.remove('page-entering');
+  }, 500);
+});
+
 // 檢查是否已登入
 const token = localStorage.getItem('jwt_token');
 if (token && !window.location.search.includes('code=')) {
-  // 已登入，直接導向聊天室
-  window.location.href = '/static/index.html';
+  // 已登入，使用平滑過渡導向聊天室
+  console.log('✅ 已登入，自動跳轉到聊天室');
+  smoothTransitionToChatRoom(400);
 }
 
 // 檢查是否為 OAuth callback
@@ -458,10 +488,8 @@ class VoiceLoginManager {
       try { this.ws && this.ws.readyState === WebSocket.OPEN && this.ws.close(1000, 'voice login done'); } catch(_) {}
       this.cleanup();
 
-      // 快速跳轉到聊天室（縮短等待體感更順）
-      setTimeout(() => {
-        window.location.href = '/static/index.html';
-      }, 800);
+      // 使用平滑過渡到聊天室
+      smoothTransitionToChatRoom(800);
 
     } else {
       console.error('❌ 語音登入失敗:', data.error);
