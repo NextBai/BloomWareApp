@@ -1,13 +1,24 @@
 "use client"
 
-import { useEffect, useRef, useCallback } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { TulipIllustration } from "@/components/tulip-illustration"
-import { Mic } from "lucide-react"
+import { Mic, ExternalLink } from "lucide-react"
 
 export function LoginForm() {
   const popupRef = useRef<Window | null>(null)
   const popupCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const [isInIframe, setIsInIframe] = useState(false)
+
+  // 檢測是否在 iframe 中（HF Space 嵌入模式）
+  useEffect(() => {
+    try {
+      setIsInIframe(window.self !== window.top)
+    } catch {
+      // 跨域 iframe 會拋出錯誤，視為在 iframe 中
+      setIsInIframe(true)
+    }
+  }, [])
 
   // 處理 OAuth callback（來自 popup 的 postMessage 或直接 URL 參數）
   const handleOAuthCallback = useCallback(async (code: string, state: string, codeVerifier: string) => {
@@ -135,7 +146,20 @@ export function LoginForm() {
     };
   }, []);
 
+  // 在新分頁開啟完整應用（用於 iframe 環境）
+  const handleOpenInNewTab = () => {
+    const directUrl = 'https://xiaobai1221-bloom-ware.hf.space/login';
+    window.open(directUrl, '_blank', 'noopener,noreferrer');
+  }
+
   const handleGoogleLogin = async () => {
+    // 如果在 iframe 中，引導用戶在新分頁開啟
+    if (isInIframe) {
+      console.log('📦 檢測到 iframe 環境，引導用戶在新分頁開啟');
+      handleOpenInNewTab();
+      return;
+    }
+
     try {
       console.log('🚀 開始 Google OAuth 登入流程（Popup 模式）...');
 
@@ -212,6 +236,13 @@ export function LoginForm() {
       </div>
 
       <div className="w-full space-y-3 sm:space-y-4">
+        {/* iframe 環境提示 - 簡約風格 */}
+        {isInIframe && (
+          <p className="text-[#8B7355] text-[11px] sm:text-xs text-center tracking-wide opacity-80">
+            點擊下方按鈕在新視窗中開啟
+          </p>
+        )}
+
         {/* Google Login */}
         <Button
           onClick={handleGoogleLogin}
@@ -237,6 +268,7 @@ export function LoginForm() {
             />
           </svg>
           <span className="font-medium">Continue with Google</span>
+          {isInIframe && <ExternalLink className="w-3 h-3 ml-2 opacity-50" />}
         </Button>
 
         {/* Voice Login */}
