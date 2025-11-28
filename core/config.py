@@ -5,6 +5,7 @@ Bloom Ware 統一配置管理中心
 
 import os
 import json
+import base64
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
@@ -22,8 +23,9 @@ class Settings:
     # ===== Firebase 配置 =====
     FIREBASE_PROJECT_ID: str = os.getenv("FIREBASE_PROJECT_ID", "")
 
-    # Firebase 憑證：優先使用環境變數 JSON（生產環境），否則使用檔案路徑（開發環境）
+    # Firebase 憑證：支援三種方式
     _firebase_creds_json: Optional[str] = os.getenv("FIREBASE_CREDENTIALS_JSON")
+    _firebase_creds_base64: Optional[str] = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON_BASE64")
     _firebase_service_account_path: Optional[str] = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
 
     @classmethod
@@ -32,23 +34,34 @@ class Settings:
         取得 Firebase 憑證
 
         優先順序：
-        1. 環境變數 FIREBASE_CREDENTIALS_JSON（生產環境，Render 部署）
-        2. 檔案路徑 FIREBASE_SERVICE_ACCOUNT_PATH（開發環境）
+        1. 環境變數 FIREBASE_CREDENTIALS_JSON（生產環境，JSON 字串）
+        2. 環境變數 FIREBASE_SERVICE_ACCOUNT_JSON_BASE64（base64 編碼的 JSON）
+        3. 檔案路徑 FIREBASE_SERVICE_ACCOUNT_PATH（開發環境）
 
         Returns:
             dict: Firebase Service Account 憑證字典
 
         Raises:
-            ValueError: 當兩種方式都未設定時
+            ValueError: 當所有方式都未設定時
         """
+        # 方式 1: 直接 JSON 字串
         if cls._firebase_creds_json:
-            # 生產環境：從環境變數讀取完整 JSON 字串
             try:
                 return json.loads(cls._firebase_creds_json)
             except json.JSONDecodeError as e:
                 raise ValueError(f"FIREBASE_CREDENTIALS_JSON 格式錯誤: {e}")
+
+        # 方式 2: Base64 編碼的 JSON
+        elif cls._firebase_creds_base64:
+            try:
+                decoded_bytes = base64.b64decode(cls._firebase_creds_base64)
+                decoded_str = decoded_bytes.decode('utf-8')
+                return json.loads(decoded_str)
+            except Exception as e:
+                raise ValueError(f"FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 解碼失敗: {e}")
+
+        # 方式 3: 從檔案讀取
         elif cls._firebase_service_account_path:
-            # 開發環境：從檔案讀取
             try:
                 with open(cls._firebase_service_account_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
@@ -56,12 +69,15 @@ class Settings:
                 raise ValueError(f"Firebase 憑證檔案不存在: {cls._firebase_service_account_path}")
             except json.JSONDecodeError as e:
                 raise ValueError(f"Firebase 憑證檔案格式錯誤: {e}")
+
+        # 三種方式都沒設定
         else:
             raise ValueError(
                 "Firebase 憑證未設定！\n"
                 "請設定以下其中一項：\n"
-                "1. FIREBASE_CREDENTIALS_JSON（生產環境）\n"
-                "2. FIREBASE_SERVICE_ACCOUNT_PATH（開發環境）"
+                "1. FIREBASE_CREDENTIALS_JSON（JSON 字串）\n"
+                "2. FIREBASE_SERVICE_ACCOUNT_JSON_BASE64（base64 編碼）\n"
+                "3. FIREBASE_SERVICE_ACCOUNT_PATH（檔案路徑）"
             )
 
     # ===== OpenAI 配置 =====
@@ -155,7 +171,17 @@ class Settings:
         print(f"環境模式: {cls.ENVIRONMENT}")
         print(f"是否為生產環境: {cls.IS_PRODUCTION}")
         print(f"Firebase 專案 ID: {cls.FIREBASE_PROJECT_ID}")
-        print(f"Firebase 憑證來源: {'環境變數' if cls._firebase_creds_json else '檔案'}")
+
+        # 判斷 Firebase 憑證來源
+        if cls._firebase_creds_json:
+            firebase_source = "環境變數 (JSON)"
+        elif cls._firebase_creds_base64:
+            firebase_source = "環境變數 (Base64)"
+        elif cls._firebase_service_account_path:
+            firebase_source = "檔案"
+        else:
+            firebase_source = "未設定 ❌"
+        print(f"Firebase 憑證來源: {firebase_source}")
         print(f"OpenAI 模型: {cls.OPENAI_MODEL}")
         print(f"OpenAI Timeout: {cls.OPENAI_TIMEOUT}s")
         print(f"Google OAuth 回調 URI: {cls.GOOGLE_REDIRECT_URI}")

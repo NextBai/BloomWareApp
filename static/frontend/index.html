@@ -20,9 +20,12 @@
       color: #1A1A1A;
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
-      /* 修復 2025 新版瀏覽器 viewport 高度問題 */
-      height: 100vh; /* fallback for older browsers */
-      height: 100svh; /* 使用 Small Viewport Height 確保固定高度 */
+      /* 2025 最佳實踐：多層 fallback 確保相容性 */
+      height: 100vh; /* fallback 1: 傳統瀏覽器 */
+      height: 100svh; /* fallback 2: 小視窗高度 */
+      height: 100dvh; /* 主要方案: 動態視窗高度（iframe 最佳） */
+      /* 針對 WebKit 瀏覽器的額外修正 */
+      height: -webkit-fill-available;
     }
 
     /* === 控制面板 === */
@@ -119,10 +122,13 @@
       left: 0;
       right: 0;
       bottom: 0;
+      /* 2025 最佳實踐：漸進式增強 */
       width: 100vw;
-      width: 100svw; /* Small Viewport Width */
-      height: 100vh; /* fallback */
-      height: 100svh; /* Small Viewport Height - 確保在行動裝置上固定可見 */
+      width: 100dvw; /* 動態寬度（iframe 最佳） */
+      height: 100vh; /* fallback 1 */
+      height: 100svh; /* fallback 2 */
+      height: 100dvh; /* 主要方案 */
+      height: -webkit-fill-available; /* WebKit 修正 */
       z-index: 100;
       display: flex;
       flex-direction: column;
@@ -1098,9 +1104,9 @@
     /* ChatWindow 折疊圖標 */
     .chat-icon {
       position: fixed;
-      /* 使用 calc 搭配 svh 確保在所有裝置上都固定在底部 */
-      bottom: max(40px, env(safe-area-inset-bottom, 0px));
-      left: max(40px, env(safe-area-inset-left, 0px));
+      /* iframe 環境適配：使用固定值避免 viewport 計算問題 */
+      bottom: 40px;
+      left: 40px;
       z-index: 101;
       width: 56px;
       height: 56px;
@@ -1126,8 +1132,9 @@
     /* 退出按鈕 */
     .exit-button {
       position: absolute;
-      top: max(40px, env(safe-area-inset-top, 0px));
-      right: max(40px, env(safe-area-inset-right, 0px));
+      /* iframe 環境適配：使用固定值 */
+      top: 40px;
+      right: 40px;
       z-index: 50;
       padding: 12px 20px;
       background: rgba(255, 255, 255, 0.95);
@@ -1153,7 +1160,8 @@
     /* 情緒標籤 */
     .emotion-indicator {
       position: absolute;
-      top: max(40px, env(safe-area-inset-top, 0px));
+      /* iframe 環境適配：使用固定值 */
+      top: 40px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 50;
