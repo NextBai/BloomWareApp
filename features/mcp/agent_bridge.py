@@ -143,6 +143,54 @@ class MCPAgentBridge:
                 flow="navigation",
             )
         )
+        # TDX 公車到站查詢（需要位置資訊）
+        register(
+            ToolMetadata(
+                name="tdx_bus_arrival",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
+        # TDX YouBike 查詢（需要位置資訊）
+        register(
+            ToolMetadata(
+                name="tdx_youbike",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
+        # TDX 捷運查詢（需要位置資訊）
+        register(
+            ToolMetadata(
+                name="tdx_metro",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
+        # TDX 停車場查詢（需要位置資訊）
+        register(
+            ToolMetadata(
+                name="tdx_parking",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
+        # TDX 台鐵查詢（需要位置資訊）
+        register(
+            ToolMetadata(
+                name="tdx_train",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
+        # TDX 高鐵查詢（需要位置資訊）
+        register(
+            ToolMetadata(
+                name="tdx_thsr",
+                requires_env={"lat", "lon", "city"},
+                enable_reformat=True,
+            )
+        )
 
     def _directions_failure_fallback(self, arguments: Dict[str, Any], exc: Exception) -> ToolResult:
         labels = {
@@ -445,6 +493,62 @@ class MCPAgentBridge:
   * 參數：query（關鍵詞）、country（國家，預設 tw）、category（分類，預設 top）、language（語言，預設 zh）
   * 今日新聞、科技新聞、台灣新聞都應該調用此工具
 
+- 公車查詢（重要！）：
+  * 任何提到「公車」「巴士」「幾號公車」「什麼時候來」的請求都使用 tdx_bus_arrival
+  * **參數名稱是 route_name（不是 stop_name）**
+  * 從用戶訊息中提取路線號碼（如「137」「紅30」「307」）
+  * 範例：
+    - 「137公車什麼時候來」→ tdx_bus_arrival:route_name=137
+    - 「307還要多久」→ tdx_bus_arrival:route_name=307
+    - 「附近有什麼公車」→ tdx_bus_arrival（不需參數，系統自動用 GPS 查詢附近站點）
+    - 「紅30公車」→ tdx_bus_arrival:route_name=紅30
+  * ❌ 錯誤：tdx_bus_arrival:stop_name=137
+  * ✅ 正確：tdx_bus_arrival:route_name=137
+
+- 台鐵/火車查詢（重要！）：
+  * 任何提到「火車」「台鐵」「列車」「自強號」「莒光號」「區間車」的請求都使用 tdx_train
+  * **參數名稱是 origin_station（起站）和 destination_station（迄站）**
+  * **「往XX」「到XX」「去XX」表示目的地（destination_station），不是起點！**
+  * **「從XX」「在XX」表示起點（origin_station）**
+  * **如果用戶沒有明確說起點，就不要填 origin_station，讓系統用 GPS 自動找最近車站**
+  * 範例：
+    - 「往台北的火車」→ tdx_train:destination_station=台北（只填目的地，起點由 GPS 決定）
+    - 「到高雄的火車」→ tdx_train:destination_station=高雄（只填目的地）
+    - 「從桃園到台北」→ tdx_train:origin_station=桃園,destination_station=台北（明確說了起點）
+    - 「台北到台中的火車」→ tdx_train:origin_station=台北,destination_station=台中
+    - 「下一班火車」→ tdx_train（不需參數，系統自動用 GPS 查詢最近車站）
+    - 「自強號 123 次」→ tdx_train:train_no=123
+  * ❌ 錯誤：「往台北」解析為 origin_station=台灣,destination_station=台北（不要亂填起點！）
+  * ❌ 錯誤：「往台北」解析為 origin_station=台北（方向搞反了）
+  * ✅ 正確：「往台北」解析為 destination_station=台北（只填目的地）
+
+- YouBike/共享單車查詢（重要！必須識別！）：
+  * 任何提到以下關鍵詞的請求都使用 tdx_youbike：
+    - 「YouBike」「Youbike」「youbike」「YOUBIKE」
+    - 「UBike」「Ubike」「ubike」「UBIKE」
+    - 「微笑單車」「共享單車」「公共單車」
+    - 「腳踏車站」「單車站」「自行車站」
+    - 「借車」「還車」（在單車語境下）
+    - 「最近的站點」「附近站點」（在單車語境下）
+  * **不是 tdx_parking！YouBike 是單車，不是停車場**
+  * **不是一般聊天！這是工具調用！**
+  * 範例：
+    - 「附近的 YouBike」→ tdx_youbike（不需參數，系統自動用 GPS 查詢）
+    - 「離我最近的 Ubike 站點」→ tdx_youbike
+    - 「最近的Ubike站點」→ tdx_youbike
+    - 「Ubike在哪」→ tdx_youbike
+    - 「哪裡有Ubike」→ tdx_youbike
+    - 「市政府 YouBike 還有車嗎」→ tdx_youbike:station_name=市政府
+  * ❌ 錯誤：is_tool_call=false（這不是聊天！）
+  * ❌ 錯誤：tdx_parking:query=Ubike
+  * ✅ 正確：tdx_youbike
+
+- 停車場查詢：
+  * 任何提到「停車場」「停車位」「汽車停車」的請求才使用 tdx_parking
+  * 範例：
+    - 「附近的停車場」→ tdx_parking
+    - 「市政府停車場」→ tdx_parking:parking_name=市政府
+
 - 地點查詢與導航（重要！）：
   * **當前位置查詢**：
     - 問「我在哪」「這是哪裡」「現在在哪」「我的位置」→ 使用 reverse_geocode（不需參數，系統自動用 GPS 座標）
@@ -487,6 +591,10 @@ class MCPAgentBridge:
 - "美元匯率" → {{"is_tool_call": true, "tool_name": "exchange_query:from_currency=USD,to_currency=TWD,amount=1.0", "emotion": "neutral"}}
 - "今日新聞" → {{"is_tool_call": true, "tool_name": "news_query:country=tw,language=zh", "emotion": "neutral"}}
 - "科技新聞" → {{"is_tool_call": true, "tool_name": "news_query:query=科技,category=technology,language=zh", "emotion": "neutral"}}
+- "最近的Ubike站點" → {{"is_tool_call": true, "tool_name": "tdx_youbike", "emotion": "neutral"}}
+- "附近的YouBike" → {{"is_tool_call": true, "tool_name": "tdx_youbike", "emotion": "neutral"}}
+- "Ubike在哪" → {{"is_tool_call": true, "tool_name": "tdx_youbike", "emotion": "neutral"}}
+- "往台北的火車" → {{"is_tool_call": true, "tool_name": "tdx_train:destination_station=台北", "emotion": "neutral"}}
 - "你好" → {{"is_tool_call": false, "tool_name": "", "emotion": "neutral"}}
 - "我好難過..." → {{"is_tool_call": false, "tool_name": "", "emotion": "sad"}}
 - "煩死了" → {{"is_tool_call": false, "tool_name": "", "emotion": "angry"}}"""
@@ -519,7 +627,25 @@ class MCPAgentBridge:
 
             # Structured Outputs 保證返回有效JSON，直接解析
             try:
-                intent_data = json.loads(response.strip())
+                response_text = response.strip()
+                
+                # 處理 GPT 回應重複 JSON 的情況（如 {...}{...}）
+                # 只取第一個完整的 JSON 物件
+                if response_text.startswith("{"):
+                    brace_count = 0
+                    end_idx = 0
+                    for i, char in enumerate(response_text):
+                        if char == "{":
+                            brace_count += 1
+                        elif char == "}":
+                            brace_count -= 1
+                            if brace_count == 0:
+                                end_idx = i + 1
+                                break
+                    if end_idx > 0:
+                        response_text = response_text[:end_idx]
+                
+                intent_data = json.loads(response_text)
                 logger.debug("解析後的意圖資料: %s", _safe_json(intent_data))
 
                 # 新的 schema 格式：is_tool_call, tool_name（包含參數）
@@ -545,6 +671,19 @@ class MCPAgentBridge:
                     # 解析參數
                     arguments = {}
                     if params_str.strip():
+                        # 獲取工具的 input schema 以確定參數類型
+                        tool = self.mcp_server.tools.get(tool_name)
+                        input_schema = {}
+                        if tool and hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
+                            tool_class = tool.handler.__self__
+                            if hasattr(tool_class, 'get_input_schema'):
+                                try:
+                                    input_schema = tool_class.get_input_schema()
+                                except:
+                                    pass
+                        
+                        properties = input_schema.get('properties', {})
+                        
                         for param_pair in params_str.split(","):
                             if "=" not in param_pair:
                                 continue
@@ -556,19 +695,28 @@ class MCPAgentBridge:
                             if not key or not value:
                                 continue
 
-                            # 嘗試類型轉換
+                            # 根據 schema 中的類型定義來轉換值
+                            param_schema = properties.get(key, {})
+                            param_type = param_schema.get('type', 'string')
+                            
                             normalized_value = value
-                            if value.isdigit():
-                                normalized_value = int(value)
-                            else:
+                            
+                            # 根據 schema 類型進行轉換
+                            if param_type == 'integer':
+                                try:
+                                    normalized_value = int(value)
+                                except ValueError:
+                                    normalized_value = value
+                            elif param_type == 'number':
+                                try:
+                                    normalized_value = float(value)
+                                except ValueError:
+                                    normalized_value = value
+                            elif param_type == 'boolean':
                                 lower_value = value.lower()
                                 if lower_value in ("true", "false"):
                                     normalized_value = lower_value == "true"
-                                else:
-                                    try:
-                                        normalized_value = float(value)
-                                    except ValueError:
-                                        normalized_value = value
+                            # 其他類型（包括 string）保持原樣
 
                             arguments[key] = normalized_value
 
@@ -944,7 +1092,11 @@ class MCPAgentBridge:
         """
         # 策略1: 有工具卡片的工具，總是需要 AI 格式化為對話式回覆
         # 因為簡短的結構化文字不適合語音播報和聊天顯示
-        always_format_for_conversation = ['exchange_query', 'weather_query', 'healthkit_query', 'news_query']
+        # 包含 TDX 交通工具，確保返回對話式回覆而非 JSON
+        always_format_for_conversation = [
+            'exchange_query', 'weather_query', 'healthkit_query', 'news_query',
+            'tdx_youbike', 'tdx_train', 'tdx_thsr', 'tdx_bus_arrival', 'tdx_metro', 'tdx_parking'
+        ]
         if tool_name in always_format_for_conversation:
             logger.debug(f"工具 {tool_name} 需要 AI 格式化為對話式回覆")
             return True

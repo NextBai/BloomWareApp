@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ws: wss: https://accounts.google.com; img-src 'self' data: https: blob:; media-src 'self' blob: data:; frame-src https://accounts.google.com; base-uri 'self';">
   <title>Bloom Ware 語音沉浸式 - 光暈花瓣版</title>
+  <link rel="icon" href="/login/icon.svg" type="image/svg+xml">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * {
@@ -15,23 +16,13 @@
 
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: #FFF8E7;
+      background: #F5F1ED;
       color: #1A1A1A;
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
-      /* 頁面載入淡入動畫 */
-      animation: pageEnter 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-    }
-
-    @keyframes pageEnter {
-      from {
-        opacity: 0;
-        transform: scale(1.02);
-      }
-      to {
-        opacity: 1;
-        transform: scale(1);
-      }
+      /* 修復 2025 新版瀏覽器 viewport 高度問題 */
+      height: 100vh; /* fallback for older browsers */
+      height: 100svh; /* 使用 Small Viewport Height 確保固定高度 */
     }
 
     /* === 控制面板 === */
@@ -124,40 +115,48 @@
     /* === 沉浸式覆蓋層 === */
     .voice-immersive-overlay {
       position: fixed;
-      inset: 0;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100vw;
+      width: 100svw; /* Small Viewport Width */
+      height: 100vh; /* fallback */
+      height: 100svh; /* Small Viewport Height - 確保在行動裝置上固定可見 */
       z-index: 100;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       background: #F5F1ED;
-      /* 初始載入動畫 */
-      animation: overlayEnter 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.2s backwards;
-    }
-
-    @keyframes overlayEnter {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
     }
 
     /* === 動態漸變背景（移除光暈，改用極淺色情緒底色）=== */
     .voice-immersive-background {
-      position: absolute;
-      inset: 0;
+      position: fixed; /* 改為 fixed 確保覆蓋整個視窗 */
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      height: 100%;
       opacity: 0;
       transition: opacity 1.2s cubic-bezier(0.4, 0, 0.2, 1);
-      z-index: 0;
+      z-index: -1; /* 改為 -1 確保在最底層 */
+      pointer-events: none; /* 不阻擋其他元素的點擊 */
     }
 
     .voice-immersive-background::before {
       content: '';
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      height: 100%;
       background: var(--emotion-bg);
+      opacity: 0.5; /* 提高透明度，從 0.15 增加到 0.5 */
     }
 
     .voice-immersive-background.active {
@@ -166,58 +165,33 @@
 
     /* 情緒淺色底色變體 */
     .emotion-neutral {
-      --emotion-bg: linear-gradient(180deg, #E0F2FE 0%, #FFF8E7 100%);
+      --emotion-bg: linear-gradient(180deg, #E0F2FE 0%, #F5F1ED 100%);
       --petal-color: #FFFFFF;
     }
 
     .emotion-happy {
-      --emotion-bg: linear-gradient(180deg, #FEF3C7 0%, #FFF8E7 100%);
+      --emotion-bg: linear-gradient(180deg, #FEF3C7 0%, #F5F1ED 100%);
       --petal-color: #FFFFFF;
     }
 
     .emotion-sad {
-      --emotion-bg: linear-gradient(180deg, #E0E7FF 0%, #FFF8E7 100%);
+      --emotion-bg: linear-gradient(180deg, #E0E7FF 0%, #F5F1ED 100%);
       --petal-color: #FFFFFF;
     }
 
     .emotion-angry {
-      --emotion-bg: linear-gradient(180deg, #FEE2E2 0%, #FFF8E7 100%);
+      --emotion-bg: linear-gradient(180deg, #FEE2E2 0%, #F5F1ED 100%);
       --petal-color: #FFFFFF;
     }
 
     .emotion-fear {
-      --emotion-bg: linear-gradient(180deg, #EDE9FE 0%, #FFF8E7 100%);
+      --emotion-bg: linear-gradient(180deg, #EDE9FE 0%, #F5F1ED 100%);
       --petal-color: #FFFFFF;
     }
 
     .emotion-surprise {
-      --emotion-bg: linear-gradient(180deg, #FFEDD5 0%, #FFF8E7 100%);
+      --emotion-bg: linear-gradient(180deg, #FFEDD5 0%, #F5F1ED 100%);
       --petal-color: #FFFFFF;
-    }
-
-    /* 情緒背景透明度（根據情緒強度分別調整）*/
-    .emotion-neutral .voice-immersive-background::before {
-      opacity: 0.2;
-    }
-
-    .emotion-happy .voice-immersive-background::before {
-      opacity: 0.25;
-    }
-
-    .emotion-sad .voice-immersive-background::before {
-      opacity: 0.35;
-    }
-
-    .emotion-angry .voice-immersive-background::before {
-      opacity: 0.4;
-    }
-
-    .emotion-fear .voice-immersive-background::before {
-      opacity: 0.35;
-    }
-
-    .emotion-surprise .voice-immersive-background::before {
-      opacity: 0.25;
     }
 
     /* === 中央容器 === */
@@ -227,22 +201,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: clamp(36px, 6vh, 72px);
-      width: min(88vw, 640px);
-      padding: clamp(12px, 3vh, 28px) 0;
-      /* 元素依序淡入動畫 */
-      animation: containerEnter 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.4s backwards;
-    }
-
-    @keyframes containerEnter {
-      from {
-        opacity: 0;
-        transform: translateY(20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+      gap: 60px;
     }
 
     /* === 波形與麥克風容器 === */
@@ -253,19 +212,6 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      /* 蓮花綻放入場動畫 */
-      animation: lotusBloom 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) 0.6s backwards;
-    }
-
-    @keyframes lotusBloom {
-      from {
-        opacity: 0;
-        transform: scale(0.8) rotate(-10deg);
-      }
-      to {
-        opacity: 1;
-        transform: scale(1) rotate(0deg);
-      }
     }
 
     /* Canvas 波形 */
@@ -410,20 +356,20 @@
       z-index: 10;
     }
 
-    /* 內層花瓣顏色微調（略暗，增加微妙層次感）*/
+    /* 內層花瓣顏色微調（略淡，增加層次感）*/
     .bloom-petal:nth-child(n+9)::before {
-      background:
-        radial-gradient(ellipse 80% 60% at 50% 30%,
-          rgba(255, 255, 255, 0.94) 0%,
-          rgba(254, 254, 254, 0.92) 40%,
-          rgba(248, 249, 250, 0.88) 70%,
-          rgba(241, 243, 245, 0.84) 100%
+      background: 
+        radial-gradient(ellipse 80% 60% at 50% 30%, 
+          rgba(255, 255, 255, 0.96) 0%,
+          rgba(255, 255, 255, 0.94) 40%,
+          rgba(249, 250, 251, 0.88) 70%,
+          rgba(243, 244, 246, 0.82) 100%
         ),
-        linear-gradient(180deg,
-          rgba(255, 255, 255, 0.93) 0%,
-          rgba(253, 253, 253, 0.91) 30%,
-          rgba(247, 248, 249, 0.87) 70%,
-          rgba(240, 242, 244, 0.83) 100%
+        linear-gradient(180deg, 
+          rgba(255, 255, 255, 0.95) 0%, 
+          rgba(254, 254, 254, 0.92) 30%,
+          rgba(249, 250, 251, 0.88) 70%,
+          rgba(243, 244, 246, 0.85) 100%
         );
     }
 
@@ -452,13 +398,9 @@
         inset -3px 4px 10px rgba(0, 0, 0, 0.08),
         inset 3px -4px 12px rgba(255, 255, 255, 0.95),
         inset 0 -2px 6px rgba(0, 0, 0, 0.04);
-  transition: all 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
-  /* 微弱但明顯的邊緣描邊：比原本稍暗，但仍保持細微、不突兀 */
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  /* 極細的內描邊，讓邊界更清晰但不改變花瓣填色 */
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.03);
-  /* 輕微陰影，用於增加邊緣辨識度但避免過暗 */
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.05));
+      transition: all 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+      border: 1px solid rgba(0, 0, 0, 0.06);
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
     }
 
     /* 花瓣中心脈絡（細緻葉脈，非綠莖）*/
@@ -867,43 +809,23 @@
       animation: petalSpeakingInner 3s ease-in-out infinite 0.3s;
     }
 
-    /* 外層花瓣動畫：完全綻放 + 明顯呼吸波動（增強版）*/
+    /* 外層花瓣動畫：完全綻放 + 輕微呼吸（內縮版本）*/
     @keyframes petalSpeakingOuter {
       0%, 100% {
         transform: translate(-50%, -50%) rotateZ(var(--speaking-angle, 0deg)) rotateX(0deg) translateY(-30px) scale(1);
-        opacity: 1;
-      }
-      25% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle, 0deg)) rotateX(-3deg) translateY(-35px) scale(1.06);
-        opacity: 0.98;
       }
       50% {
         transform: translate(-50%, -50%) rotateZ(var(--speaking-angle, 0deg)) rotateX(0deg) translateY(-33px) scale(1.03);
-        opacity: 1;
-      }
-      75% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle, 0deg)) rotateX(3deg) translateY(-28px) scale(0.98);
-        opacity: 0.96;
       }
     }
 
-    /* 內層花瓣動畫：略微抬起 + 明顯反向呼吸波動（增強版）*/
+    /* 內層花瓣動畫：略微抬起 + 反向呼吸 */
     @keyframes petalSpeakingInner {
       0%, 100% {
         transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(10deg) translateY(-28px) scale(1.05);
-        opacity: 1;
-      }
-      25% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(8deg) translateY(-25px) scale(1.02);
-        opacity: 0.97;
       }
       50% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(12deg) translateY(-30px) scale(1.08);
-        opacity: 1;
-      }
-      75% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(10deg) translateY(-26px) scale(1.04);
-        opacity: 0.98;
+        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(10deg) translateY(-25px) scale(1.02);
       }
     }
 
@@ -934,50 +856,23 @@
         inset 2px -3px 12px rgba(255, 255, 255, 0.95);
     }
 
-    /* 花蕊在回覆時保持金黃色，但有明顯呼吸脈衝效果（增強版）*/
+    /* 花蕊在回覆時保持金黃色，但有呼吸效果 */
     .voice-mic-container.speaking .bloom-core {
       animation: speakingCoreBreath 2.4s ease-in-out infinite;
-      box-shadow:
-        0 0 20px rgba(245, 158, 11, 0.4),
-        0 0 35px rgba(245, 158, 11, 0.25),
-        inset 0 2px 8px rgba(255, 255, 255, 0.5);
     }
 
     @keyframes speakingCoreBreath {
       0%, 100% {
         transform: translate(-50%, -50%) scale(1);
-        box-shadow:
-          0 0 20px rgba(245, 158, 11, 0.4),
-          0 0 35px rgba(245, 158, 11, 0.25),
-          inset 0 2px 8px rgba(255, 255, 255, 0.5);
-      }
-      25% {
-        transform: translate(-50%, -50%) scale(1.12);
-        box-shadow:
-          0 0 30px rgba(245, 158, 11, 0.6),
-          0 0 50px rgba(245, 158, 11, 0.4),
-          inset 0 2px 12px rgba(255, 255, 255, 0.7);
       }
       50% {
         transform: translate(-50%, -50%) scale(1.08);
-        box-shadow:
-          0 0 25px rgba(245, 158, 11, 0.5),
-          0 0 40px rgba(245, 158, 11, 0.3),
-          inset 0 2px 10px rgba(255, 255, 255, 0.6);
-      }
-      75% {
-        transform: translate(-50%, -50%) scale(1.05);
-        box-shadow:
-          0 0 22px rgba(245, 158, 11, 0.45),
-          0 0 38px rgba(245, 158, 11, 0.28),
-          inset 0 2px 9px rgba(255, 255, 255, 0.55);
       }
     }
 
 
     /* === Agent 文字輸出區域（打字機效果）=== */
     .voice-agent-output {
-      width: 100%;
       max-width: 600px;
       padding: 20px 28px;
       background: rgba(255, 255, 255, 0.98);
@@ -990,22 +885,18 @@
       text-align: left;
       line-height: 1.7;
       min-height: 60px;
-      max-height: 180px; /* 固定最大高度約 4-5 行文字 */
-      overflow-y: auto; /* 超出時顯示滾動條 */
       box-shadow: 0 6px 28px rgba(0, 0, 0, 0.1);
       font-family: 'Inter', -apple-system, sans-serif;
+      display: none; /* 預設隱藏 */
       opacity: 0;
-      transform: translateY(12px);
+      transform: translateY(10px);
       transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-      visibility: hidden;
-      pointer-events: none;
     }
 
     .voice-agent-output.active {
+      display: block;
       opacity: 1;
       transform: translateY(0);
-      visibility: visible;
-      pointer-events: auto;
     }
 
     /* 打字游標效果 */
@@ -1026,123 +917,64 @@
     }
 
     /* === 實時字幕 / 文字輸入框 === */
-    .voice-transcript-wrapper {
-      position: relative;
-      width: 100%;
-      max-width: 520px; /* 優化：縮小最大寬度（680px → 520px，減少約 24%）*/
-      margin: 0 auto; /* 置中對齊 */
-      padding: 0 16px; /* 優化：減少左右留白（20px → 16px）*/
-      display: flex;
-      justify-content: center;
-    }
-
     .voice-transcript {
-      width: 100%; /* 填滿 wrapper（受 max-width 限制）*/
-      flex-shrink: 0;
-      padding: 18px 24px; /* 優化：進一步減少內距（20px 28px → 18px 24px）*/
-      background: rgba(255, 255, 255, 0.96);
-      border: 1.5px solid rgba(0, 0, 0, 0.06); /* 更細的邊框 */
-      border-radius: 12px; /* 優化：減少圓角（14px → 12px）*/
-      backdrop-filter: blur(24px) saturate(180%);
-      font-size: 17px; /* 優化：稍微縮小字體（18px → 17px）*/
+      max-width: 700px;
+      padding: 24px 32px;
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 16px;
+      backdrop-filter: blur(20px) saturate(180%);
+      font-size: 20px;
       font-weight: 400;
       color: #1A1A1A;
       text-align: center;
-      line-height: 1.5; /* 稍微緊湊（原 1.6）*/
-      min-height: 68px; /* 優化：減少最小高度（72px → 68px）*/
-      max-height: 130px; /* 優化：減少最大高度（140px → 130px）*/
+      line-height: 1.6;
+      min-height: 80px;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 3px 16px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04); /* 更柔和的陰影 */
-      outline: none;
-      resize: none;
-      overflow-y: auto;
+      transition: all 0.3s;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
     }
 
     .voice-transcript.provisional {
-      color: rgba(0, 0, 0, 0.35); /* 稍微降低對比（原 0.4）*/
+      color: rgba(0, 0, 0, 0.4);
       font-style: italic;
     }
 
     .voice-transcript.final {
       color: #1A1A1A;
-      border-color: rgba(0, 0, 0, 0.10); /* 稍微淡化（原 0.12）*/
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+      border-color: rgba(0, 0, 0, 0.12);
+      box-shadow: 0 6px 32px rgba(0, 0, 0, 0.12);
     }
 
     /* 文字輸入模式 */
     .voice-transcript.text-input-mode {
-      cursor: text;
-      text-align: left;
-      border-color: rgba(59, 130, 246, 0.4); /* 稍微淡化聚焦顏色 */
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.08), 0 4px 20px rgba(0, 0, 0, 0.08); /* 減少光暈範圍 */
-      background: rgba(255, 255, 255, 0.98);
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 130px; /* 優化：與基礎樣式保持一致 */
+      padding: 0;
+      min-height: 100px;
+      max-height: 200px;
+      overflow: hidden;
     }
 
-    .voice-transcript.text-input-mode:focus {
-      border-color: rgba(59, 130, 246, 0.7); /* 稍微降低強度（原 0.8）*/
-      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12), 0 6px 28px rgba(0, 0, 0, 0.12); /* 調整光暈 */
+    .voice-transcript.text-input-mode textarea {
+      width: 100%;
+      height: 100%;
+      min-height: 100px;
+      padding: 24px 32px;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-size: 18px;
+      font-weight: 400;
+      color: #1A1A1A;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      resize: vertical;
+      line-height: 1.6;
     }
 
-    .voice-transcript.text-input-mode:empty:before {
-      content: attr(data-placeholder);
-      color: rgba(0, 0, 0, 0.28); /* 稍微淡化（原 0.3）*/
+    .voice-transcript.text-input-mode textarea::placeholder {
+      color: rgba(0, 0, 0, 0.4);
       font-style: italic;
-    }
-
-    /* 文字輸入模式下的提示文字 */
-    .input-mode-hint {
-      position: absolute;
-      bottom: -36px; /* 調整位置（原 -40px）*/
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 12px; /* 減小字體（原 13px）*/
-      color: rgba(0, 0, 0, 0.38); /* 稍微提高對比（原 0.4）*/
-      background: rgba(255, 255, 255, 0.92);
-      padding: 6px 14px; /* 減少內距（原 8px 16px）*/
-      border-radius: 10px; /* 減少圓角（原 12px）*/
-      backdrop-filter: blur(10px);
-      opacity: 0;
-      transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      pointer-events: none;
-      white-space: nowrap;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); /* 添加微陰影 */
-    }
-
-    .voice-transcript.text-input-mode + .input-mode-hint {
-      opacity: 1;
-    }
-
-    /* 文字輸入模式下確保波形容器保持可見 */
-    .text-input-active .voice-waveform-container {
-      opacity: 1 !important;
-    }
-
-    /* 手機版優化 */
-    @media (max-width: 768px) {
-      .voice-transcript-wrapper {
-        max-width: 100%; /* 手機版全寬 */
-        padding: 0 14px; /* 優化：減少左右留白（16px → 14px）*/
-      }
-
-      .voice-transcript {
-        font-size: 16px; /* 手機版縮小字體 */
-        padding: 15px 18px; /* 優化：減少內距（16px 20px → 15px 18px）*/
-        min-height: 62px; /* 優化：減少最小高度（64px → 62px）*/
-        max-height: 115px; /* 優化：減少最大高度（120px → 115px）*/
-        border-radius: 11px; /* 優化：減少圓角（12px → 11px）*/
-      }
-
-      .input-mode-hint {
-        font-size: 11px;
-        padding: 5px 12px;
-        bottom: -32px;
-      }
     }
 
     /* === 工具卡片 === */
@@ -1155,8 +987,6 @@
       backdrop-filter: blur(30px) saturate(180%);
       min-width: 280px;
       max-width: 360px;
-      max-height: 400px; /* 固定最大高度，避免卡片過大 */
-      overflow-y: auto; /* 內容超出時可滾動 */
       z-index: 40;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
       animation: cardEnter 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
@@ -1265,11 +1095,12 @@
       font-family: 'JetBrains Mono', monospace;
     }
 
-    /* ChatWindow 折疊圖標（切換語音/文字模式）*/
+    /* ChatWindow 折疊圖標 */
     .chat-icon {
       position: fixed;
-      bottom: 40px;
-      left: 40px;
+      /* 使用 calc 搭配 svh 確保在所有裝置上都固定在底部 */
+      bottom: max(40px, env(safe-area-inset-bottom, 0px));
+      left: max(40px, env(safe-area-inset-left, 0px));
       z-index: 101;
       width: 56px;
       height: 56px;
@@ -1283,8 +1114,7 @@
       backdrop-filter: blur(20px);
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      font-size: 24px;
-      user-select: none;
+      font-size: 20px;
     }
 
     .chat-icon:hover {
@@ -1293,36 +1123,24 @@
       box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
     }
 
-    /* 文字模式時的樣式 */
-    .chat-icon.text-mode {
-      background: rgba(59, 130, 246, 0.95);
-      border-color: rgba(59, 130, 246, 0.3);
-    }
-
-    .chat-icon.text-mode:hover {
-      background: rgba(59, 130, 246, 1);
-      box-shadow: 0 6px 24px rgba(59, 130, 246, 0.4);
-    }
-
     /* 退出按鈕 */
     .exit-button {
       position: absolute;
-      top: clamp(24px, 5vh, 36px);
-      right: 24px;
+      top: max(40px, env(safe-area-inset-top, 0px));
+      right: max(40px, env(safe-area-inset-right, 0px));
       z-index: 50;
-      padding: 12px 22px;
+      padding: 12px 20px;
       background: rgba(255, 255, 255, 0.95);
       border: 1px solid rgba(0, 0, 0, 0.08);
-      border-radius: 12px;
+      border-radius: 10px;
       color: rgba(0, 0, 0, 0.6);
       font-family: 'Inter', sans-serif;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
       transition: all 0.2s;
-      backdrop-filter: blur(12px);
-      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
-      letter-spacing: 0.6px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     }
 
     .exit-button:hover {
@@ -1335,7 +1153,7 @@
     /* 情緒標籤 */
     .emotion-indicator {
       position: absolute;
-      top: 40px;
+      top: max(40px, env(safe-area-inset-top, 0px));
       left: 50%;
       transform: translateX(-50%);
       z-index: 50;
@@ -1381,257 +1199,126 @@
       50% { opacity: 0.3; }
     }
 
-    /* ========================================
-       📱 RWD 響應式設計（2025 最佳實踐）
-       ======================================== */
-
-    /* 工具卡片側邊欄（手機版） */
-    .tool-sidebar {
+    /* === 登入覆蓋層（蓮花風格）=== */
+    .login-overlay {
       position: fixed;
-      right: -100%;
       top: 0;
-      width: 90%;
-      max-width: 400px;
+      left: 0;
+      width: 100vw;
       height: 100vh;
-      background: linear-gradient(160deg, rgba(255, 255, 255, 0.98), rgba(243, 244, 246, 0.95));
-      backdrop-filter: blur(22px);
-      border-left: 1px solid rgba(15, 23, 42, 0.08);
-      border-radius: 28px 0 0 28px;
-      box-shadow: -8px 0 32px rgba(15, 23, 42, 0.15);
-      z-index: 300;
-      transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      overflow-y: auto;
-      padding: 96px 28px 32px;
-      display: none; /* 預設隱藏，手機版啟用 */
-      flex-direction: column;
-      gap: 24px;
-    }
-
-    .tool-sidebar.active {
-      right: 0;
-    }
-
-    .tool-sidebar-toggle {
-      position: fixed;
-      top: 50%;
-      right: 0;
-      transform: translateY(-50%);
-      z-index: 150;
-      width: 24px;
-      height: 60px;
-      background: rgba(255, 255, 255, 0.9);
-      border: 1px solid rgba(0, 0, 0, 0.08);
-      border-right: none;
-      border-radius: 12px 0 0 12px;
-      display: none; /* 預設隱藏，手機版啟用 */
+      background: linear-gradient(135deg, #E6F7F0 0%, #F5F1ED 100%);
+      z-index: 9999;
+      display: flex;
       align-items: center;
       justify-content: center;
-      cursor: pointer;
-      box-shadow: -2px 2px 8px rgba(0, 0, 0, 0.1);
-      font-size: 16px;
-      font-weight: bold;
-      color: rgba(0, 0, 0, 0.6);
-      transition: all 0.2s;
-      padding: 0;
-      margin: 0;
+      transition: opacity 0.6s ease, visibility 0.6s ease;
     }
 
-    .tool-sidebar-header {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding-right: 32px;
+    .login-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
     }
 
-    .tool-sidebar-title {
-      font-size: 18px;
-      font-weight: 600;
-      color: #0f172a;
-      letter-spacing: -0.3px;
+    .login-container {
+      text-align: center;
+      max-width: 400px;
+      padding: 48px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 32px;
+      backdrop-filter: blur(20px) saturate(180%);
+      box-shadow: 0 8px 48px rgba(0, 0, 0, 0.12);
     }
 
-    .tool-sidebar-subtitle {
-      font-size: 13px;
-      color: rgba(15, 23, 42, 0.55);
+    .login-lotus {
+      width: 120px;
+      height: 120px;
+      margin: 0 auto 32px;
+      position: relative;
+    }
+
+    .login-lotus::before {
+      content: '🪷';
+      font-size: 120px;
+      line-height: 1;
+      animation: float 3s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+    }
+
+    .login-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #1A1A1A;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    .login-subtitle {
+      font-size: 15px;
+      color: rgba(0, 0, 0, 0.5);
+      margin-bottom: 40px;
       line-height: 1.6;
     }
 
-    #tool-sidebar-cards {
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-      padding-bottom: 60px;
-    }
-
-    .tool-sidebar .voice-tool-card {
-      position: relative;
-      width: 100%;
-      min-width: unset;
-      max-width: unset;
-      border-radius: 18px;
-      border: 1px solid rgba(15, 23, 42, 0.06);
-      box-shadow: 0 12px 36px rgba(15, 23, 42, 0.12);
-      padding: 22px 24px;
-    }
-
-    .tool-sidebar .voice-tool-card .card-header {
-      margin-bottom: 12px;
-      padding-bottom: 12px;
-    }
-
-    .tool-sidebar .voice-tool-card .card-content {
-      font-size: 14px;
-    }
-
-    .tool-sidebar-toggle:hover {
-      background: rgba(255, 255, 255, 0.95);
-      color: rgba(0, 0, 0, 0.8);
-      width: 28px;
-    }
-
-    .tool-sidebar-toggle.active {
-      right: 90%;
-      max-width: 400px;
-    }
-
-    .tool-sidebar-toggle.active::before {
-      content: '›';
-    }
-
-    .tool-sidebar-toggle:not(.active)::before {
-      content: '‹';
-    }
-
-    @keyframes pulse {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.05); }
-    }
-
-    .tool-sidebar-close {
-      position: absolute;
-      top: 20px;
-      right: 20px;
-      width: 40px;
-      height: 40px;
-      background: rgba(0, 0, 0, 0.05);
-      border: none;
-      border-radius: 50%;
-      display: flex;
+    .login-button {
+      display: inline-flex;
       align-items: center;
       justify-content: center;
+      gap: 12px;
+      padding: 16px 32px;
+      background: #FFFFFF;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 16px;
+      color: #1A1A1A;
+      font-family: 'Inter', sans-serif;
+      font-size: 15px;
+      font-weight: 600;
       cursor: pointer;
-      font-size: 20px;
-      transition: all 0.2s;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
 
-    .tool-sidebar-close:hover {
-      background: rgba(0, 0, 0, 0.1);
+    .login-button:hover {
+      background: #F5F5F5;
+      border-color: rgba(0, 0, 0, 0.18);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
     }
 
-    /* 平板與手機適配 */
-    @media (max-width: 1024px) {
-      /* 工具卡片改為側邊欄 */
-      #tool-cards-container {
-        display: none !important;
-      }
-
-      .tool-sidebar {
-        display: flex;
-        gap: 20px;
-        padding: 88px 24px 28px;
-      }
-
-      .tool-sidebar-toggle {
-        display: flex;
-      }
-
-      /* 工具卡片在側邊欄內的樣式 */
-      .tool-sidebar .voice-tool-card {
-        position: static !important;
-        width: 100% !important;
-        transform: none !important;
-        animation: none !important;
-        margin-bottom: 0;
-      }
-
-      /* 中央控制按鈕調整 */
-      .voice-center-button {
-        width: 120px !important;
-        height: 120px !important;
-        font-size: 48px !important;
-      }
-
-      /* 歡迎文字調整 */
-      .voice-welcome-message {
-        font-size: 28px !important;
-      }
-
-      /* 狀態文字調整 */
-      .voice-status-text {
-        font-size: 14px !important;
-      }
-
-      /* 退出按鈕調整 */
-      .exit-button {
-        top: 18px;
-        right: 24px;
-        padding: 10px 18px;
-        font-size: 12px;
-      }
-
-      /* 聊天圖標調整 */
-      .chat-icon {
-        bottom: 30px;
-        left: 30px;
-        width: 48px;
-        height: 48px;
-        font-size: 20px;
-      }
+    .login-button:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
 
-    @media (max-width: 640px) {
-      /* 極小手機（<640px） */
-      .tool-sidebar {
-        width: 100%;
-        max-width: 100%;
-        border-radius: 24px 24px 0 0;
-        padding: 80px 20px 24px;
-      }
-
-      .voice-center-button {
-        width: 100px !important;
-        height: 100px !important;
-        font-size: 40px !important;
-      }
-
-      .voice-welcome-message {
-        font-size: 24px !important;
-        padding: 0 20px;
-      }
-
-      .voice-status-text {
-        font-size: 13px !important;
-      }
-
-      .exit-button {
-        top: 14px;
-        right: 20px;
-        padding: 8px 14px;
-        font-size: 11px;
-      }
-
-      .chat-icon {
-        bottom: 20px;
-        left: 20px;
-        width: 44px;
-        height: 44px;
-        font-size: 18px;
-      }
+    .login-button img {
+      width: 20px;
+      height: 20px;
     }
-
   </style>
 </head>
 <body>
+  <!-- 登入覆蓋層 -->
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-container">
+      <div class="login-lotus"></div>
+      <h1 class="login-title">Bloom Ware</h1>
+      <p class="login-subtitle">語音沉浸式 AI 助手<br>請登入以開始使用</p>
+      <button class="login-button" id="googleLoginBtn">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <path d="M19.6 10.227c0-.709-.064-1.39-.182-2.045H10v3.868h5.382a4.6 4.6 0 01-1.996 3.018v2.51h3.232c1.891-1.742 2.982-4.305 2.982-7.35z" fill="#4285F4"/>
+          <path d="M10 20c2.7 0 4.964-.895 6.618-2.423l-3.232-2.509c-.895.6-2.04.955-3.386.955-2.605 0-4.81-1.76-5.595-4.123H1.064v2.59A9.996 9.996 0 0010 20z" fill="#34A853"/>
+          <path d="M4.405 11.9c-.2-.6-.314-1.24-.314-1.9 0-.66.114-1.3.314-1.9V5.51H1.064A9.996 9.996 0 000 10c0 1.614.386 3.14 1.064 4.49l3.34-2.59z" fill="#FBBC05"/>
+          <path d="M10 3.977c1.468 0 2.786.505 3.823 1.496l2.868-2.868C14.959.99 12.695 0 10 0 6.09 0 2.71 2.24 1.064 5.51l3.34 2.59C5.19 5.736 7.395 3.977 10 3.977z" fill="#EA4335"/>
+        </svg>
+        使用 Google 登入
+      </button>
+    </div>
+  </div>
+
   <!-- 控制面板 -->
   <div class="control-panel">
     <h3>🎛️ 控制面板</h3>
@@ -1701,11 +1388,11 @@
     <!-- 情緒指示器 -->
     <div class="emotion-indicator" id="emotion-indicator">當前情緒: 😐 中性</div>
 
-    <!-- 退出按鈕 -->
-    <button class="exit-button">ESC 退出</button>
+    <!-- 登出按鈕 -->
+    <button class="exit-button" id="logoutBtn">登出</button>
 
-    <!-- ChatWindow 折疊圖標（切換語音/文字模式）-->
-    <div class="chat-icon" id="modeToggleBtn" title="切換為文字輸入模式">💬</div>
+    <!-- ChatWindow 切換圖標 -->
+    <div class="chat-icon" id="chatIcon" title="切換對話視窗">💬</div>
 
     <!-- 中央容器 -->
     <div class="voice-center-container">
@@ -1745,38 +1432,14 @@
       <!-- Agent 文字輸出（打字機效果，位於花朵下方）-->
       <div class="voice-agent-output" id="agent-output"></div>
 
-      <!-- 實時字幕 / 文字輸入框（父容器）-->
-      <div class="voice-transcript-wrapper">
-        <div 
-          class="voice-transcript text-input-mode provisional" 
-          id="transcript"
-          contenteditable="false"
-          data-placeholder="請說話...">
-          請說話...
-        </div>
-        <div class="input-mode-hint">按 Enter 發送 | Shift+Enter 換行</div>
+      <!-- 實時字幕 -->
+      <div class="voice-transcript provisional" id="transcript">
+        請說話...
       </div>
     </div>
 
-    <!-- 工具卡片容器（桌面版） -->
+    <!-- 工具卡片容器 -->
     <div id="tool-cards-container"></div>
-
-    <!-- 工具卡片側邊欄（手機版） -->
-    <div class="tool-sidebar" id="tool-sidebar">
-      <button class="tool-sidebar-close" onclick="toggleToolSidebar()">✕</button>
-      <div class="tool-sidebar-header">
-        <span class="tool-sidebar-title">工具總覽</span>
-        <p class="tool-sidebar-subtitle">
-          最近呼叫的智慧模組會集中顯示在此，方便快速重用或分享結果。
-        </p>
-      </div>
-      <div id="tool-sidebar-cards"></div>
-    </div>
-
-    <!-- 側邊欄切換按鈕（手機版） -->
-    <button class="tool-sidebar-toggle" id="tool-sidebar-toggle" onclick="toggleToolSidebar()">
-      ‹
-    </button>
   </div>
 
   <!-- JavaScript 模組化引入 -->
@@ -1786,6 +1449,7 @@
   <script src="js/tools.js"></script>
   <script src="js/agent.js"></script>
   <script src="js/canvas.js"></script>
+  <script src="js/location.js"></script>
   <script src="js/websocket.js"></script>
   <script src="js/app.js"></script>
 </body>

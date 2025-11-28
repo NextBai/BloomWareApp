@@ -1,14 +1,3 @@
-// 全域控制：除非啟用 window.BLOOMWARE_DEBUG，否則靜音 console.log/info/debug
-(function silenceConsoleLogs() {
-  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
-    const noop = () => {};
-    console.log = noop;
-    console.info = noop;
-    console.debug = noop;
-    console.__bloomwareSilenced = true;
-  }
-})();
-
 // ========== Agent 狀態管理（單一狀態機）==========
 // 狀態定義：idle | recording | thinking | speaking | disconnected
 let currentState = 'idle';
@@ -43,16 +32,6 @@ function setState(newState, options = {}) {
       if (options.clearCards !== false) {
         clearAllCards();
       }
-      // 恢復輸入交互能力
-      if (typeof isTextInputMode !== 'undefined' && !isTextInputMode) {
-        // 語音模式
-        transcript.style.pointerEvents = 'auto';
-        transcript.style.opacity = '1';
-      } else if (typeof isTextInputMode !== 'undefined' && isTextInputMode) {
-        // 文字輸入模式
-        transcript.contentEditable = 'true';
-        transcript.style.opacity = '1';
-      }
       break;
 
     case 'recording':
@@ -78,16 +57,6 @@ function setState(newState, options = {}) {
       if (typeof stopSpeaking === 'function') {
         stopSpeaking();
       }
-      // 禁用輸入交互（語音模式）
-      if (typeof isTextInputMode !== 'undefined' && !isTextInputMode) {
-        transcript.style.pointerEvents = 'none';
-        transcript.style.opacity = '0.6';
-      }
-      // 禁用文字輸入交互
-      else if (typeof isTextInputMode !== 'undefined' && isTextInputMode) {
-        transcript.contentEditable = 'false';
-        transcript.style.opacity = '0.6';
-      }
       break;
 
     case 'speaking':
@@ -96,19 +65,6 @@ function setState(newState, options = {}) {
       if (options.outputText) {
         // typewriterEffect 內部會自動調用 speakText（如果 enableTTS 為 true）
         typewriterEffect(options.outputText, 40, options.enableTTS);
-      }
-      // 恢復輸入交互能力（Agent 回應中）
-      if (typeof isTextInputMode !== 'undefined' && !isTextInputMode) {
-        // 語音模式：清空 transcript 並恢復可見性
-        transcript.textContent = '請說話...';
-        transcript.className = 'voice-transcript provisional';
-        transcript.style.pointerEvents = 'auto';
-        transcript.style.opacity = '1';
-      } else if (typeof isTextInputMode !== 'undefined' && isTextInputMode) {
-        // 文字輸入模式：清空並恢復可編輯
-        transcript.textContent = '';
-        transcript.contentEditable = 'true';
-        transcript.style.opacity = '1';
       }
       break;
 
@@ -131,47 +87,13 @@ function setState(newState, options = {}) {
  * 應用情緒主題
  */
 function applyEmotion(emotion) {
-  if (!emotion || typeof emotion !== 'string') {
+  const validEmotions = ['neutral', 'happy', 'sad', 'angry', 'fear', 'surprise'];
+  if (!validEmotions.includes(emotion)) {
     emotion = 'neutral';
   }
 
-  const normalized = emotion.trim().toLowerCase();
-  const emotionAlias = {
-    sadness: 'sad',
-    happy: 'happy',
-    happiness: 'happy',
-    anger: 'angry',
-    angry: 'angry',
-    fear: 'fear',
-    fearful: 'fear',
-    surprise: 'surprise',
-    surprised: 'surprise',
-    neutral: 'neutral',
-  };
-
-  const validEmotions = ['neutral', 'happy', 'sad', 'angry', 'fear', 'surprise'];
-  const mappedEmotion = emotionAlias[normalized] || normalized;
-  const finalEmotion = validEmotions.includes(mappedEmotion) ? mappedEmotion : 'neutral';
-
-  background.className = `voice-immersive-background emotion-${finalEmotion} active`;
-  emotionIndicator.textContent = `當前情緒: ${emotionEmojis[finalEmotion]}`;
-
-  if (window.localStorage) {
-    try {
-      localStorage.setItem('lastEmotion', finalEmotion);
-    } catch (err) {
-      console.warn('無法儲存情緒狀態:', err);
-    }
-  }
-}
-
-try {
-  const storedEmotion = localStorage.getItem('lastEmotion');
-  if (storedEmotion) {
-    applyEmotion(storedEmotion);
-  }
-} catch (err) {
-  console.warn('無法讀取情緒狀態:', err);
+  background.className = `voice-immersive-background emotion-${emotion} active`;
+  emotionIndicator.textContent = `當前情緒: ${emotionEmojis[emotion]}`;
 }
 
 /**

@@ -52,6 +52,14 @@ class TDXMetroTool(MCPTool):
             "line": {
                 "type": "string",
                 "description": "路線名稱（如「板南線」「淡水信義線」）"
+            },
+            "lat": {
+                "type": "number",
+                "description": "用戶緯度（由系統自動注入）"
+            },
+            "lon": {
+                "type": "number",
+                "description": "用戶經度（由系統自動注入）"
             }
         }, required=[])
     
@@ -76,26 +84,71 @@ class TDXMetroTool(MCPTool):
         return schema
     
     @classmethod
-    async def execute(cls, arguments: Dict[str, Any], user_id: str = None) -> Dict[str, Any]:
+    async def execute(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        # 從 arguments 中讀取 user_id（由 coordinator 注入）
+        user_id = arguments.get("_user_id")
+        
         station_name = arguments.get("station_name", "").strip()
         metro_system = arguments.get("metro_system")
         line_filter = arguments.get("line")
         
-        # 1. 取得用戶位置
-        env_ctx = await get_user_env_current(user_id) if user_id else None
-        if not env_ctx or not env_ctx.get("success"):
-            if not station_name:
-                raise ExecutionError("無法取得您的位置，請提供車站名稱")
-            user_lat, user_lon, user_city = None, None, None
-        else:
-            ctx = env_ctx.get("context", {})
-            user_lat = ctx.get("lat")
-            user_lon = ctx.get("lon")
-            user_city = ctx.get("city", "")
+        # 1. 取得用戶位置和城市（優先從 arguments 讀取，由 coordinator 注入）
+        user_lat = arguments.get("lat")
+        user_lon = arguments.get("lon")
+        user_city = arguments.get("city", "")
         
-        # 2. 自動判斷捷運系統
+        logger.info(f"🚇 [Metro] 輸入參數: lat={user_lat}, lon={user_lon}, city={user_city}, station={station_name}, user_id={user_id}")
+        
+        # 從資料庫補充缺失的位置資訊（僅當 coordinator 沒有注入時）
+        if user_id and (user_lat is None or user_lon is None):
+            try:
+                env_ctx = await get_user_env_current(user_id)
+                logger.info(f"📍 [Metro] 資料庫查詢結果: {env_ctx}")
+                if env_ctx and env_ctx.get("success"):
+                    ctx = env_ctx.get("context", {})
+                    if user_lat is None:
+                        user_lat = ctx.get("lat")
+                    if user_lon is None:
+                        user_lon = ctx.get("lon")
+                    if not user_city:
+                        user_city = ctx.get("city", "")
+                    logger.info(f"📍 [Metro] 補充後: lat={user_lat}, lon={user_lon}, city={user_city}")
+                else:
+                    logger.warning(f"⚠️ [Metro] 資料庫查詢失敗或無資料: {env_ctx}")
+            except Exception as e:
+                logger.warning(f"⚠️ [Metro] 資料庫查詢異常: {e}")
+        
+        # 檢查必要條件
+        if not station_name and (user_lat is None or user_lon is None):
+            logger.error(f"🚇 [Metro] 位置資訊缺失: lat={user_lat}, lon={user_lon}, station_name={station_name}")
+            raise ExecutionError("🚇 想幫您找附近的捷運站，但目前沒有您的位置資訊。請在 App 中開啟定位，或告訴我您想查詢哪個車站")
+        
+        # 2. 自動判斷捷運系統（優先使用反向地理編碼）
         if not metro_system:
-            metro_system = cls._detect_metro_system(user_city)
+            final_city = None
+            city_source = "預設"
+            
+            # 優先：即時反向地理編碼
+            if user_lat and user_lon:
+                geocoded = await cls._reverse_geocode_city(user_lat, user_lon)
+                if geocoded:
+                    final_city = geocoded
+                    city_source = "反向地理編碼"
+            
+            # 其次：環境參數
+            if not final_city and user_city:
+                final_city = user_city
+                city_source = "環境參數"
+            
+            # 最後：經緯度範圍推斷
+            if not final_city and user_lat and user_lon:
+                guessed = cls._guess_city_from_location(user_lat, user_lon)
+                if guessed:
+                    final_city = guessed
+                    city_source = "經緯度推斷"
+            
+            metro_system = cls._detect_metro_system(final_city) if final_city else "TRTC"
+            logger.info(f"🚇 最終使用捷運系統: {metro_system} (來源={city_source})")
         
         # 3. 查詢邏輯
         if station_name:
@@ -111,8 +164,9 @@ class TDXMetroTool(MCPTool):
     async def _query_station_arrival(cls, station_name: str, metro_system: str, 
                                      line_filter: Optional[str]) -> Dict[str, Any]:
         """查詢特定車站的即時到站"""
-        # 1. 查詢車站資訊
-        station_endpoint = f"Metro/Station/{metro_system}"
+        # 1. 查詢車站資訊 (v2 API)
+        # GET /v2/Rail/Metro/Station/{Operator}
+        station_endpoint = f"Rail/Metro/Station/{metro_system}"
         station_params = {
             "$filter": f"contains(StationName/Zh_tw, '{station_name}')",
             "$format": "JSON",
@@ -138,8 +192,9 @@ class TDXMetroTool(MCPTool):
         station_uid = target_station.get("StationUID")
         full_station_name = target_station.get("StationName", {}).get("Zh_tw", station_name)
         
-        # 3. 查詢即時到站
-        arrival_endpoint = f"Metro/LiveBoard/{metro_system}"
+        # 3. 查詢即時到站 (v2 API)
+        # GET /v2/Rail/Metro/LiveBoard/{Operator}
+        arrival_endpoint = f"Rail/Metro/LiveBoard/{metro_system}"
         arrival_params = {
             "$filter": f"StationUID eq '{station_uid}'",
             "$format": "JSON"
@@ -192,8 +247,9 @@ class TDXMetroTool(MCPTool):
     @classmethod
     async def _query_nearest_station(cls, lat: float, lon: float, metro_system: str) -> Dict[str, Any]:
         """查詢最近的捷運站"""
-        # 1. 取得所有車站
-        station_endpoint = f"Metro/Station/{metro_system}"
+        # 1. 取得所有車站 (v2 API)
+        # GET /v2/Rail/Metro/Station/{Operator}
+        station_endpoint = f"Rail/Metro/Station/{metro_system}"
         station_params = {
             "$format": "JSON"
         }
@@ -243,8 +299,49 @@ class TDXMetroTool(MCPTool):
         )
     
     @staticmethod
+    async def _reverse_geocode_city(lat: float, lon: float) -> Optional[str]:
+        """使用 Nominatim 反向地理編碼取得精確城市"""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://nominatim.openstreetmap.org/reverse",
+                    params={"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10, "addressdetails": 1},
+                    headers={"User-Agent": "BloomWare/1.0"},
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    addr = data.get("address", {}) if data else {}
+                    city = addr.get("city") or addr.get("county") or addr.get("town") or ""
+                    return city.replace("市", "").replace("縣", "").strip() or None
+        except Exception:
+            return None
+    
+    @staticmethod
+    def _guess_city_from_location(lat: float, lon: float) -> str:
+        """根據經緯度推斷城市（備用方案）"""
+        city_bounds = [
+            ("桃園", 24.73, 25.12, 120.90, 121.40),
+            ("台北", 24.95, 25.10, 121.45, 121.62),
+            ("新北", 24.67, 25.30, 121.35, 122.01),
+            ("台中", 24.00, 24.45, 120.45, 121.05),
+            ("高雄", 22.45, 23.15, 120.15, 120.80),
+        ]
+        
+        for city_name, lat_min, lat_max, lon_min, lon_max in city_bounds:
+            if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+                return city_name
+        
+        return ""
+    
+    @staticmethod
     def _detect_metro_system(city: str) -> str:
         """根據城市自動偵測捷運系統"""
+        if not city:
+            return "TRTC"
+        
         for key, code in TDXMetroTool.METRO_SYSTEMS.items():
             if key in city:
                 return code

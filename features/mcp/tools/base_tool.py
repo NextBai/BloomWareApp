@@ -123,6 +123,11 @@ class MCPTool(ABC):
     def validate_input(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """驗證和標準化輸入參數"""
         try:
+            # 修復：確保 arguments 是 dict 類型
+            if not isinstance(arguments, dict):
+                logger.error(f"工具 {cls.NAME} 收到非 dict 類型的參數: {type(arguments).__name__} = {arguments}")
+                raise ValidationError("arguments", f"參數必須是 dict 類型，但收到: {type(arguments).__name__}")
+
             # 使用 JSON Schema 進行驗證
             import jsonschema
 
@@ -179,7 +184,9 @@ class MCPTool(ABC):
         except ToolError:
             raise  # 重新拋出工具錯誤
         except Exception as e:
+            import traceback
             logger.error(f"工具 {cls.NAME} 執行失敗: {e}")
+            logger.error(f"完整 traceback:\n{traceback.format_exc()}")
             raise ExecutionError(f"工具執行失敗: {str(e)}", e)
 
     @classmethod

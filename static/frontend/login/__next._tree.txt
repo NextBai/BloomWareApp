@@ -1,0 +1,13 @@
+1:"$Sreact.fragment"
+2:I[97367,["/login/_next/static/chunks/42879de7b8087bc9.js"],"ViewportBoundary"]
+4:I[97367,["/login/_next/static/chunks/42879de7b8087bc9.js"],"MetadataBoundary"]
+5:"$Sreact.suspense"
+7:I[27201,["/login/_next/static/chunks/42879de7b8087bc9.js"],"IconMark"]
+:HL["/login/_next/static/chunks/1f600c83a5ecf168.css","style"]
+:HL["/login/_next/static/chunks/e696efa1270501ac.css","style"]
+:HL["/login/_next/static/media/2a65768255d6b625-s.p.d19752fb.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/login/_next/static/media/797e433ab948586e-s.p.dbea232f.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/login/_next/static/media/caa3a2e1cccd8315-s.p.853070df.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+0:{"buildId":"JHSefKGBAlaH-P1I6_EFb","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":true},"head":["$","$1","h",{"children":[null,["$","$L2",null,{"children":"$@3"}],["$","div",null,{"hidden":true,"children":["$","$L4",null,{"children":["$","$5",null,{"name":"Next.Metadata","children":"$@6"}]}]}],["$","meta",null,{"name":"next-size-adjust","content":""}]]}],"isHeadPartial":false,"staleTime":300}
+3:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
+6:[["$","title","0",{"children":"Bloom Ware - 槓上開發"}],["$","meta","1",{"name":"description","content":"Elegant login experience for Bloom Ware"}],["$","meta","2",{"name":"generator","content":"v0.app"}],["$","link","3",{"rel":"icon","href":"/login/icon.svg?icon.db662264.svg","sizes":"any","type":"image/svg+xml"}],["$","$L7","4",{}]]

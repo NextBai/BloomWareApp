@@ -58,6 +58,14 @@ class TDXParkingTool(MCPTool):
                 "type": "integer",
                 "description": "返回結果數量",
                 "default": 5
+            },
+            "lat": {
+                "type": "number",
+                "description": "用戶緯度（由系統自動注入）"
+            },
+            "lon": {
+                "type": "number",
+                "description": "用戶經度（由系統自動注入）"
             }
         }, required=[])
     
@@ -82,7 +90,10 @@ class TDXParkingTool(MCPTool):
         return schema
     
     @classmethod
-    async def execute(cls, arguments: Dict[str, Any], user_id: str = None) -> Dict[str, Any]:
+    async def execute(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        # 從 arguments 中讀取 user_id（由 coordinator 注入）
+        user_id = arguments.get("_user_id")
+        
         parking_name = arguments.get("parking_name", "").strip()
         city = arguments.get("city")
         parking_type = arguments.get("parking_type")
@@ -90,21 +101,63 @@ class TDXParkingTool(MCPTool):
         radius_m = min(int(arguments.get("radius_m", 1000)), 5000)
         limit = min(int(arguments.get("limit", 5)), 20)
         
-        # 1. 取得用戶位置
-        env_ctx = await get_user_env_current(user_id) if user_id else None
-        if not env_ctx or not env_ctx.get("success"):
-            if not parking_name:
-                raise ExecutionError("無法取得您的位置，請提供停車場名稱或開啟定位權限")
-            user_lat, user_lon, user_city = None, None, None
-        else:
-            ctx = env_ctx.get("context", {})
-            user_lat = ctx.get("lat")
-            user_lon = ctx.get("lon")
-            user_city = ctx.get("city", "")
+        # 1. 取得用戶位置和城市（優先從 arguments 讀取，由 coordinator 注入）
+        user_lat = arguments.get("lat")
+        user_lon = arguments.get("lon")
+        user_city = arguments.get("city", "")
         
-        # 2. 自動判斷城市
+        logger.info(f"🅿️ [Parking] 輸入參數: lat={user_lat}, lon={user_lon}, city={user_city}, name={parking_name}, user_id={user_id}")
+        
+        # 從資料庫補充缺失的位置資訊（僅當 coordinator 沒有注入時）
+        if user_id and (user_lat is None or user_lon is None):
+            try:
+                env_ctx = await get_user_env_current(user_id)
+                logger.info(f"📍 [Parking] 資料庫查詢結果: {env_ctx}")
+                if env_ctx and env_ctx.get("success"):
+                    ctx = env_ctx.get("context", {})
+                    if user_lat is None:
+                        user_lat = ctx.get("lat")
+                    if user_lon is None:
+                        user_lon = ctx.get("lon")
+                    if not user_city:
+                        user_city = ctx.get("city", "")
+                    logger.info(f"📍 [Parking] 補充後: lat={user_lat}, lon={user_lon}, city={user_city}")
+                else:
+                    logger.warning(f"⚠️ [Parking] 資料庫查詢失敗或無資料: {env_ctx}")
+            except Exception as e:
+                logger.warning(f"⚠️ [Parking] 資料庫查詢異常: {e}")
+        
+        # 檢查必要條件
+        if not parking_name and (user_lat is None or user_lon is None):
+            logger.error(f"🅿️ [Parking] 位置資訊缺失: lat={user_lat}, lon={user_lon}, parking_name={parking_name}")
+            raise ExecutionError("🅿️ 想幫您找附近的停車場，但目前沒有您的位置資訊。請在 App 中開啟定位，或告訴我您想查詢哪個停車場")
+        
+        # 2. 自動判斷城市（優先使用反向地理編碼）
         if not city:
-            city = cls._map_city_name(user_city) if user_city else "Taipei"
+            final_city = None
+            city_source = "預設"
+            
+            # 優先：即時反向地理編碼
+            if user_lat and user_lon:
+                geocoded = await cls._reverse_geocode_city(user_lat, user_lon)
+                if geocoded:
+                    final_city = geocoded
+                    city_source = "反向地理編碼"
+            
+            # 其次：環境參數
+            if not final_city and user_city:
+                final_city = user_city
+                city_source = "環境參數"
+            
+            # 最後：經緯度範圍推斷
+            if not final_city and user_lat and user_lon:
+                guessed = cls._guess_city_from_location(user_lat, user_lon)
+                if guessed:
+                    final_city = guessed
+                    city_source = "經緯度推斷"
+            
+            city = cls._map_city_name(final_city) if final_city else "Taipei"
+            logger.info(f"🏙️ 最終使用城市代碼: {city} (來源={city_source})")
         
         # 3. 查詢分支
         if charge_station_only:
@@ -126,7 +179,8 @@ class TDXParkingTool(MCPTool):
     @classmethod
     async def _query_parking_availability(cls, parking_name: str, city: str) -> Dict[str, Any]:
         """查詢特定停車場即時資訊"""
-        # 1. 查詢停車場基本資訊
+        # 1. 查詢停車場基本資訊 (v2 API)
+        # GET /v2/Parking/OffStreet/CarPark/City/{City}
         parking_endpoint = f"Parking/OffStreet/CarPark/City/{city}"
         parking_params = {
             "$filter": f"contains(CarParkName/Zh_tw, '{parking_name}')",
@@ -144,7 +198,8 @@ class TDXParkingTool(MCPTool):
         parking_id = parking.get("CarParkID")
         full_parking_name = parking.get("CarParkName", {}).get("Zh_tw", parking_name)
         
-        # 3. 查詢即時剩餘車位
+        # 3. 查詢即時剩餘車位 (v2 API)
+        # GET /v2/Parking/OffStreet/ParkingAvailability/City/{City}
         avail_endpoint = f"Parking/OffStreet/ParkingAvailability/City/{city}"
         avail_params = {
             "$filter": f"CarParkID eq '{parking_id}'",
@@ -195,7 +250,9 @@ class TDXParkingTool(MCPTool):
     async def _query_nearby_parkings(cls, lat: float, lon: float, city: str,
                                      parking_type: Optional[str], radius_m: int, limit: int) -> Dict[str, Any]:
         """查詢附近停車場"""
-        # 1. 查詢附近停車場
+        # 1. 查詢附近停車場 (v2 API)
+        # GET /v2/Parking/OffStreet/CarPark/City/{City}
+        # GET /v2/Parking/OnStreet/ParkingSpace/City/{City}
         if parking_type == "路邊":
             parking_endpoint = f"Parking/OnStreet/ParkingSpace/City/{city}"
         else:
@@ -228,7 +285,8 @@ class TDXParkingTool(MCPTool):
         parkings.sort(key=lambda x: x["distance_m"])
         parkings = parkings[:limit]
         
-        # 3. 批次查詢即時車位（僅路外停車場）
+        # 3. 批次查詢即時車位（僅路外停車場）(v2 API)
+        # GET /v2/Parking/OffStreet/ParkingAvailability/City/{City}
         if parking_type != "路邊":
             parking_ids = [p.get("CarParkID") for p in parkings]
             
@@ -280,7 +338,8 @@ class TDXParkingTool(MCPTool):
     async def _query_charge_stations(cls, lat: float, lon: float, city: str,
                                     radius_m: int, limit: int) -> Dict[str, Any]:
         """查詢附近充電站"""
-        # 查詢有充電站的停車場
+        # 查詢有充電站的停車場 (v2 API)
+        # GET /v2/Parking/OffStreet/CarPark/City/{City}
         parking_endpoint = f"Parking/OffStreet/CarPark/City/{city}"
         parking_params = {
             "$filter": "HasChargingPoint eq true",
@@ -337,8 +396,50 @@ class TDXParkingTool(MCPTool):
         )
     
     @staticmethod
+    async def _reverse_geocode_city(lat: float, lon: float) -> Optional[str]:
+        """使用 Nominatim 反向地理編碼取得精確城市"""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://nominatim.openstreetmap.org/reverse",
+                    params={"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10, "addressdetails": 1},
+                    headers={"User-Agent": "BloomWare/1.0"},
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    addr = data.get("address", {}) if data else {}
+                    city = addr.get("city") or addr.get("county") or addr.get("town") or ""
+                    return city.replace("市", "").replace("縣", "").strip() or None
+        except Exception:
+            return None
+    
+    @staticmethod
+    def _guess_city_from_location(lat: float, lon: float) -> str:
+        """根據經緯度推斷城市（備用方案）"""
+        city_bounds = [
+            ("桃園", 24.73, 25.12, 120.90, 121.40),
+            ("台北", 24.95, 25.10, 121.45, 121.62),
+            ("新北", 24.67, 25.30, 121.35, 122.01),
+            ("台中", 24.00, 24.45, 120.45, 121.05),
+            ("台南", 22.85, 23.40, 120.00, 120.55),
+            ("高雄", 22.45, 23.15, 120.15, 120.80),
+        ]
+        
+        for city_name, lat_min, lat_max, lon_min, lon_max in city_bounds:
+            if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+                return city_name
+        
+        return ""
+    
+    @staticmethod
     def _map_city_name(chinese_city: str) -> str:
         """中文城市名稱轉 TDX 代碼"""
+        if not chinese_city:
+            return "Taipei"
+        
         city_map = {
             "台北": "Taipei", "臺北": "Taipei",
             "新北": "NewTaipei",

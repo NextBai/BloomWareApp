@@ -96,25 +96,12 @@ function addToolCard(type) {
 }
 
 function clearAllCards() {
-  // 清除桌面版卡片
-  const desktopCards = cardsContainer.querySelectorAll('.voice-tool-card');
-  desktopCards.forEach(card => {
+  const cards = cardsContainer.querySelectorAll('.voice-tool-card');
+  cards.forEach(card => {
     card.classList.add('exiting');
     setTimeout(() => card.remove(), 300);
   });
-
-  // 清除手機版側邊欄卡片
-  const sidebarCards = document.getElementById('tool-sidebar-cards');
-  if (sidebarCards) {
-    const mobileCards = sidebarCards.querySelectorAll('.voice-tool-card');
-    mobileCards.forEach(card => {
-      card.classList.add('exiting');
-      setTimeout(() => card.remove(), 300);
-    });
-  }
-
   usedPositions = [];
-  updateSidebarToggle();
 }
 
 // 模擬工具調用事件監聽（延遲初始化）
@@ -177,16 +164,9 @@ function getIconForTool(toolName, category) {
   const iconMap = {
     // 分類映射
     '健康': '❤️',
-    '健康數據': '❤️',
     '天氣': '🌤️',
     '新聞': '📰',
     '匯率': '💱',
-    '生活資訊': '💬',
-    '地理定位': '📍',
-    '軌道運輸': '🚇',
-    '道路運輸': '🚌',
-    '微型運具': '🚲',
-    '停車與充電': '🅿️',
     '時間': '⏰',
     '提醒': '⏰',
     '日曆': '📅',
@@ -194,24 +174,23 @@ function getIconForTool(toolName, category) {
     '地圖': '🗺️',
     '翻譯': '🌐',
     '計算': '🔢',
+    '道路運輸': '🚌',
+    '軌道運輸': '🚇',
+    '地理定位': '📍',
 
     // 工具名稱映射
     'healthkit_query': '❤️',
     'weather_query': '🌤️',
     'news_query': '📰',
-    'exchange_query': '💱',
-    'forward_geocode': '📍',
-    'reverse_geocode': '📍',
-    'directions': '🗺️',
-    'tdx_bus_arrival': '🚌',
-    'tdx_metro': '�',
-    'tdx_train': '🚆',
-    'tdx_thsr': '🚄',
-    'tdx_youbike': '🚲',
-    'tdx_parking': '🅿️',
+    'exchange_rate': '💱',
     'time_query': '⏰',
     'reminder': '⏰',
-    'calendar': '📅'
+    'calendar': '📅',
+    'tdx_bus_arrival': '🚌',
+    'tdx_metro': '🚇',
+    'reverse_geocode': '📍',
+    'forward_geocode': '📍',
+    'directions': '🗺️'
   };
 
   // 優先使用工具名稱匹配
@@ -240,8 +219,12 @@ function displayToolCard(toolName, toolData) {
   const category = toolMeta.category || '未知';
   const icon = getIconForTool(toolName, category);
 
+  // 根據 toolData 結構自動渲染
+  const position = getNextPosition();
+  if (!position) return;
+
   const card = document.createElement('div');
-  card.className = 'voice-tool-card';
+  card.className = `voice-tool-card ${position}`;
   card.dataset.type = toolName;
 
   // 渲染卡片內容
@@ -252,23 +235,10 @@ function displayToolCard(toolName, toolData) {
       <div class="card-icon">${icon}</div>
       <h3>${category}</h3>
     </div>
-    <div class="card-content">${contentHTML}</div>
+    <div class="card-content" style="max-height: 400px; overflow-y: auto; overflow-x: hidden; padding-right: 8px;">${contentHTML}</div>
   `;
 
-  if (isMobileMode()) {
-    // 手機版：添加到側邊欄
-    const sidebarCards = document.getElementById('tool-sidebar-cards');
-    sidebarCards.appendChild(card);
-    updateSidebarToggle();
-  } else {
-    // 桌面版：使用原有邏輯
-    const position = getNextPosition();
-    if (!position) return;
-
-    card.classList.add(position);
-    cardsContainer.appendChild(card);
-  }
-
+  cardsContainer.appendChild(card);
   console.log(`🃏 顯示工具卡片: ${toolName} (${category})`);
 }
 
@@ -302,24 +272,39 @@ function renderCardContent(toolName, toolData) {
     return renderWeatherData(weatherData);
   }
 
-  // 模式 4：匯率數據（優先檢查）
+  // 模式 4：公車到站資訊
+  if (toolData.arrivals && Array.isArray(toolData.arrivals)) {
+    console.log('✅ 匹配到模式 4: 公車到站資訊');
+    return renderBusArrivals(toolData.arrivals, toolData.route_name);
+  }
+
+  // 模式 5：附近公車站點
+  if (toolData.stops && Array.isArray(toolData.stops)) {
+    console.log('✅ 匹配到模式 5: 附近公車站點');
+    return renderNearbyStops(toolData.stops);
+  }
+
+  // 模式 6：匯率數據
   if (toolData.rate !== undefined && toolData.from_currency !== undefined) {
-    console.log('✅ 匹配到模式 4: 匯率數據');
+    console.log('✅ 匹配到模式 6: 匯率數據');
     return renderExchangeRate(toolData);
   }
 
-  // 模式 5：地理定位數據（forward_geocode / reverse_geocode）
-  // forward_geocode: 有 best_match.lat/lon
-  // reverse_geocode: 直接有 lat/lon + display_name
-  if ((toolData.best_match && toolData.best_match.lat && toolData.best_match.lon) ||
-      (toolData.lat !== undefined && toolData.lon !== undefined && toolData.display_name)) {
-    console.log('✅ 匹配到模式 5: 地理定位數據');
-    return renderLocationData(toolData);
+  // 模式 7：火車列車資訊
+  if (toolData.trains && Array.isArray(toolData.trains)) {
+    console.log('✅ 匹配到模式 7: 火車列車資訊');
+    return renderTrainList(toolData.trains);
   }
 
-  // 模式 6：通用 raw_data 物件
+  // 模式 8：YouBike 站點資訊
+  if (toolData.stations && Array.isArray(toolData.stations)) {
+    console.log('✅ 匹配到模式 8: YouBike 站點資訊');
+    return renderYouBikeStations(toolData.stations);
+  }
+
+  // 模式 9：通用 raw_data 物件
   if (toolData.raw_data && typeof toolData.raw_data === 'object') {
-    console.log('✅ 匹配到模式 6: 通用 raw_data');
+    console.log('✅ 匹配到模式 9: 通用 raw_data');
     return renderKeyValuePairs(toolData.raw_data);
   }
 
@@ -408,26 +393,20 @@ function renderHealthMetrics(healthData) {
 }
 
 /**
- * 渲染新聞列表（顯示 AI 生成的簡短摘要）
- * 顯示全部新聞，但保持 3 條的高度可滾動
+ * 渲染新聞列表
  */
 function renderNewsList(articles) {
   let html = '';
-  articles.forEach(article => {
-    // 優先使用 AI 生成的簡短摘要，否則 fallback 到標題
-    const displayText = article.summary || article.title || '無摘要';
-
+  articles.slice(0, 3).forEach(article => {
     html += `
-      <div class="data-row" style="margin-bottom: 8px;">
-        <span style="font-size: 14px; line-height: 1.5;">• ${displayText}</span>
+      <div class="data-row" style="flex-direction: column; align-items: flex-start; margin-bottom: 10px;">
+        <span class="data-label" style="font-weight: bold;">${article.title || '無標題'}</span>
+        <span class="data-value" style="font-size: 0.85em; opacity: 0.8;">${article.source?.name || article.source || ''}</span>
       </div>
     `;
   });
 
-  // 使用可滾動容器，固定高度為 3 條新聞的大小
-  return html
-    ? `<div style="max-height: 90px; overflow-y: auto; padding-right: 4px;">${html}</div>`
-    : '<p>無新聞</p>';
+  return html || '<p>無新聞</p>';
 }
 
 /**
@@ -522,101 +501,187 @@ function renderExchangeRate(data) {
 }
 
 /**
- * 渲染地理定位數據（forward_geocode / reverse_geocode）
+ * 渲染火車列車資訊
  */
-function renderLocationData(data) {
-  // reverse_geocode: 扁平結構（欄位在第一層）
-  // forward_geocode: 巢狀結構（best_match + results）
-  const bestMatch = data.best_match || data;  // ← 兼容兩種結構
-  const results = data.results || [];
-  const query = data.query || '';
-  
+function renderTrainList(trains) {
+  if (!trains || trains.length === 0) {
+    return '<p class="data-row">查無列車資訊</p>';
+  }
+
+  let html = '<div class="train-list">';
+
+  trains.forEach((train, index) => {
+    const trainType = train.train_type || '未知';
+    const trainNo = train.train_no || '---';
+    const departTime = train.departure_time ? train.departure_time.substring(0, 5) : '--:--';
+    const arriveTime = train.arrival_time ? train.arrival_time.substring(0, 5) : '--:--';
+    const duration = train.duration_min ? `${train.duration_min}分鐘` : '未知';
+    const originStation = train.origin_station || '未知';
+    const destStation = train.destination_station || '未知';
+
+    html += `
+      <div class="train-item" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === trains.length - 1 ? 'border-bottom: none;' : ''}">
+        <div class="data-row" style="margin-bottom: 8px;">
+          <span class="data-label" style="font-weight: bold; color: #0066cc;">🚂 ${trainType} ${trainNo}次</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">📍 起訖站</span>
+          <span class="data-value">${originStation} → ${destStation}</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">⏰ 出發</span>
+          <span class="data-value">${departTime}</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">⏱️ 抵達</span>
+          <span class="data-value">${arriveTime}</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">🕐 行駛時間</span>
+          <span class="data-value">${duration}</span>
+        </div>
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * 渲染 YouBike 站點資訊
+ */
+function renderYouBikeStations(stations) {
+  if (!stations || stations.length === 0) {
+    return '<p class="data-row">附近無 YouBike 站點</p>';
+  }
+
+  let html = '<div class="youbike-list">';
+
+  stations.forEach((station, index) => {
+    const stationName = station.station_name || '未知站點';
+    const availableBikes = station.available_bikes ?? 0;
+    const availableSpaces = station.available_spaces ?? 0;
+    const distance = station.distance_m || 0;
+    const walkingTime = station.walking_time_min || 0;
+    const bikeType = station.bike_type || 'YouBike';
+    const serviceStatus = station.service_status === 1 ? '營運中' : '暫停服務';
+
+    // 可借車輛狀態：0 = 紅色，1-3 = 橘色，>3 = 綠色
+    let bikeStatusColor = '#e74c3c'; // 紅色
+    let bikeStatusIcon = '🚫';
+    if (availableBikes > 3) {
+      bikeStatusColor = '#27ae60'; // 綠色
+      bikeStatusIcon = '✅';
+    } else if (availableBikes > 0) {
+      bikeStatusColor = '#f39c12'; // 橘色
+      bikeStatusIcon = '⚠️';
+    }
+
+    html += `
+      <div class="youbike-item" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === stations.length - 1 ? 'border-bottom: none;' : ''}">
+        <div class="data-row" style="margin-bottom: 8px;">
+          <span class="data-label" style="font-weight: bold; color: #e67e22;">🚲 ${stationName}</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">📍 距離</span>
+          <span class="data-value">${distance}m (步行約 ${walkingTime} 分鐘)</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">🚴 可借車輛</span>
+          <span class="data-value" style="color: ${bikeStatusColor}; font-weight: bold;">${bikeStatusIcon} ${availableBikes} 輛</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">🅿️ 可還空位</span>
+          <span class="data-value">${availableSpaces} 個</span>
+        </div>
+        <div class="data-row">
+          <span class="data-label">ℹ️ 類型</span>
+          <span class="data-value">${bikeType} (${serviceStatus})</span>
+        </div>
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * 渲染公車到站資訊
+ */
+function renderBusArrivals(arrivals, routeName) {
+  if (!arrivals || arrivals.length === 0) {
+    return '<p>目前無到站資訊</p>';
+  }
+
   let html = '';
-
-  // 顯示查詢字串（如果有）
-  if (query) {
-    html += `
-      <div class="data-row">
-        <span class="data-label">🔍 查詢</span>
-        <span class="data-value">${query}</span>
-      </div>
-    `;
-  }
-
-  // 地點名稱（POI、建築物等）
-  if (bestMatch.name && bestMatch.name !== bestMatch.road) {
-    html += `
-      <div class="data-row">
-        <span class="data-label">� 地點</span>
-        <span class="data-value">${bestMatch.name}</span>
-      </div>
-    `;
-  }
-
-  // 地址（路名 + 門牌號）
-  if (bestMatch.road) {
-    const address = bestMatch.house_number 
-      ? `${bestMatch.road}${bestMatch.house_number}號`
-      : bestMatch.road;
-    html += `
-      <div class="data-row">
-        <span class="data-label">� 地址</span>
-        <span class="data-value">${address}</span>
-      </div>
-    `;
-  }
-
-  // 區域 + 城市
-  const locationParts = [];
-  if (bestMatch.suburb) locationParts.push(bestMatch.suburb);
-  if (bestMatch.city_district && bestMatch.city_district !== bestMatch.suburb) {
-    locationParts.push(bestMatch.city_district);
-  }
-  if (bestMatch.city) locationParts.push(bestMatch.city);
   
-  if (locationParts.length > 0) {
+  // 按站點分組
+  const stopGroups = {};
+  arrivals.forEach(arr => {
+    const stopName = arr.stop_name || '未知站點';
+    if (!stopGroups[stopName]) {
+      stopGroups[stopName] = [];
+    }
+    stopGroups[stopName].push(arr);
+  });
+
+  // 渲染每個站點
+  Object.entries(stopGroups).slice(0, 3).forEach(([stopName, stopArrivals], index) => {
+    const firstArr = stopArrivals[0];
+    const distance = firstArr.distance_m ? `${Math.round(firstArr.distance_m)}m` : '';
+    
     html += `
-      <div class="data-row">
-        <span class="data-label">📍 位置</span>
-        <span class="data-value">${locationParts.join(', ')}</span>
-      </div>
+      <div class="data-row" style="flex-direction: column; align-items: flex-start; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(0,0,0,0.05);">
+        <div style="display: flex; justify-content: space-between; width: 100%; margin-bottom: 4px;">
+          <span class="data-label" style="font-weight: 600;">🚏 ${stopName}</span>
+          ${distance ? `<span class="data-value" style="font-size: 0.85em; opacity: 0.7;">${distance}</span>` : ''}
+        </div>
     `;
+    
+    stopArrivals.forEach(arr => {
+      const direction = arr.direction === 0 ? '往 ↑' : '返 ↓';
+      const status = arr.status || '未知';
+      html += `
+        <div style="display: flex; justify-content: space-between; width: 100%; padding: 2px 0;">
+          <span style="font-size: 0.9em; opacity: 0.8;">${direction}</span>
+          <span class="data-value" style="font-size: 0.9em;">${status}</span>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+  });
+
+  return html;
+}
+
+/**
+ * 渲染附近公車站點
+ */
+function renderNearbyStops(stops) {
+  if (!stops || stops.length === 0) {
+    return '<p>附近沒有公車站</p>';
   }
 
-  // 郵遞區號
-  if (bestMatch.postcode) {
+  let html = '';
+  stops.slice(0, 5).forEach((stop, index) => {
+    const stopName = stop.stop_name || '未知站點';
+    const distance = stop.distance_m ? `${Math.round(stop.distance_m)}m` : '';
+    const walkTime = stop.walking_time_min ? `步行 ${stop.walking_time_min} 分` : '';
+    
     html += `
-      <div class="data-row">
-        <span class="data-label">📮 郵遞區號</span>
-        <span class="data-value">${bestMatch.postcode}</span>
+      <div class="data-row" style="margin-bottom: 8px;">
+        <div style="flex: 1;">
+          <div style="font-weight: 600; margin-bottom: 2px;">🚏 ${stopName}</div>
+          <div style="font-size: 0.85em; opacity: 0.7;">${walkTime} ${distance ? `(${distance})` : ''}</div>
+        </div>
       </div>
     `;
-  }
+  });
 
-  // 如果有多個結果，顯示數量
-  if (results.length > 1) {
-    html += `
-      <div class="data-row" style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
-        <span class="data-label">📊 其他結果</span>
-        <span class="data-value">共 ${results.length} 個地點</span>
-      </div>
-    `;
-  }
-
-  // Google Maps 連結（可選）
-  if (bestMatch.lat && bestMatch.lon) {
-    const mapsUrl = `https://www.google.com/maps?q=${bestMatch.lat},${bestMatch.lon}`;
-    html += `
-      <div class="data-row" style="margin-top: 8px;">
-        <a href="${mapsUrl}" target="_blank" rel="noopener noreferrer" 
-           style="color: #4fc3f7; text-decoration: none; font-size: 0.9em;">
-          🗺️ 在 Google Maps 中查看
-        </a>
-      </div>
-    `;
-  }
-
-  return html || '<p>無地理數據</p>';
+  return html;
 }
 
 /**
@@ -624,119 +689,4 @@ function renderLocationData(data) {
  */
 function renderJSONFallback(data) {
   return `<pre style="font-size: 0.85em; white-space: pre-wrap;">${JSON.stringify(data, null, 2)}</pre>`;
-}
-
-// ========== RWD 響應式側邊欄控制 ==========
-
-/**
- * 切換工具卡片側邊欄（手機版）
- */
-function toggleToolSidebar() {
-  const sidebar = document.getElementById('tool-sidebar');
-  const toggle = document.getElementById('tool-sidebar-toggle');
-
-  if (sidebar.classList.contains('active')) {
-    sidebar.classList.remove('active');
-    toggle.classList.remove('active');
-  } else {
-    sidebar.classList.add('active');
-    toggle.classList.add('active');
-    // 檢查側邊欄內是否有卡片，動態更新切換按鈕
-    updateSidebarToggle();
-  }
-}
-
-/**
- * 更新側邊欄切換按鈕狀態
- */
-function updateSidebarToggle() {
-  // 新的設計中按鈕始終可見，不需要特殊狀態
-  return;
-}
-
-/**
- * 檢測是否為手機/平板模式
- */
-function isMobileMode() {
-  return window.innerWidth <= 1024;
-}
-
-// 重寫 addToolCard 函數，支援雙容器（桌面 vs 手機）
-const originalAddToolCard = addToolCard;
-function addToolCard(type) {
-  if (isMobileMode()) {
-    // 手機版：卡片加到側邊欄
-    const sidebarCards = document.getElementById('tool-sidebar-cards');
-
-    const card = document.createElement('div');
-    card.className = 'voice-tool-card';
-    card.dataset.type = type;
-
-    // 複製原有的卡片內容生成邏輯
-    if (type === 'weather') {
-      card.innerHTML = `
-        <div class="card-header">
-          <div class="card-icon">🌤️</div>
-          <h3>台北天氣</h3>
-        </div>
-        <div class="card-content">
-          <div class="data-row">
-            <span class="data-label">溫度</span>
-            <span class="data-value">23°C</span>
-          </div>
-          <div class="data-row">
-            <span class="data-label">狀況</span>
-            <span class="data-value">晴朗</span>
-          </div>
-          <div class="data-row">
-            <span class="data-label">濕度</span>
-            <span class="data-value">65%</span>
-          </div>
-        </div>
-      `;
-    } else if (type === 'news') {
-      card.innerHTML = `
-        <div class="card-header">
-          <div class="card-icon">📰</div>
-          <h3>今日科技新聞</h3>
-        </div>
-        <div class="card-content">
-          <div class="data-row">
-            <span style="font-size: 13px; line-height: 1.6;">
-              • OpenAI 發布新模型<br>
-              • 蘋果推出 Vision Pro 2<br>
-              • 台積電宣布 2nm 製程
-            </span>
-          </div>
-        </div>
-      `;
-    } else if (type === 'health') {
-      card.innerHTML = `
-        <div class="card-header">
-          <div class="card-icon">❤️</div>
-          <h3>健康數據</h3>
-        </div>
-        <div class="card-content">
-          <div class="data-row">
-            <span class="data-label">心率</span>
-            <span class="data-value">72 bpm</span>
-          </div>
-          <div class="data-row">
-            <span class="data-label">步數</span>
-            <span class="data-value">8,542</span>
-          </div>
-          <div class="data-row">
-            <span class="data-label">血氧</span>
-            <span class="data-value">98%</span>
-          </div>
-        </div>
-      `;
-    }
-
-    sidebarCards.appendChild(card);
-    updateSidebarToggle();
-  } else {
-    // 桌面版：使用原有邏輯
-    originalAddToolCard(type);
-  }
 }

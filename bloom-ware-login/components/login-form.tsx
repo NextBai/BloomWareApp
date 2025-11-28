@@ -1,18 +1,123 @@
 "use client"
 
+import { useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { TulipIllustration } from "@/components/tulip-illustration"
 import { Mic } from "lucide-react"
 
 export function LoginForm() {
-  const handleGoogleLogin = () => {
-    // Google login logic here
-    console.log("Google login clicked")
+  // 處理 OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    const error = params.get('error');
+
+    if (error) {
+      console.error('❌ OAuth 錯誤:', error);
+      alert(`Google 登入失敗: ${error}`);
+      // 清除 URL 參數
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
+    if (code && state) {
+      console.log('🔍 檢測到 OAuth callback，處理授權碼...');
+      handleOAuthCallback(code, state);
+    }
+  }, []);
+
+  const handleOAuthCallback = async (code: string, state: string) => {
+    try {
+      // 從 sessionStorage 獲取 PKCE 參數
+      const storedState = sessionStorage.getItem('oauth_state');
+      const codeVerifier = sessionStorage.getItem('oauth_code_verifier');
+
+      console.log('🔐 驗證 state 參數...');
+      if (state !== storedState) {
+        throw new Error('State 參數不匹配，可能存在 CSRF 攻擊');
+      }
+
+      console.log('📤 發送授權碼到後端...');
+      const response = await fetch('/auth/google/callback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code,
+          state,
+          code_verifier: codeVerifier,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        console.log('✅ 登入成功！');
+
+        // 存儲 JWT token
+        localStorage.setItem('jwt_token', data.access_token);
+
+        // 清除 sessionStorage
+        sessionStorage.removeItem('oauth_state');
+        sessionStorage.removeItem('oauth_code_verifier');
+
+        // 清除 URL 參數並導向主應用
+        window.history.replaceState({}, '', window.location.pathname);
+
+        // 導向主應用頁面
+        window.location.href = '/static/';
+      } else {
+        throw new Error(data.error || '登入失敗');
+      }
+    } catch (error) {
+      console.error('❌ OAuth callback 處理失敗:', error);
+      alert(`登入處理失敗: ${error}`);
+
+      // 清除 URL 參數
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    try {
+      console.log('🚀 開始 Google OAuth 登入流程...');
+
+      // 從後端獲取授權 URL 和 PKCE 參數
+      const response = await fetch('/auth/google/url');
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || '獲取授權 URL 失敗');
+      }
+
+      console.log('✅ 獲取授權 URL 成功');
+
+      // 存儲 PKCE 參數到 sessionStorage
+      sessionStorage.setItem('oauth_state', data.state);
+      sessionStorage.setItem('oauth_code_verifier', data.code_verifier);
+
+      console.log('🔐 PKCE 參數已存儲');
+
+      // 重定向到 Google 授權頁面
+      console.log('🌐 重定向到 Google 授權頁面...');
+      window.location.href = data.auth_url;
+
+    } catch (error) {
+      console.error('❌ OAuth 初始化失敗:', error);
+      alert('Google 登入初始化失敗，請稍後再試');
+    }
   }
 
   const handleVoiceLogin = () => {
-    // Voice login logic here
-    console.log("Voice login clicked")
+    console.log('🎤 開始語音登入...');
+
+    // 存儲匿名語音登入 token
+    localStorage.setItem('jwt_token', 'anonymous_voice_login');
+
+    // 導向主應用頁面（語音登入模式）
+    window.location.href = '/static/';
   }
 
   return (

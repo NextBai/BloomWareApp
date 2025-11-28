@@ -149,6 +149,18 @@ def _format_history_for_prompt(history: List[Dict[str, str]]) -> str:
     return "\n".join(lines) if lines else "（無）"
 
 
+def _safe_str(val: Any) -> str:
+    """安全地將任意值轉換為字串，避免對 dict 調用 .strip() 導致錯誤"""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, dict):
+        # dict 可能是嵌套的環境資訊，嘗試提取常見欄位
+        return str(val.get("message") or val.get("text") or val.get("value") or "").strip()
+    return str(val).strip()
+
+
 def _format_env_context(ctx: Dict[str, Any]) -> str:
     """將環境資訊整理成可讀文字，確保 AI 能掌握使用者所在位置（精確到路口、門牌號）。"""
     if not ctx:
@@ -157,9 +169,9 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     parts: List[str] = []
 
     # 優先顯示詳細地址（最重要）
-    detailed_address = (ctx.get("detailed_address") or "").strip()
-    label = (ctx.get("label") or "").strip()
-    address_display = (ctx.get("address_display") or "").strip()
+    detailed_address = _safe_str(ctx.get("detailed_address"))
+    label = _safe_str(ctx.get("label"))
+    address_display = _safe_str(ctx.get("address_display"))
     
     if detailed_address:
         parts.append(f"📍 精確位置:\n{detailed_address}")
@@ -169,9 +181,9 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
         parts.append(f"📍 當前位置: {address_display}")
     
     # 如果有門牌資訊，額外強調
-    road = (ctx.get("road") or "").strip()
-    house_number = (ctx.get("house_number") or "").strip()
-    postcode = (ctx.get("postcode") or "").strip()
+    road = _safe_str(ctx.get("road"))
+    house_number = _safe_str(ctx.get("house_number"))
+    postcode = _safe_str(ctx.get("postcode"))
     
     if road and house_number and not detailed_address:
         address_line = f"{road}{house_number}號"
@@ -180,10 +192,10 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
         parts.append(f"門牌地址: {address_line}")
     
     # 區域資訊（如果沒有在 detailed_address 中顯示）
-    city_district = (ctx.get("city_district") or "").strip()
-    suburb = (ctx.get("suburb") or "").strip()
-    city = (ctx.get("city") or "").strip()
-    admin = (ctx.get("admin") or "").strip()
+    city_district = _safe_str(ctx.get("city_district"))
+    suburb = _safe_str(ctx.get("suburb"))
+    city = _safe_str(ctx.get("city"))
+    admin = _safe_str(ctx.get("admin"))
     
     if not detailed_address:
         if city_district:
@@ -206,7 +218,7 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
             lat_f = float(lat)
             lon_f = float(lon)
             coord_text = f"緯度 {lat_f:.6f}, 經度 {lon_f:.6f}"
-            geohash = (ctx.get("geohash_7") or "").strip()
+            geohash = _safe_str(ctx.get("geohash_7"))
             if geohash:
                 parts.append(f"座標: {coord_text}（Geohash {geohash}）")
             else:
@@ -215,9 +227,9 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
         pass
 
     # POI 資訊（如果是特殊地點）
-    amenity = (ctx.get("amenity") or "").strip()
-    shop = (ctx.get("shop") or "").strip()
-    building = (ctx.get("building") or "").strip()
+    amenity = _safe_str(ctx.get("amenity"))
+    shop = _safe_str(ctx.get("shop"))
+    building = _safe_str(ctx.get("building"))
     
     poi_info = []
     if amenity:
@@ -230,13 +242,13 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     if poi_info:
         parts.append(" | ".join(poi_info))
 
-    tz = (ctx.get("tz") or "").strip()
+    tz = _safe_str(ctx.get("tz"))
     if tz:
         parts.append(f"時區: {tz}")
 
     heading = ctx.get("heading_cardinal") or ctx.get("heading_deg")
     if heading is not None:
-        parts.append(f"方位: {heading}")
+        parts.append(f"方位: {_safe_str(heading)}")
 
     acc = ctx.get("accuracy_m")
     try:
@@ -245,11 +257,11 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     except (ValueError, TypeError):
         pass
 
-    locale = (ctx.get("locale") or "").strip()
+    locale = _safe_str(ctx.get("locale"))
     if locale:
         parts.append(f"語系: {locale}")
 
-    device = (ctx.get("device") or "").strip()
+    device = _safe_str(ctx.get("device"))
     if device:
         parts.append(f"裝置: {device}")
 

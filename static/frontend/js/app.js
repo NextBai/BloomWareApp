@@ -1,14 +1,3 @@
-// 全域控制：除非 window.BLOOMWARE_DEBUG 為 true，否則靜音非必要的 console 輸出
-(function silenceConsoleLogs() {
-  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
-    const noop = () => {};
-    console.log = noop;
-    console.info = noop;
-    console.debug = noop;
-    console.__bloomwareSilenced = true;
-  }
-})();
-
 // ========== 登入狀態檢查 ==========
 
 /**
@@ -55,7 +44,7 @@ async function checkLoginStatus() {
   if (!token) {
     // 未登入，導向登入頁面
     console.log('⚠️ 未登入，導向登入頁面...');
-    window.location.href = '/static/login.html';
+    window.location.href = '/login/';
     return false;
   }
 
@@ -67,7 +56,7 @@ async function checkLoginStatus() {
     if (payload.exp && payload.exp < currentTime) {
       console.error('❌ Token 已過期，跳轉到登入頁面');
       localStorage.removeItem('jwt_token');
-      window.location.href = '/static/login.html';
+      window.location.href = '/login/';
       return false;
     }
     
@@ -75,7 +64,7 @@ async function checkLoginStatus() {
   } catch (error) {
     console.error('❌ Token 解析失敗:', error);
     localStorage.removeItem('jwt_token');
-    window.location.href = '/static/login.html';
+    window.location.href = '/login/';
     return false;
   }
 
@@ -90,14 +79,21 @@ async function checkLoginStatus() {
 function initializeApp(token) {
   console.log('🚀 初始化應用...');
 
+  // 隱藏登入覆蓋層
+  const loginOverlay = document.getElementById('loginOverlay');
+  if (loginOverlay) {
+    loginOverlay.classList.add('hidden');
+    console.log('✅ 登入覆蓋層已隱藏');
+  }
+
   // 初始化各個模組的事件監聽器
   initLoginButton();
-  initExitButton();  // 初始化登出按鈕
+  initLogoutButton();
+  initChatIcon();
   initEmotionSelector();
   initTranscriptControls();
   initToolCardControls();
   initAgentControls();
-  initModeToggle();  // 初始化模式切換按鈕
 
   // 同步 MCP 工具 metadata
   syncToolMetadata();
