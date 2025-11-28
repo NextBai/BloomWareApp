@@ -1,43 +1,17 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { TulipIllustration } from "@/components/tulip-illustration"
 import { Mic } from "lucide-react"
 
 export function LoginForm() {
-  // 處理 OAuth callback
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const state = params.get('state');
-    const error = params.get('error');
+  const popupRef = useRef<Window | null>(null)
+  const popupCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
-    if (error) {
-      console.error('❌ OAuth 錯誤:', error);
-      alert(`Google 登入失敗: ${error}`);
-      // 清除 URL 參數
-      window.history.replaceState({}, '', window.location.pathname);
-      return;
-    }
-
-    if (code && state) {
-      console.log('🔍 檢測到 OAuth callback，處理授權碼...');
-      handleOAuthCallback(code, state);
-    }
-  }, []);
-
-  const handleOAuthCallback = async (code: string, state: string) => {
+  // 處理 OAuth callback（來自 popup 的 postMessage 或直接 URL 參數）
+  const handleOAuthCallback = useCallback(async (code: string, state: string, codeVerifier: string) => {
     try {
-      // 從 sessionStorage 獲取 PKCE 參數
-      const storedState = sessionStorage.getItem('oauth_state');
-      const codeVerifier = sessionStorage.getItem('oauth_code_verifier');
-
-      console.log('🔐 驗證 state 參數...');
-      if (state !== storedState) {
-        throw new Error('State 參數不匹配，可能存在 CSRF 攻擊');
-      }
-
       console.log('📤 發送授權碼到後端...');
       const response = await fetch('/auth/google/callback', {
         method: 'POST',
@@ -55,18 +29,10 @@ export function LoginForm() {
 
       if (data.success) {
         console.log('✅ 登入成功！');
-
-        // 存儲 JWT token
         localStorage.setItem('jwt_token', data.access_token);
-
-        // 清除 sessionStorage
         sessionStorage.removeItem('oauth_state');
         sessionStorage.removeItem('oauth_code_verifier');
-
-        // 清除 URL 參數並導向主應用
         window.history.replaceState({}, '', window.location.pathname);
-
-        // 導向主應用頁面
         window.location.href = '/static/';
       } else {
         throw new Error(data.error || '登入失敗');
@@ -74,15 +40,104 @@ export function LoginForm() {
     } catch (error) {
       console.error('❌ OAuth callback 處理失敗:', error);
       alert(`登入處理失敗: ${error}`);
-
-      // 清除 URL 參數
       window.history.replaceState({}, '', window.location.pathname);
     }
-  };
+  }, []);
+
+  // 監聽來自 popup 的 postMessage
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      // 驗證來源（允許同源和 HF Spaces 域名）
+      const allowedOrigins = [
+        window.location.origin,
+        'https://xiaobai1221-bloom-ware.hf.space',
+      ];
+      
+      if (!allowedOrigins.some(origin => event.origin.includes(origin.replace('https://', '').replace('http://', '')))) {
+        return;
+      }
+
+      if (event.data?.type === 'oauth_callback') {
+        console.log('📨 收到 popup OAuth 回調');
+        const { code, state } = event.data;
+        const codeVerifier = sessionStorage.getItem('oauth_code_verifier') || '';
+        const storedState = sessionStorage.getItem('oauth_state');
+
+        if (state !== storedState) {
+          console.error('❌ State 參數不匹配');
+          alert('登入驗證失敗，請重試');
+          return;
+        }
+
+        // 關閉 popup
+        if (popupRef.current && !popupRef.current.closed) {
+          popupRef.current.close();
+        }
+
+        handleOAuthCallback(code, state, codeVerifier);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [handleOAuthCallback]);
+
+  // 檢查是否在 popup 中，如果是則發送 postMessage 給 opener
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    const error = params.get('error');
+
+    if (error) {
+      console.error('❌ OAuth 錯誤:', error);
+      if (window.opener) {
+        window.opener.postMessage({ type: 'oauth_error', error }, '*');
+        window.close();
+      } else {
+        alert(`Google 登入失敗: ${error}`);
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+      return;
+    }
+
+    if (code && state) {
+      console.log('🔍 檢測到 OAuth callback');
+      
+      // 如果是在 popup 中，發送 postMessage 給 opener
+      if (window.opener) {
+        console.log('📤 在 popup 中，發送 postMessage 給主視窗');
+        window.opener.postMessage({ type: 'oauth_callback', code, state }, '*');
+        window.close();
+      } else {
+        // 直接訪問（非 iframe 環境），使用傳統流程
+        console.log('📤 直接訪問模式，處理 OAuth callback');
+        const codeVerifier = sessionStorage.getItem('oauth_code_verifier') || '';
+        const storedState = sessionStorage.getItem('oauth_state');
+        
+        if (state === storedState) {
+          handleOAuthCallback(code, state, codeVerifier);
+        } else {
+          console.error('❌ State 參數不匹配');
+          alert('登入驗證失敗，請重試');
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      }
+    }
+  }, [handleOAuthCallback]);
+
+  // 清理 popup 檢查 interval
+  useEffect(() => {
+    return () => {
+      if (popupCheckIntervalRef.current) {
+        clearInterval(popupCheckIntervalRef.current);
+      }
+    };
+  }, []);
 
   const handleGoogleLogin = async () => {
     try {
-      console.log('🚀 開始 Google OAuth 登入流程...');
+      console.log('🚀 開始 Google OAuth 登入流程（Popup 模式）...');
 
       // 從後端獲取授權 URL 和 PKCE 參數
       const response = await fetch('/auth/google/url');
@@ -100,9 +155,36 @@ export function LoginForm() {
 
       console.log('🔐 PKCE 參數已存儲');
 
-      // 重定向到 Google 授權頁面
-      console.log('🌐 重定向到 Google 授權頁面...');
-      window.location.href = data.auth_url;
+      // 計算 popup 視窗位置（置中）
+      const width = 500;
+      const height = 600;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+
+      // 在 popup 視窗中打開 Google 授權頁面
+      console.log('🌐 在 popup 視窗中打開 Google 授權頁面...');
+      popupRef.current = window.open(
+        data.auth_url,
+        'google_oauth_popup',
+        `width=${width},height=${height},left=${left},top=${top},scrollbars=yes,resizable=yes`
+      );
+
+      if (!popupRef.current) {
+        // Popup 被阻擋，fallback 到直接重定向
+        console.warn('⚠️ Popup 被阻擋，嘗試直接重定向...');
+        window.location.href = data.auth_url;
+        return;
+      }
+
+      // 監控 popup 是否被手動關閉
+      popupCheckIntervalRef.current = setInterval(() => {
+        if (popupRef.current && popupRef.current.closed) {
+          console.log('📪 Popup 視窗已關閉');
+          if (popupCheckIntervalRef.current) {
+            clearInterval(popupCheckIntervalRef.current);
+          }
+        }
+      }, 1000);
 
     } catch (error) {
       console.error('❌ OAuth 初始化失敗:', error);
@@ -112,11 +194,7 @@ export function LoginForm() {
 
   const handleVoiceLogin = () => {
     console.log('🎤 開始語音登入...');
-
-    // 存儲匿名語音登入 token
     localStorage.setItem('jwt_token', 'anonymous_voice_login');
-
-    // 導向主應用頁面（語音登入模式）
     window.location.href = '/static/';
   }
 
