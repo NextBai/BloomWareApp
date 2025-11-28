@@ -4,12 +4,6 @@ let isPlaying = false;    // 是否正在播放
 let audioContext = null;  // 預先建立的 AudioContext（繞過自動播放限制）
 let userGestureReceived = false;  // 是否已收到用戶手勢
 
-// TTS 音訊分析相關
-let ttsAnalyser = null;   // TTS 音訊分析器
-let ttsSource = null;     // TTS 音訊源節點
-let ttsDataArray = null;  // TTS 頻率數據陣列
-let ttsBufferLength = 0;  // TTS 數據陣列長度
-
 console.log('✅ TTS 模組已載入');
 
 // ========== 用戶手勢處理（解鎖自動播放）==========
@@ -86,20 +80,15 @@ async function speakText(text) {
     currentAudio = new Audio(audioUrl);
     isPlaying = true;
 
-    // 設置 TTS 音訊分析（讓波形跟隨 TTS 音訊跳動）
-    setupTTSAudioAnalysis(currentAudio);
-
     currentAudio.onended = () => {
       console.log('✅ 語音播放完成');
       isPlaying = false;
-      stopTTSAudioAnalysis();
       URL.revokeObjectURL(audioUrl);
     };
 
     currentAudio.onerror = (e) => {
       console.error('❌ 音頻播放錯誤:', e);
       isPlaying = false;
-      stopTTSAudioAnalysis();
       URL.revokeObjectURL(audioUrl);
     };
 
@@ -109,7 +98,7 @@ async function speakText(text) {
 
       if (playPromise !== undefined) {
         await playPromise;
-        console.log('▶️ 開始播放語音（波形同步）');
+        console.log('▶️ 開始播放語音');
       }
     } catch (playError) {
       // 處理瀏覽器自動播放策略限制
@@ -171,82 +160,6 @@ function stopSpeaking() {
     currentAudio.pause();
     currentAudio.currentTime = 0;
     isPlaying = false;
-    stopTTSAudioAnalysis();
     console.log('⏹️ 停止語音播放');
   }
-}
-
-// ========== TTS 音訊分析（讓波形跟隨 TTS 跳動）==========
-
-/**
- * 設置 TTS 音訊分析
- * @param {HTMLAudioElement} audioElement - Audio 元素
- */
-function setupTTSAudioAnalysis(audioElement) {
-  try {
-    // 確保 AudioContext 已初始化
-    if (!audioContext) {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      userGestureReceived = true;
-    }
-
-    // 創建分析器節點
-    ttsAnalyser = audioContext.createAnalyser();
-    ttsAnalyser.fftSize = 256; // 與 canvas.js 保持一致
-    ttsAnalyser.smoothingTimeConstant = 0.8;
-
-    // 創建音訊源（從 Audio 元素）
-    ttsSource = audioContext.createMediaElementSource(audioElement);
-
-    // 連接：音訊源 → 分析器 → 輸出（揚聲器）
-    ttsSource.connect(ttsAnalyser);
-    ttsAnalyser.connect(audioContext.destination);
-
-    // 準備數據陣列
-    ttsBufferLength = ttsAnalyser.frequencyBinCount;
-    ttsDataArray = new Uint8Array(ttsBufferLength);
-
-    console.log('🎵 TTS 音訊分析已啟動');
-
-    // 通知 canvas.js 使用 TTS 音訊數據
-    if (typeof startTTSVisualization === 'function') {
-      startTTSVisualization(ttsAnalyser, ttsDataArray, ttsBufferLength);
-    }
-
-  } catch (error) {
-    console.error('❌ TTS 音訊分析設置失敗:', error);
-  }
-}
-
-/**
- * 停止 TTS 音訊分析
- */
-function stopTTSAudioAnalysis() {
-  if (ttsSource) {
-    try {
-      ttsSource.disconnect();
-    } catch (e) {
-      // 忽略斷開連接錯誤
-    }
-    ttsSource = null;
-  }
-
-  if (ttsAnalyser) {
-    try {
-      ttsAnalyser.disconnect();
-    } catch (e) {
-      // 忽略斷開連接錯誤
-    }
-    ttsAnalyser = null;
-  }
-
-  ttsDataArray = null;
-  ttsBufferLength = 0;
-
-  // 通知 canvas.js 停止使用 TTS 音訊數據
-  if (typeof stopTTSVisualization === 'function') {
-    stopTTSVisualization();
-  }
-
-  console.log('🛑 TTS 音訊分析已停止');
 }

@@ -66,16 +66,29 @@ class ToolCoordinator:
     ) -> Dict[str, Any]:
         merged = dict(metadata.defaults)
         merged.update(arguments or {})
+        
+        # 注入 user_id 到參數中，讓工具可以從 arguments 中讀取
+        if user_id:
+            merged["_user_id"] = user_id
+
+        logger.info(f"📦 [Coordinator] 準備參數: tool={metadata.name}, user_id={user_id}, requires_env={metadata.requires_env}")
 
         if metadata.requires_env and user_id:
             env_ctx = await self._env_provider(user_id)
+            logger.info(f"📦 [Coordinator] 環境資訊: {env_ctx}")
             if env_ctx:
                 for field in metadata.requires_env:
                     if merged.get(field) is not None:
                         continue
-                    if field in env_ctx:
-                        merged[field] = env_ctx[field]
+                    env_value = env_ctx.get(field)
+                    # 只注入非 None 的值，避免覆蓋工具的預設值或觸發 schema 驗證錯誤
+                    if env_value is not None:
+                        merged[field] = env_value
+                        logger.info(f"📦 [Coordinator] 注入環境變數: {field}={env_value}")
+        elif not user_id:
+            logger.warning(f"⚠️ [Coordinator] user_id 為 None，無法注入環境變數")
 
+        logger.info(f"📦 [Coordinator] 最終參數: {merged}")
         return merged
 
     async def _execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

@@ -4,7 +4,7 @@ TDX YouBike 即時查詢工具
 """
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from .base_tool import MCPTool, StandardToolSchemas, ExecutionError
 from .tdx_base import TDXBaseAPI
@@ -62,6 +62,14 @@ class TDXBikeTool(MCPTool):
                 "type": "integer",
                 "description": "返回結果數量",
                 "default": 5
+            },
+            "lat": {
+                "type": "number",
+                "description": "用戶緯度（由系統自動注入）"
+            },
+            "lon": {
+                "type": "number",
+                "description": "用戶經度（由系統自動注入）"
             }
         }, required=[])
     
@@ -86,34 +94,88 @@ class TDXBikeTool(MCPTool):
         return schema
     
     @classmethod
-    async def execute(cls, arguments: Dict[str, Any], user_id: str = None) -> Dict[str, Any]:
-        station_name = arguments.get("station_name", "").strip()
+    async def execute(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        # 安全取得字串參數
+        def safe_str(val) -> str:
+            if val is None:
+                return ""
+            if isinstance(val, dict):
+                return ""
+            return str(val).strip()
+
+        # 從 arguments 中讀取 user_id（由 coordinator 注入）
+        user_id = arguments.get("_user_id")
+        
+        station_name = safe_str(arguments.get("station_name"))
         city = arguments.get("city")
         radius_m = min(int(arguments.get("radius_m", 500)), 2000)
         limit = min(int(arguments.get("limit", 5)), 20)
         
-        # 1. 取得用戶位置
-        env_ctx = await get_user_env_current(user_id) if user_id else None
-        if not env_ctx or not env_ctx.get("success"):
-            if not station_name:
-                raise ExecutionError("無法取得您的位置，請提供站點名稱或開啟定位權限")
-            user_lat, user_lon, user_city = None, None, None
-        else:
-            ctx = env_ctx.get("context", {})
-            user_lat = ctx.get("lat")
-            user_lon = ctx.get("lon")
-            user_city = ctx.get("city", "")
+        # 1. 取得用戶位置和城市（優先從 arguments 讀取，由 coordinator 注入）
+        user_lat = arguments.get("lat")
+        user_lon = arguments.get("lon")
+        user_city = safe_str(arguments.get("city"))
         
-        # 2. 自動判斷城市
+        logger.info(f"🚲 [YouBike] 輸入參數: lat={user_lat}, lon={user_lon}, city={user_city}, station={station_name}, user_id={user_id}")
+        
+        # 從資料庫補充缺失的位置資訊（僅當 coordinator 沒有注入時）
+        if user_id and (user_lat is None or user_lon is None):
+            try:
+                env_ctx = await get_user_env_current(user_id)
+                logger.info(f"📍 [YouBike] 資料庫查詢結果: {env_ctx}")
+                if env_ctx and env_ctx.get("success"):
+                    ctx = env_ctx.get("context", {})
+                    if user_lat is None:
+                        user_lat = ctx.get("lat")
+                    if user_lon is None:
+                        user_lon = ctx.get("lon")
+                    if not user_city:
+                        user_city = safe_str(ctx.get("city"))
+                    logger.info(f"📍 [YouBike] 補充後: lat={user_lat}, lon={user_lon}, city={user_city}")
+                else:
+                    logger.warning(f"⚠️ [YouBike] 資料庫查詢失敗或無資料: {env_ctx}")
+            except Exception as e:
+                logger.warning(f"⚠️ [YouBike] 資料庫查詢異常: {e}")
+        
+        # 檢查必要條件
+        if not station_name and (user_lat is None or user_lon is None):
+            logger.error(f"🚲 [YouBike] 位置資訊缺失: lat={user_lat}, lon={user_lon}, station_name={station_name}")
+            raise ExecutionError("🚲 想幫您找附近的 YouBike，但目前沒有您的位置資訊。請在 App 中開啟定位，或告訴我您想查詢哪個站點（例如：市政府 YouBike）")
+        
+        # 2. 自動判斷城市（優先使用反向地理編碼）
         if not city:
-            city = cls._map_city_name(user_city) if user_city else "Taipei"
+            final_city = None
+            city_source = "預設"
+            
+            # 優先：即時反向地理編碼
+            if user_lat and user_lon:
+                geocoded = await cls._reverse_geocode_city(user_lat, user_lon)
+                if geocoded:
+                    final_city = geocoded
+                    city_source = "反向地理編碼"
+            
+            # 其次：環境參數
+            if not final_city and user_city:
+                final_city = user_city
+                city_source = "環境參數"
+            
+            # 最後：經緯度範圍推斷
+            if not final_city and user_lat and user_lon:
+                guessed = cls._guess_city_from_location(user_lat, user_lon)
+                if guessed:
+                    final_city = guessed
+                    city_source = "經緯度推斷"
+            
+            city = cls._map_city_name(final_city) if final_city else "Taipei"
+            logger.info(f"🏙️ 最終使用城市代碼: {city} (來源={city_source})")
         
         # 3. 查詢分支
         if station_name:
             result = await cls._query_station_availability(station_name, city)
         else:
             if not user_lat or not user_lon:
-                raise ExecutionError("查詢附近 YouBike 需要定位權限")
+                logger.error(f"🚲 [YouBike] 查詢附近站點但位置缺失: lat={user_lat}, lon={user_lon}")
+                raise ExecutionError("🚲 想幫您找附近的 YouBike，但目前沒有您的位置資訊。請在 App 中開啟定位功能")
             result = await cls._query_nearby_stations(user_lat, user_lon, city, radius_m, limit)
         
         return result
@@ -121,7 +183,8 @@ class TDXBikeTool(MCPTool):
     @classmethod
     async def _query_station_availability(cls, station_name: str, city: str) -> Dict[str, Any]:
         """查詢特定站點即時資訊"""
-        # 1. 查詢站點基本資訊
+        # 1. 查詢站點基本資訊 (v2 API)
+        # GET /v2/Bike/Station/City/{City}
         station_endpoint = f"Bike/Station/City/{city}"
         station_params = {
             "$filter": f"contains(StationName/Zh_tw, '{station_name}')",
@@ -148,7 +211,8 @@ class TDXBikeTool(MCPTool):
         station_uid = target_station.get("StationUID")
         full_station_name = target_station.get("StationName", {}).get("Zh_tw", station_name)
         
-        # 3. 查詢即時可用車輛數
+        # 3. 查詢即時可用車輛數 (v2 API)
+        # GET /v2/Bike/Availability/City/{City}
         avail_endpoint = f"Bike/Availability/City/{city}"
         avail_params = {
             "$filter": f"StationUID eq '{station_uid}'",
@@ -171,7 +235,7 @@ class TDXBikeTool(MCPTool):
             "available_spaces": avail.get("AvailableReturnBikes", 0),
             "service_status": avail.get("ServiceStatus", 1),
             "update_time": avail.get("UpdateTime", ""),
-            "bike_type": "YouBike 2.0" if "2.0" in target_station.get("BikesCapacity", "") else "YouBike 1.0"
+            "bike_type": cls._detect_bike_type(target_station, full_station_name)
         }
         
         # 4. 格式化結果
@@ -199,7 +263,8 @@ class TDXBikeTool(MCPTool):
     async def _query_nearby_stations(cls, lat: float, lon: float, city: str, 
                                      radius_m: int, limit: int) -> Dict[str, Any]:
         """查詢附近站點"""
-        # 1. 查詢附近站點（使用空間過濾）
+        # 1. 查詢附近站點（使用空間過濾）(v2 API)
+        # GET /v2/Bike/Station/City/{City}
         station_endpoint = f"Bike/Station/City/{city}"
         station_params = {
             "$spatialFilter": f"nearby({lat}, {lon}, {radius_m})",
@@ -228,7 +293,8 @@ class TDXBikeTool(MCPTool):
         stations.sort(key=lambda x: x["distance_m"])
         stations = stations[:limit]
         
-        # 3. 批次查詢即時資訊
+        # 3. 批次查詢即時資訊 (v2 API)
+        # GET /v2/Bike/Availability/City/{City}
         station_uids = [s.get("StationUID") for s in stations]
         
         avail_endpoint = f"Bike/Availability/City/{city}"
@@ -259,7 +325,7 @@ class TDXBikeTool(MCPTool):
                 "distance_m": int(distance),
                 "walking_time_min": walking_time,
                 "service_status": avail.get("ServiceStatus", 1),
-                "bike_type": "YouBike 2.0" if "2.0" in station.get("BikesCapacity", "") else "YouBike 1.0"
+                "bike_type": cls._detect_bike_type(station, station_name)
             })
         
         content = cls._format_nearby_result(results)
@@ -270,12 +336,72 @@ class TDXBikeTool(MCPTool):
         )
     
     @staticmethod
+    async def _reverse_geocode_city(lat: float, lon: float) -> Optional[str]:
+        """使用 Nominatim 反向地理編碼取得精確城市"""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://nominatim.openstreetmap.org/reverse",
+                    params={"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 10, "addressdetails": 1},
+                    headers={"User-Agent": "BloomWare/1.0"},
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    addr = data.get("address", {}) if data else {}
+                    city = addr.get("city") or addr.get("county") or addr.get("town") or ""
+                    return city.replace("市", "").replace("縣", "").strip() or None
+        except Exception:
+            return None
+    
+    @staticmethod
+    def _guess_city_from_location(lat: float, lon: float) -> str:
+        """根據經緯度推斷城市（備用方案）"""
+        city_bounds = [
+            ("桃園", 24.73, 25.12, 120.90, 121.40),
+            ("台北", 24.95, 25.10, 121.45, 121.62),
+            ("新北", 24.67, 25.30, 121.35, 122.01),
+            ("新竹", 24.68, 24.90, 120.90, 121.10),
+            ("台中", 24.00, 24.45, 120.45, 121.05),
+            ("台南", 22.85, 23.40, 120.00, 120.55),
+            ("高雄", 22.45, 23.15, 120.15, 120.80),
+        ]
+        
+        for city_name, lat_min, lat_max, lon_min, lon_max in city_bounds:
+            if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
+                return city_name
+        
+        return ""
+    
+    @staticmethod
     def _map_city_name(chinese_city: str) -> str:
         """中文城市名稱轉 TDX 代碼"""
+        if not chinese_city:
+            return "Taipei"
+        
         for key, value in TDXBikeTool.CITY_MAP.items():
             if key in chinese_city:
                 return value
         return "Taipei"
+    
+    @staticmethod
+    def _detect_bike_type(station: Dict, station_name: str) -> str:
+        """判斷 YouBike 類型（優先從站名判斷，其次從 BikesCapacity）"""
+        # 優先從站名判斷
+        if "2.0" in station_name or "YouBike2.0" in station_name:
+            return "YouBike 2.0"
+        if "1.0" in station_name or "YouBike1.0" in station_name:
+            return "YouBike 1.0"
+        
+        # 其次從 BikesCapacity 判斷
+        capacity = str(station.get("BikesCapacity", ""))
+        if "2.0" in capacity:
+            return "YouBike 2.0"
+        
+        # 預設為 2.0（新站點大多是 2.0）
+        return "YouBike 2.0"
     
     @staticmethod
     def _format_nearby_result(stations: List[Dict]) -> str:

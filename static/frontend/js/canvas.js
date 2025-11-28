@@ -1,14 +1,3 @@
-// 全域控制：未開啟 window.BLOOMWARE_DEBUG 時靜音一般 console 輸出
-(function silenceConsoleLogs() {
-  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
-    const noop = () => {};
-    console.log = noop;
-    console.info = noop;
-    console.debug = noop;
-    console.__bloomwareSilenced = true;
-  }
-})();
-
 // ========== Canvas 波形渲染（效能優化版 + 真實音訊整合）==========
 
 const canvas = document.getElementById('waveform-canvas');
@@ -31,19 +20,13 @@ for (let i = 0; i <= points; i++) {
   sinCache[i] = Math.sin(angle);
 }
 
-// Web Audio API 整合（波形視覺化專用）
+// Web Audio API 整合
 let canvasAudioContext = null;
 let analyser = null;
 let dataArray = null;
 let bufferLength = 0;
 let audioStream = null;
 let useRealAudio = false; // 是否使用真實音訊數據
-
-// TTS 音訊視覺化（讓波形跟隨 TTS 跳動）
-let useTTSAudio = false;
-let ttsAnalyserRef = null;
-let ttsDataArrayRef = null;
-let ttsBufferLengthRef = 0;
 
 /**
  * 啟動真實音訊分析
@@ -108,45 +91,14 @@ function stopRealAudioAnalysis() {
   console.log('🛑 真實音訊分析已停止');
 }
 
-/**
- * 啟動 TTS 音訊視覺化（從 tts.js 調用）
- * @param {AnalyserNode} analyser - TTS 分析器節點
- * @param {Uint8Array} dataArray - TTS 頻率數據陣列
- * @param {number} bufferLength - 數據陣列長度
- */
-function startTTSVisualization(analyser, dataArray, bufferLength) {
-  ttsAnalyserRef = analyser;
-  ttsDataArrayRef = dataArray;
-  ttsBufferLengthRef = bufferLength;
-  useTTSAudio = true;
-
-  console.log('🎵 波形開始跟隨 TTS 音訊跳動');
-}
-
-/**
- * 停止 TTS 音訊視覺化（從 tts.js 調用）
- */
-function stopTTSVisualization() {
-  useTTSAudio = false;
-  ttsAnalyserRef = null;
-  ttsDataArrayRef = null;
-  ttsBufferLengthRef = 0;
-
-  console.log('🛑 波形停止跟隨 TTS 音訊');
-}
-
 function draw360Waveform() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   const time = Date.now() * 0.001;
 
-  // 優先使用 TTS 音訊數據（如果正在播放 TTS）
-  if (useTTSAudio && ttsAnalyserRef && ttsDataArrayRef) {
-    ttsAnalyserRef.getByteFrequencyData(ttsDataArrayRef);
-  }
-  // 否則使用麥克風錄音數據
-  else if (useRealAudio && analyser && dataArray) {
-    analyser.getByteFrequencyData(dataArray);
+  // 如果有真實音訊數據，使用它
+  if (useRealAudio && analyser && dataArray) {
+    analyser.getByteFrequencyData(dataArray); // 獲取頻率數據（0-255）
   }
 
   // 繪製多層波形（淺色主題）
@@ -163,21 +115,8 @@ function draw360Waveform() {
 
       let amplitude;
 
-      // 優先處理 TTS 音訊
-      if (useTTSAudio && ttsDataArrayRef && ttsBufferLengthRef > 0) {
-        // TTS 音訊模式：將 120 個波形點對應到 ttsBufferLengthRef 個頻率數據
-        const dataIndex = Math.floor((i / points) * ttsBufferLengthRef);
-        const audioValue = ttsDataArrayRef[dataIndex] / 255.0; // 標準化到 0-1
-
-        // 結合音訊數據和時間動畫（TTS 專用：更強調低頻）
-        const wave1 = audioValue * 0.7; // 主要由 TTS 音訊驅動
-        const wave2 = Math.sin(angle * 3 - time * 1.0) * 0.15; // 保留少量動畫
-        const wave3 = sinCache[i * 5 % points] * 0.05 * Math.cos(time * 1.5);
-
-        amplitude = (wave1 + wave2 + wave3) * layerMultiplier;
-
-      } else if (useRealAudio && dataArray && bufferLength > 0) {
-        // 麥克風錄音模式：將 120 個波形點對應到 bufferLength 個頻率數據
+      if (useRealAudio && dataArray && bufferLength > 0) {
+        // 真實音訊模式：將 120 個波形點對應到 bufferLength 個頻率數據
         const dataIndex = Math.floor((i / points) * bufferLength);
         const audioValue = dataArray[dataIndex] / 255.0; // 標準化到 0-1
 

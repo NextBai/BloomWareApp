@@ -81,178 +81,129 @@ function initLoginButton() {
 
 // ========== 登出按鈕 ==========
 
-function initExitButton() {
-  const exitButton = document.querySelector('.exit-button');
-  if (exitButton) {
-    exitButton.addEventListener('click', handleLogout);
+function initLogoutButton() {
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', handleLogout);
+    console.log('✅ 登出按鈕已初始化');
   }
 }
 
-async function handleLogout() {
-  console.log('🚪 開始登出流程...');
+function handleLogout() {
+  console.log('🚪 執行登出...');
 
-  try {
-    // 可選：呼叫後端登出 API（主要由前端清除 token）
-    await fetch('/auth/logout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-  } catch (error) {
-    console.warn('⚠️ 後端登出失敗（忽略）:', error);
-  }
-
-  // 清除本地儲存的 token
+  // 清除 JWT token
   localStorage.removeItem('jwt_token');
-  sessionStorage.clear();
 
-  console.log('✅ 登出成功，跳轉至登入頁面...');
+  // 停止 WebSocket 連接
+  if (typeof ws !== 'undefined' && ws) {
+    ws.close();
+  }
 
-  // 跳轉到登入頁面
-  window.location.href = '/static/login.html';
+  // 停止語音播放
+  if (typeof stopSpeaking === 'function') {
+    stopSpeaking();
+  }
+
+  console.log('✅ 登出成功，導向登入頁面');
+
+  // 導向登入頁面
+  window.location.href = '/login/';
 }
 
-// ========== 模式切換（語音 ↔ 文字輸入）==========
+// ========== 輸入模式切換（語音 ↔ 文字）==========
 
-let isTextInputMode = false;  // 當前是否為文字輸入模式
+let isTextInputMode = false; // 當前是否為文字輸入模式
+let textInputElement = null; // 文字輸入框元素
 
-/**
- * 切換語音模式與文字輸入模式
- */
+function initChatIcon() {
+  const chatIcon = document.getElementById('chatIcon');
+  if (chatIcon) {
+    chatIcon.addEventListener('click', toggleInputMode);
+    console.log('✅ 輸入模式切換按鈕已初始化');
+  }
+}
+
 function toggleInputMode() {
   isTextInputMode = !isTextInputMode;
-  
-  const modeToggleBtn = document.getElementById('modeToggleBtn');
   const transcript = document.getElementById('transcript');
-  const micContainer = document.getElementById('mic-container');
-  
+
+  if (!transcript) {
+    console.error('❌ 找不到 transcript 元素');
+    return;
+  }
+
   if (isTextInputMode) {
-    // === 切換到文字輸入模式 ===
-    console.log('🔤 切換到文字輸入模式');
-    
-    // 停止語音錄音（如果正在錄音）
-    if (currentState === 'recording') {
-      console.log('⏹️ 停止語音錄音');
-      if (typeof stopRealAudioAnalysis === 'function') {
-        stopRealAudioAnalysis();
-      }
-      if (wsManager && typeof wsManager.stopRecording === 'function') {
-        wsManager.stopRecording();
-      }
-      setState('idle');
-    }
-    
-    // 禁用麥克風點擊，並讓麥克風容器變淡（但不影響波形）
-    micContainer.style.pointerEvents = 'none';
-    // 不要設置整體透明度，讓波形保持可見
-    // micContainer.style.opacity = '0.3';
-    
-    // 添加文字輸入模式標記到body
-    document.body.classList.add('text-input-active');
-    
-    // 啟用文字輸入
-    transcript.contentEditable = 'true';
-    transcript.classList.add('text-input-mode');
-    transcript.classList.remove('provisional', 'final');
-    transcript.textContent = '';
-    transcript.setAttribute('data-placeholder', '請輸入文字...');
-    transcript.focus();
-    
-    // 更新按鈕樣式
-    modeToggleBtn.classList.add('text-mode');
-    modeToggleBtn.textContent = '🎤';
-    modeToggleBtn.title = '切換為語音模式';
-    
-    // 監聽 Enter 鍵發送訊息
-    transcript.addEventListener('keydown', handleTextInput);
-    
+    // 切換到文字輸入模式
+    console.log('⌨️ 切換到文字輸入模式');
+
+    // 保存原始內容
+    const originalContent = transcript.textContent;
+
+    // 清空並添加 text-input-mode class
+    transcript.className = 'voice-transcript text-input-mode';
+    transcript.innerHTML = '';
+
+    // 創建 textarea
+    textInputElement = document.createElement('textarea');
+    textInputElement.placeholder = '請輸入訊息...';
+    textInputElement.id = 'text-input-box';
+
+    // 監聽 Enter 鍵送出（Shift+Enter 換行）
+    textInputElement.addEventListener('keydown', handleTextInput);
+
+    transcript.appendChild(textInputElement);
+
+    // 自動聚焦
+    setTimeout(() => textInputElement.focus(), 100);
+
   } else {
-    // === 切換到語音模式 ===
-    console.log('🎙️ 切換到語音模式');
-    
-    // 移除文字輸入模式標記
-    document.body.classList.remove('text-input-active');
-    
-    // 停用文字輸入
-    transcript.contentEditable = 'false';
-    transcript.classList.remove('text-input-mode');
-    transcript.classList.add('provisional');
+    // 切換回語音模式
+    console.log('🎤 切換到語音模式');
+
+    // 移除 textarea
+    if (textInputElement) {
+      textInputElement.removeEventListener('keydown', handleTextInput);
+      textInputElement = null;
+    }
+
+    // 恢復原始樣式
+    transcript.className = 'voice-transcript provisional';
     transcript.textContent = '請說話...';
-    transcript.removeAttribute('data-placeholder');
-    
-    // 啟用麥克風
-    micContainer.style.pointerEvents = 'auto';
-    micContainer.style.opacity = '1';
-    
-    // 更新按鈕樣式
-    modeToggleBtn.classList.remove('text-mode');
-    modeToggleBtn.textContent = '💬';
-    modeToggleBtn.title = '切換為文字輸入模式';
-    
-    // 移除文字輸入監聽
-    transcript.removeEventListener('keydown', handleTextInput);
   }
 }
 
-/**
- * 處理文字輸入（Enter 發送訊息）
- */
 function handleTextInput(event) {
+  // Enter 送出（Shift+Enter 換行）
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();
 
-    const transcript = document.getElementById('transcript');
-    const message = transcript.textContent.trim();
-
-    if (!message) {
-      console.warn('⚠️ 訊息內容為空');
+    const text = textInputElement.value.trim();
+    if (!text) {
+      console.warn('⚠️ 訊息為空，不送出');
       return;
     }
 
-    console.log('📤 發送文字訊息:', message);
+    console.log('📤 送出文字訊息:', text);
 
-    // 顯示為 final 狀態（讓用戶看到已發送）
-    transcript.classList.remove('provisional');
-    transcript.classList.add('final');
+    // 送出到 WebSocket
+    if (typeof wsManager !== 'undefined' && wsManager) {
+      // 取得當前對話 ID（如果沒有，後端會自動建立新對話）
+      const chatId = window.currentChatId || null;
+      wsManager.sendUserMessage(text, chatId);
 
-    // 發送訊息到 WebSocket
-    if (wsManager && wsManager.isConnected()) {
-      // 獲取當前 chat_id（從全域變數）
-      const chatId = window.currentChatId;
+      // 清空輸入框
+      textInputElement.value = '';
 
-      if (!chatId) {
-        console.warn('⚠️ 當前沒有 chat_id，後端將自動創建新對話');
+      // 切換到思考狀態
+      if (typeof setState === 'function') {
+        setState('thinking');
       }
 
-      wsManager.sendUserMessage(message, chatId);
-
-      // 文字輸入模式下也顯示思考狀態（花瓣綻放）
-      setState('thinking');
-
-      // 清空輸入框（延遲一下讓用戶看到發送的訊息）
-      setTimeout(() => {
-        transcript.textContent = '思考中...';
-        transcript.classList.remove('final');
-        transcript.classList.add('provisional');
-      }, 300);
+      // 切換回語音模式
+      toggleInputMode();
     } else {
-      console.error('❌ WebSocket 未連接，無法發送訊息');
-      alert('連線已斷開，請重新整理頁面');
+      console.error('❌ WebSocket 未初始化');
     }
-  } else if (event.key === 'Enter' && event.shiftKey) {
-    // Shift+Enter 換行（contenteditable 預設行為）
-    // 不需要特別處理
-  }
-}
-
-/**
- * 初始化模式切換按鈕
- */
-function initModeToggle() {
-  const modeToggleBtn = document.getElementById('modeToggleBtn');
-  if (modeToggleBtn) {
-    modeToggleBtn.addEventListener('click', toggleInputMode);
-    console.log('✅ 模式切換按鈕已初始化');
   }
 }

@@ -1,14 +1,3 @@
-// 全域控制：僅保留錯誤/重要訊息的 console 輸出
-(function silenceConsoleLogs() {
-  if (typeof window !== 'undefined' && !window.BLOOMWARE_DEBUG && !console.__bloomwareSilenced) {
-    const noop = () => {};
-    console.log = noop;
-    console.info = noop;
-    console.debug = noop;
-    console.__bloomwareSilenced = true;
-  }
-})();
-
 /**
  * Bloom Ware WebSocket 通訊管理模組（完整版）
  * 處理 WebSocket 連接、訊息收發、重連機制
@@ -85,50 +74,12 @@ class WebSocketManager {
       this.send({ type: 'chat_focus', chat_id: cid });
     }
 
-    // 嘗試上報一次環境快照（位置/方位/時區/語系/裝置）
-    try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const locale = navigator.language || 'zh-TW';
-      const device = `${navigator.platform || ''}`;
-
-      const sendSnapshot = (lat, lon, acc, heading) => {
-        this.send({
-          type: 'env_snapshot',
-          lat, lon,
-          accuracy_m: acc,
-          heading_deg: heading,
-          tz, locale, device
-        });
-      };
-
-      // 裝置方向（可能受限權限）
-      let heading = undefined;
-      try {
-        if (window.screen && window.screen.orientation && window.screen.orientation.angle !== undefined) {
-          heading = window.screen.orientation.angle; // 粗略
-        }
-      } catch (_) {}
-
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            const c = pos.coords || {};
-            sendSnapshot(c.latitude, c.longitude, c.accuracy, heading);
-          },
-          (_err) => {
-            sendSnapshot(undefined, undefined, undefined, heading);
-          },
-          { 
-            enableHighAccuracy: true,  // 啟用高精度模式（GPS 優先於 WiFi/Cell）
-            maximumAge: 0,             // 不使用快取，強制取得最新位置
-            timeout: 15000             // 延長超時到 15 秒（GPS 冷啟動需要時間）
-          }
-        );
-      } else {
-        sendSnapshot(undefined, undefined, undefined, heading);
-      }
-    } catch (e) {
-      console.warn('環境快照上報失敗', e);
+    // 啟動位置追蹤（WebSocket 連線後）
+    if (typeof startLocationTracking === 'function') {
+      startLocationTracking();
+      console.log('📍 位置追蹤已啟動');
+    } else {
+      console.warn('⚠️ startLocationTracking 函數未定義');
     }
   }
 
@@ -173,7 +124,7 @@ class WebSocketManager {
       localStorage.removeItem('jwt_token');
       // 跳轉到登入頁
       setTimeout(() => {
-        window.location.href = '/static/login.html';
+        window.location.href = '/login/';
       }, 500);
       return;
     }
@@ -202,12 +153,12 @@ class WebSocketManager {
             if (payload.exp && payload.exp < currentTime) {
               console.error('❌ Token 已過期，跳轉到登入頁面');
               localStorage.removeItem('jwt_token');
-              window.location.href = '/static/login.html';
+              window.location.href = '/login/';
             }
           } catch (e) {
             console.error('❌ Token 解析失敗，跳轉到登入頁面');
             localStorage.removeItem('jwt_token');
-            window.location.href = '/static/login.html';
+            window.location.href = '/login/';
           }
         }
       }
@@ -229,7 +180,7 @@ class WebSocketManager {
           if (payload.exp && payload.exp < currentTime) {
             console.error('❌ Token 已過期，跳轉到登入頁面');
             localStorage.removeItem('jwt_token');
-            window.location.href = '/static/login.html';
+            window.location.href = '/login/';
             return;
           }
         } catch (error) {
@@ -241,7 +192,7 @@ class WebSocketManager {
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
         console.error('❌ WebSocket 重連次數已達上限，可能是認證問題，清除 token 並跳轉登入頁');
         localStorage.removeItem('jwt_token');
-        window.location.href = '/static/login.html';
+        window.location.href = '/login/';
         return;
       }
     }
@@ -270,20 +221,21 @@ class WebSocketManager {
 
   // 發送用戶輸入
   sendUserMessage(text, chatId) {
-    if (!text || !text.trim()) {
-      console.warn('⚠️ 訊息內容為空');
+    if (!text || !this.isConnected()) {
+      console.warn('⚠️ WebSocket 未連接或訊息為空');
       return false;
     }
 
-    // chatId 可以為空，後端會自動創建或使用最新對話
+    // 檢查對話ID
     if (!chatId) {
-      console.log('📝 發送訊息（無 chat_id，後端將自動處理）');
+      console.warn('⚠️ 缺少 chat_id');
+      return false;
     }
 
     const payload = {
       type: 'user_message',
       message: text,
-      chat_id: chatId || null
+      chat_id: chatId
     };
 
     return this.send(payload);
@@ -475,166 +427,13 @@ class WebSocketManager {
     }
 
     // 發送停止錄音信號
-    this.send({
+    this.send({ 
       type: 'audio_stop',
       mode: 'chat'  // 對話模式
     });
 
     this.isRecording = false;
     console.log('✅ 錄音已停止');
-  }
-
-  // ========== 語音綁定專用錄音功能 ==========
-
-  /**
-   * 開始語音綁定錄音（專用於綁定流程）
-   */
-  async startVoiceBindingRecording() {
-    if (this.isRecording) {
-      console.warn('⚠️ 已經在錄音中');
-      return false;
-    }
-
-    if (!this.isConnected()) {
-      console.error('❌ WebSocket 未連接，無法開始錄音');
-      return false;
-    }
-
-    try {
-      console.log('🎙️ 開始語音綁定錄音...');
-
-      // 🔓 解鎖音頻播放
-      if (typeof unlockAudioPlayback === 'function') {
-        unlockAudioPlayback();
-      }
-
-      // 請求麥克風權限
-      this.audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 16000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-
-      // 創建音訊上下文
-      this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 16000
-      });
-
-      // 創建音訊處理節點
-      this.audioSource = this.audioContext.createMediaStreamSource(this.audioStream);
-      this.audioProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
-
-      // 連接音訊節點
-      this.audioSource.connect(this.audioProcessor);
-      this.audioProcessor.connect(this.audioContext.destination);
-
-      // 發送開始錄音信號（語音綁定模式）
-      this.send({
-        type: 'audio_start',
-        sample_rate: 16000,
-        mode: 'binding'  // 語音綁定模式
-      });
-
-      this.isRecording = true;
-
-      // 處理音訊數據
-      this.audioProcessor.onaudioprocess = (e) => {
-        if (!this.isRecording) return;
-
-        try {
-          const inputData = e.inputBuffer.getChannelData(0);
-
-          // Float32 轉 Int16 PCM
-          const pcm16 = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            let sample = Math.max(-1, Math.min(1, inputData[i]));
-            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-          }
-
-          // 轉為 Uint8Array 並 Base64 編碼
-          const bytes = new Uint8Array(pcm16.buffer);
-          const b64 = btoa(String.fromCharCode(...bytes));
-
-          // 發送音訊塊
-          this.send({
-            type: 'audio_chunk',
-            pcm16_base64: b64
-          });
-
-        } catch (error) {
-          console.error('❌ 音訊處理錯誤:', error);
-        }
-      };
-
-      console.log('✅ 語音綁定錄音已開始');
-      return true;
-
-    } catch (error) {
-      console.error('❌ 開始語音綁定錄音失敗:', error);
-
-      // 顯示錯誤提示
-      if (error.name === 'NotAllowedError') {
-        if (typeof showErrorNotification === 'function') {
-          showErrorNotification('需要麥克風權限才能使用語音綁定功能');
-        }
-      }
-
-      this.isRecording = false;
-      return false;
-    }
-  }
-
-  /**
-   * 停止語音綁定錄音
-   */
-  stopVoiceBindingRecording() {
-    if (!this.isRecording) {
-      console.warn('⚠️ 目前沒有在錄音');
-      return;
-    }
-
-    console.log('🛑 停止語音綁定錄音...');
-
-    // 停止音訊處理
-    if (this.audioProcessor) {
-      this.audioProcessor.disconnect();
-      this.audioProcessor = null;
-    }
-
-    // 斷開音訊源
-    if (this.audioSource) {
-      try {
-        this.audioSource.disconnect();
-      } catch (e) {
-        console.warn('⚠️ 斷開音訊源失敗:', e);
-      }
-      this.audioSource = null;
-    }
-
-    // 停止麥克風軌道
-    if (this.audioStream) {
-      this.audioStream.getTracks().forEach(track => track.stop());
-      this.audioStream = null;
-    }
-
-    // 關閉音訊上下文
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
-
-    // 發送停止錄音信號（語音綁定模式）
-    this.send({
-      type: 'audio_stop',
-      mode: 'binding'  // 語音綁定模式
-    });
-
-    this.isRecording = false;
-    console.log('✅ 語音綁定錄音已停止');
   }
 }
 
@@ -663,14 +462,13 @@ function initializeWebSocket(token) {
       case 'system':
         // 系統訊息（歡迎詞、連線成功）
         console.log('🔔 系統訊息:', data.message);
-        
-        // 如果系統訊息包含 chat_id，儲存它
+
+        // 提取並保存 chat_id（後端在歡迎訊息中會發送）
         if (data.chat_id) {
-          currentChatId = data.chat_id;
-          window.currentChatId = currentChatId;
-          console.log('✅ 已設置 chat_id:', currentChatId);
+          window.currentChatId = data.chat_id;
+          console.log('✅ Chat ID 已設定（來自 system 訊息）:', window.currentChatId);
         }
-        
+
         if (data.message) {
           setState('speaking', {
             outputText: data.message,
@@ -698,10 +496,6 @@ function initializeWebSocket(token) {
           has_tool_data: !!data.tool_data,
           tool_data_keys: data.tool_data ? Object.keys(data.tool_data) : null
         });
-        const inCareMode = Boolean(data.care_mode);
-        if (inCareMode) {
-          console.log('💙 關懷模式啟動：隱藏工具卡片');
-        }
         
         // 同時啟動：文字打字效果 + 語音播放
         setState('speaking', {
@@ -709,15 +503,12 @@ function initializeWebSocket(token) {
           enableTTS: true  // 啟用語音（異步並行）
         });
 
-        const shouldShowToolCard = !inCareMode && data.tool_name && data.tool_data;
-        if (shouldShowToolCard) {
+        // 如果有工具資料，顯示對應卡片
+        if (data.tool_name && data.tool_data) {
           console.log('📊 準備顯示工具卡片:', data.tool_name);
           displayToolCard(data.tool_name, data.tool_data);
         } else {
-          console.log('⚠️ 不顯示工具卡片：', inCareMode ? '關懷模式' : '缺少工具資料');
-          if (typeof clearAllCards === 'function') {
-            clearAllCards();
-          }
+          console.log('⚠️ 無工具資料，不顯示卡片');
         }
 
         // 不自動返回 idle，保持回應顯示
@@ -740,45 +531,22 @@ function initializeWebSocket(token) {
         
         // 應用情緒主題（如果有的話）
         if (data.emotion && typeof applyEmotion === 'function') {
-          const emotionValue = typeof data.emotion === 'string' ? data.emotion : data.emotion.label;
-          console.log('😊 應用情緒主題:', emotionValue);
-          applyEmotion(emotionValue);
-          try { if (emotionValue) localStorage.setItem('lastEmotion', String(emotionValue)); } catch(_) {}
+          console.log('😊 應用情緒主題:', data.emotion);
+          applyEmotion(data.emotion);
         }
         break;
 
-      case 'emotion_detected':
-        // 文字情緒偵測結果（新增）
-        console.log('😊 偵測到情緒:', data.emotion, 'care_mode:', data.care_mode);
-        if (data.emotion && typeof applyEmotion === 'function') {
-          const emotionValue = typeof data.emotion === 'string' ? data.emotion : data.emotion.label;
-          applyEmotion(emotionValue);
-        }
-        if (data.care_mode) {
-          console.log('💙 進入關懷模式');
-        }
-        break;
-
-      case 'new_chat_created':
-        // 新對話建立
-        currentChatId = data.chat_id;
-        window.currentChatId = currentChatId;  // 確保全域變數也更新
-        console.log('✅ 新對話建立:', currentChatId, '標題:', data.title);
+      case 'chat_ready':
+        // 後端發送當前 chat_id
+        window.currentChatId = data.chat_id;
+        console.log('✅ Chat ID 已設定:', window.currentChatId);
         break;
 
       case 'error':
         // 錯誤訊息
         console.error('❌ 後端錯誤:', data.message);
-
-        const messageText = data && typeof data.message === 'string' ? data.message : '';
-        const isEnvSnapshotWarning = messageText.includes('env_snapshot');
-
-        if (!isEnvSnapshotWarning) {
-          setState('idle');
-          showErrorNotification(messageText || '系統發生未知錯誤');
-        } else {
-          console.warn('⚠️ 後端尚未支援 env_snapshot，忽略此警告');
-        }
+        setState('idle');
+        showErrorNotification(data.message);
         break;
 
       case 'voice_login_result':
@@ -791,27 +559,21 @@ function initializeWebSocket(token) {
         console.log('🎙️ 語音登入狀態:', data.message);
         break;
 
-      case 'voice_binding_ready':
-        // 語音綁定準備就緒 - 自動開始錄音 5 秒
-        console.log('🎙️ 收到 voice_binding_ready，準備錄音 5 秒...');
-        handleVoiceBindingReady();
-        break;
+      case 'emotion_detected':
+        // 情緒檢測結果
+        console.log('😊 檢測到情緒:', data.emotion, '關懷模式:', data.care_mode);
 
-      case 'voice_binding_success':
-        // 綁定成功：不重覆顯示訊息，只更新本地狀態（供後續使用）
-        try {
-          if (data.speaker_label) {
-            localStorage.setItem('speaker_label', data.speaker_label);
-          }
-        } catch (_) {}
-        console.log('✅ 語音綁定完成（已更新本地狀態）');
-        break;
-
-      case 'env_ack':
-        if (data.success) {
-          console.log('🧭 環境快照已同步，Geohash:', data.geohash_7, 'Heading:', data.heading);
+        // 應用情緒主題（使用 agent.js 的 applyEmotion 函數）
+        if (data.emotion && typeof applyEmotion === 'function') {
+          applyEmotion(data.emotion);
+          console.log('✅ 情緒主題已套用:', data.emotion);
         } else {
-          console.warn('⚠️ 環境快照同步失敗:', data.error);
+          console.warn('⚠️ applyEmotion 函數未定義或情緒值無效');
+        }
+
+        // 如果啟用關懷模式，可以在這裡添加額外的 UI 提示
+        if (data.care_mode) {
+          console.log('💙 關懷模式已啟動');
         }
         break;
 
@@ -844,11 +606,8 @@ function handleVoiceLoginResult(data) {
     currentUserId = data.user.id;
 
     // 套用情緒主題
-    if (data.emotion) {
-      const emotionValue = typeof data.emotion === 'string' ? data.emotion : data.emotion.label;
-      applyEmotion(emotionValue);
-      // 持久化情緒以便重新整理或跳頁仍保持主題
-      try { if (emotionValue) localStorage.setItem('lastEmotion', String(emotionValue)); } catch(_) {}
+    if (data.emotion && data.emotion.label) {
+      applyEmotion(data.emotion.label);
     }
 
     // 顯示歡迎詞
@@ -864,91 +623,6 @@ function handleVoiceLoginResult(data) {
   } else {
     console.warn('⚠️ 語音登入失敗:', data.error);
     showErrorNotification(`語音登入失敗: ${data.error || '未知錯誤'}`);
-  }
-}
-
-/**
- * 處理語音綁定準備就緒訊息
- * 自動切換到花蕊錄音狀態，錄製 5 秒語音
- */
-async function handleVoiceBindingReady() {
-  console.log('🌸 開始語音綁定流程：自動錄音 5 秒');
-
-  // 更新提示文字
-  if (typeof transcript !== 'undefined') {
-    transcript.textContent = '請開始說話（錄音 3 秒）...';
-    transcript.className = 'voice-transcript provisional';
-  }
-
-  // 切換到錄音狀態（花蕊綻放）
-  if (typeof setState === 'function') {
-    setState('recording', {
-      keepOutput: false,
-      keepCards: false
-    });
-  }
-
-  // 啟動音訊視覺化
-  if (typeof startRealAudioAnalysis === 'function') {
-    await startRealAudioAnalysis();
-  }
-
-  // 啟動語音綁定專用錄音
-  if (wsManager && typeof wsManager.startVoiceBindingRecording === 'function') {
-    const success = await wsManager.startVoiceBindingRecording();
-
-    if (!success) {
-      console.error('❌ 語音綁定錄音啟動失敗');
-      setState('idle');
-      if (typeof stopRealAudioAnalysis === 'function') {
-        stopRealAudioAnalysis();
-      }
-      showErrorNotification('麥克風啟動失敗，請檢查權限設定');
-      return;
-    }
-
-    console.log('⏱️ 開始倒數 3 秒錄音...');
-
-    // 倒數計時提示
-    let countdown = 3;
-    const countdownInterval = setInterval(() => {
-      countdown--;
-      if (countdown > 0 && typeof transcript !== 'undefined') {
-        transcript.textContent = `請繼續說話（剩餘 ${countdown} 秒）...`;
-        transcript.className = 'voice-transcript provisional';
-      }
-    }, 1000);
-
-    // 3 秒後自動停止錄音
-    setTimeout(() => {
-      clearInterval(countdownInterval);
-      console.log('⏹️ 3 秒錄音完成，自動停止');
-
-      // 停止音訊視覺化
-      if (typeof stopRealAudioAnalysis === 'function') {
-        stopRealAudioAnalysis();
-      }
-
-      // 停止語音綁定錄音
-      if (wsManager && typeof wsManager.stopVoiceBindingRecording === 'function') {
-        wsManager.stopVoiceBindingRecording();
-      }
-
-      // 切換到思考狀態
-      if (typeof setState === 'function') {
-        setState('thinking');
-      }
-
-      // 更新提示
-      if (typeof transcript !== 'undefined') {
-        transcript.textContent = '正在處理語音綁定...';
-        transcript.className = 'voice-transcript provisional';
-      }
-
-    }, 3000);  // 3 秒錄音時長
-  } else {
-    console.error('❌ WebSocket 管理器未初始化');
-    showErrorNotification('系統錯誤：WebSocket 未連接');
   }
 }
 

@@ -324,6 +324,14 @@ class DatabaseCache:
         key = self._generate_cache_key("route", key=cache_key)
         await self.route_cache.set(key, payload)
 
+    async def get_tdx_cached(self, cache_key: str) -> Optional[Any]:
+        """獲取 TDX API 快取資料"""
+        return await self.route_cache.get(cache_key)
+
+    async def set_tdx_cache(self, cache_key: str, data: Any, ttl: int = 60):
+        """設置 TDX API 快取資料（使用 route_cache，因為 TDX 也是路線相關）"""
+        await self.route_cache.set(cache_key, data)
+
 
 # 全局緩存實例
 db_cache = DatabaseCache()

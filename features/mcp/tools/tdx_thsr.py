@@ -64,6 +64,14 @@ class TDXTHSRTool(MCPTool):
                 "type": "integer",
                 "description": "返回結果數量",
                 "default": 5
+            },
+            "lat": {
+                "type": "number",
+                "description": "用戶緯度（由系統自動注入）"
+            },
+            "lon": {
+                "type": "number",
+                "description": "用戶經度（由系統自動注入）"
             }
         }, required=[])
     
@@ -89,7 +97,10 @@ class TDXTHSRTool(MCPTool):
         return schema
     
     @classmethod
-    async def execute(cls, arguments: Dict[str, Any], user_id: str = None) -> Dict[str, Any]:
+    async def execute(cls, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        # 從 arguments 中讀取 user_id（由 coordinator 注入）
+        user_id = arguments.get("_user_id")
+        
         origin = arguments.get("origin_station", "").strip()
         destination = arguments.get("destination_station", "").strip()
         train_no = arguments.get("train_no", "").strip()
@@ -97,20 +108,52 @@ class TDXTHSRTool(MCPTool):
         departure_time = arguments.get("departure_time", "").strip()
         limit = min(int(arguments.get("limit", 5)), 20)
         
-        # 1. 取得用戶位置（用於最近車站查詢）
-        env_ctx = await get_user_env_current(user_id) if user_id else None
-        user_lat, user_lon = None, None
-        if env_ctx and env_ctx.get("success"):
-            ctx = env_ctx.get("context", {})
-            user_lat = ctx.get("lat")
-            user_lon = ctx.get("lon")
+        # 1. 取得用戶位置（優先從 arguments 讀取，由 coordinator 注入）
+        user_lat = arguments.get("lat")
+        user_lon = arguments.get("lon")
         
-        # 2. 查詢分支
+        logger.info(f"🚄 [THSR] 輸入參數: lat={user_lat}, lon={user_lon}, origin={origin}, dest={destination}, user_id={user_id}")
+        
+        # 從資料庫補充缺失的位置資訊（僅當 coordinator 沒有注入時）
+        if user_id and (user_lat is None or user_lon is None):
+            try:
+                env_ctx = await get_user_env_current(user_id)
+                logger.info(f"📍 [THSR] 資料庫查詢結果: {env_ctx}")
+                if env_ctx and env_ctx.get("success"):
+                    ctx = env_ctx.get("context", {})
+                    if user_lat is None:
+                        user_lat = ctx.get("lat")
+                    if user_lon is None:
+                        user_lon = ctx.get("lon")
+                    logger.info(f"📍 [THSR] 補充後: lat={user_lat}, lon={user_lon}")
+                else:
+                    logger.warning(f"⚠️ [THSR] 資料庫查詢失敗或無資料: {env_ctx}")
+            except Exception as e:
+                logger.warning(f"⚠️ [THSR] 資料庫查詢異常: {e}")
+        
+        # 2. 驗證並清理站名（過濾無效值）
+        origin = cls._validate_station_name(origin)
+        destination = cls._validate_station_name(destination)
+        logger.info(f"🚄 [THSR] 驗證後: origin={origin}, dest={destination}")
+        
+        # 3. 查詢分支
         if train_no:
             # 查詢特定車次
             result = await cls._query_train_schedule(train_no, departure_date)
         elif origin and destination:
             # 查詢起迄站列車
+            result = await cls._query_od_trains(origin, destination, departure_date, departure_time, limit)
+        elif destination and not origin:
+            # 只有目的地，用 GPS 找最近高鐵站作為起點
+            if not user_lat or not user_lon:
+                raise ExecutionError("查詢往某站的高鐵需要定位權限，或請同時提供起站名稱")
+            nearest_result = await cls._query_nearest_station(user_lat, user_lon)
+            # create_success_response 會把 data 直接 update 到 response，所以 stations 在頂層
+            nearest_stations = nearest_result.get("stations", [])
+            if not nearest_stations:
+                raise ExecutionError("附近沒有高鐵車站")
+            origin = nearest_stations[0]["station_name"]
+            logger.info(f"🚄 [THSR] 自動設定起站: {origin}")
             result = await cls._query_od_trains(origin, destination, departure_date, departure_time, limit)
         elif not origin and not destination:
             # 查詢最近車站
@@ -123,6 +166,29 @@ class TDXTHSRTool(MCPTool):
         return result
     
     @classmethod
+    def _validate_station_name(cls, station_name: str) -> str:
+        """驗證並清理站名，過濾無效值"""
+        if not station_name:
+            return ""
+        
+        # 無效的站名關鍵字
+        invalid_keywords = [
+            "台灣", "臺灣", "Taiwan", "taiwan",
+            "中華民國", "ROC", "TW",
+            "全部", "所有", "任何", "附近"
+        ]
+        
+        for keyword in invalid_keywords:
+            if keyword in station_name or station_name == keyword:
+                logger.warning(f"⚠️ [THSR] 過濾無效站名: {station_name}")
+                return ""
+        
+        # 移除常見的後綴
+        cleaned = station_name.replace("高鐵站", "").replace("車站", "").replace("站", "").strip()
+        
+        return cleaned if cleaned else station_name
+    
+    @classmethod
     async def _query_train_schedule(cls, train_no: str, departure_date: str = "") -> Dict[str, Any]:
         """查詢特定車次時刻表"""
         # 日期處理
@@ -131,8 +197,9 @@ class TDXTHSRTool(MCPTool):
         else:
             date_str = departure_date
         
-        # TDX 高鐵每日時刻表
-        endpoint = f"Rail/THSR/DailyTimetable/TrainDate/{date_str}"
+        # TDX 高鐵每日時刻表 (v2 API)
+        # GET /v2/Rail/THSR/DailyTimetable/TrainDates/{TrainDate}
+        endpoint = f"Rail/THSR/DailyTimetable/TrainDates/{date_str}"
         params = {
             "$filter": f"DailyTrainInfo/TrainNo eq '{train_no}'",
             "$format": "JSON"
@@ -200,8 +267,9 @@ class TDXTHSRTool(MCPTool):
         else:
             date_str = departure_date
         
-        # 1. 查詢當日所有班次
-        endpoint = f"Rail/THSR/DailyTimetable/TrainDate/{date_str}"
+        # 1. 查詢當日所有班次 (v2 API)
+        # GET /v2/Rail/THSR/DailyTimetable/TrainDates/{TrainDate}
+        endpoint = f"Rail/THSR/DailyTimetable/TrainDates/{date_str}"
         params = {
             "$format": "JSON"
         }
@@ -269,7 +337,8 @@ class TDXTHSRTool(MCPTool):
             except:
                 pass
         
-        # 4. 查詢票價
+        # 4. 查詢票價 (v2 API)
+        # GET /v2/Rail/THSR/ODFare/{OriginStationID}/to/{DestinationStationID}
         fare_endpoint = f"Rail/THSR/ODFare/{origin_code}/to/{dest_code}"
         fare_params = {
             "$format": "JSON"
@@ -302,7 +371,8 @@ class TDXTHSRTool(MCPTool):
     @classmethod
     async def _query_nearest_station(cls, lat: float, lon: float) -> Dict[str, Any]:
         """查詢最近的高鐵站"""
-        # 1. 取得所有高鐵車站
+        # 1. 取得所有高鐵車站 (v2 API)
+        # GET /v2/Rail/THSR/Station
         endpoint = "Rail/THSR/Station"
         params = {
             "$format": "JSON"

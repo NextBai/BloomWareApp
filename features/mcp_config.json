@@ -24,36 +24,6 @@
     "protocol_version": "2024-11-05"
   },
   "tools": {
-    "weather_query": {
-      "name": "weather_query",
-      "description": "查詢指定城市的天氣資訊，支援城市名稱或座標查詢",
-      "category": "daily_life",
-      "examples": ["台北天氣", "東京天氣", "25.0330,121.5654"],
-      "module": "features.mcp.tools.weather_tool",
-      "class": "WeatherTool"
-    },
-    "news_query": {
-      "name": "news_query",
-      "description": "查詢最新新聞資訊，支援關鍵詞搜尋和分類篩選，可獲取完整文章內容",
-      "category": "daily_life",
-      "examples": ["科技新聞", "今天新聞", "台灣新聞", "完整內容新聞"],
-      "module": "features.mcp.tools.news_tool",
-      "class": "NewsTool"
-    },
-    "exchange_query": {
-      "name": "exchange_query",
-      "description": "查詢匯率資訊，支援即時匯率查詢和貨幣轉換計算",
-      "category": "daily_life",
-      "examples": ["美元對台幣", "100 USD 換 TWD", "EUR USD 匯率"]
-    },
-    "healthkit_query": {
-      "name": "healthkit_query",
-      "description": "查詢 HealthKit 健康數據，包括心率、步數、血氧、呼吸頻率等",
-      "category": "health",
-      "examples": ["我的心率", "今天步數", "最近一週健康數據", "血氧濃度"],
-      "module": "features.mcp.tools.healthkit_tool",
-      "class": "HealthKitTool"
-    },
     "system_list_features": {
       "name": "system_list_features",
       "description": "列出所有可用的 MCP 功能",
@@ -65,12 +35,63 @@
       "description": "檢查 MCP 服務器健康狀態",
       "category": "system",
       "examples": ["健康檢查", "服務狀態"]
+    },
+    "tdx_bus_arrival": {
+      "name": "tdx_bus_arrival",
+      "description": "查詢公車即時到站時間（自動感知用戶位置，找最近站點）",
+      "category": "transportation",
+      "examples": ["307 公車還要多久", "附近有什麼公車"],
+      "module": "features.mcp.tools.tdx_bus_arrival",
+      "class": "TDXBusArrivalTool"
+    },
+    "tdx_metro": {
+      "name": "tdx_metro",
+      "description": "查詢捷運即時到站、最近車站（台北/高雄/桃園/台中捷運）",
+      "category": "transportation",
+      "examples": ["最近的捷運站在哪", "台北車站捷運幾分鐘到"],
+      "module": "features.mcp.tools.tdx_metro",
+      "class": "TDXMetroTool"
+    },
+    "tdx_parking": {
+      "name": "tdx_parking",
+      "description": "查詢附近停車場資訊和即時空位",
+      "category": "transportation",
+      "examples": ["附近停車場", "台北車站附近停車位"],
+      "module": "features.mcp.tools.tdx_parking",
+      "class": "TDXParkingTool"
+    },
+    "tdx_thsr": {
+      "name": "tdx_thsr",
+      "description": "查詢高鐵時刻表、票價和即時資訊",
+      "category": "transportation",
+      "examples": ["高鐵從台北到台中", "高鐵票價查詢"],
+      "module": "features.mcp.tools.tdx_thsr",
+      "class": "TDXTHSRTool"
+    },
+    "tdx_train": {
+      "name": "tdx_train",
+      "description": "查詢台鐵時刻表和即時資訊",
+      "category": "transportation",
+      "examples": ["台鐵從台北到新竹", "火車時刻表"],
+      "module": "features.mcp.tools.tdx_train",
+      "class": "TDXTrainTool"
+    },
+    "tdx_youbike": {
+      "name": "tdx_youbike",
+      "description": "查詢 YouBike 站點資訊和即時車輛數量",
+      "category": "transportation",
+      "examples": ["附近 YouBike", "捷運站 YouBike 數量"],
+      "module": "features.mcp.tools.tdx_youbike",
+      "class": "TDXBikeTool"
     }
   },
   "environment": {
     "required_env_vars": [
       "WEATHER_API_KEY",
-      "NEWSAPI_KEY"
+      "NEWSAPI_KEY",
+      "TDX_CLIENT_ID",
+      "TDX_CLIENT_SECRET",
+      "OPENROUTESERVICE_API_KEY"
     ],
     "optional_env_vars": [
       "FIXER_API_KEY",

@@ -8,6 +8,10 @@ import secrets
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
+# 載入 .env 環境變數（必須在其他 import 之前）
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
@@ -415,11 +419,21 @@ app.add_middleware(CSPMiddleware)
 
 # 掛載靜態檔案目錄（語音沉浸式前端）
 static_dir = Path("static/frontend")
+login_dir = Path("static/frontend/login")
+
 if static_dir.exists() and static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir), html=True), name="frontend")
     logger.info(f"✅ 已掛載語音沉浸式前端: /static → {static_dir}")
 else:
     logger.warning("⚠️ 未找到 static/frontend/ 目錄")
+
+# 掛載登入頁面 (Next.js build 產出)
+# 使用 html=True 自動處理 index.html，訪問 /login/ 會自動載入 index.html
+if login_dir.exists() and login_dir.is_dir():
+    app.mount("/login", StaticFiles(directory=str(login_dir), html=True), name="login_static")
+    logger.info(f"✅ 已掛載登入頁面: /login → {login_dir}")
+else:
+    logger.warning("⚠️ 未找到 static/frontend/login/ 目錄，請先 build bloom-ware-login 專案")
 
 # 環境設定
 app.state.intent_model = settings.OPENAI_MODEL
@@ -727,6 +741,8 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                     logger.error(f"自動創建對話失敗: {chat_result}")
         except Exception as e:
             logger.error(f"初始化對話時出錯: {str(e)}")
+
+        # 注意：chat_id 會在下面的歡迎訊息中一起發送，不需要額外發送 chat_ready
 
         # 發送個性化歡迎消息（語音登入模式跳過）
         if not is_voice_login_mode:
@@ -1557,7 +1573,7 @@ async def handle_command(command, user_id):
 @app.get("/")
 async def root():
     """根路徑導向登入頁面"""
-    return RedirectResponse(url="/static/login.html", status_code=307)
+    return RedirectResponse(url="/login/", status_code=307)
 
 
 @app.get("/status")
@@ -1655,7 +1671,7 @@ async def google_oauth_legacy_callback(
         error_params = f"?error={error}"
         if state:
             error_params += f"&state={state}"
-        return RedirectResponse(url=f"/static/login.html?{error_params}", status_code=302)
+        return RedirectResponse(url=f"/login?{error_params}", status_code=302)
 
     if not code:
         return JSONResponse(status_code=400, content={"success": False, "error": "NO_AUTHORIZATION_CODE"})
@@ -1693,7 +1709,7 @@ async def google_oauth_callback_get(
         if error:
             # 如果有錯誤，重定向到前端顯示錯誤
             return RedirectResponse(
-                url=f"/static/login.html?error={error}&state={state or ''}",
+                url=f"/login?error={error}&state={state or ''}",
                 status_code=302
             )
 
@@ -1701,12 +1717,12 @@ async def google_oauth_callback_get(
             return JSONResponse(status_code=400, content={"success": False, "error": "NO_AUTHORIZATION_CODE"})
 
         # 構造前端處理的URL
-        frontend_url = f"/static/login.html?code={code}&state={state or ''}&scope={scope or ''}"
+        frontend_url = f"/login?code={code}&state={state or ''}&scope={scope or ''}"
         return RedirectResponse(url=frontend_url, status_code=302)
 
     except Exception as e:
         logger.error(f"Google OAuth GET 回調處理失敗: {e}")
-        return RedirectResponse(url="/static/login.html?error=callback_error", status_code=302)
+        return RedirectResponse(url="/login?error=callback_error", status_code=302)
 
 @app.post("/auth/google/callback")
 async def google_oauth_callback_post(auth_request: GoogleAuthCodeRequest):

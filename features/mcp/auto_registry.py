@@ -23,14 +23,7 @@ class MCPAutoRegistry:
         self.tools: Dict[str, Tool] = {}
         self.config: Dict[str, Any] = {}
         self.client_manager = MCPClientManager()
-        self._disabled_tools = {
-            "tdx_bus_arrival",
-            "tdx_metro",
-            "tdx_parking",
-            "tdx_thsr",
-            "tdx_train",
-            "tdx_youbike",
-        }
+        self._disabled_tools = set()
 
         # 載入配置
         self._load_config()
@@ -61,8 +54,12 @@ class MCPAutoRegistry:
 
             logger.info(f"掃描工具目錄: {tools_path}")
 
-            # 掃描所有 Python 文件
-            for py_file in tools_path.glob("*_tool.py"):
+            # 掃描所有 Python 文件（包含 *_tool.py 和 tdx_*.py）
+            tool_files = list(tools_path.glob("*_tool.py")) + list(tools_path.glob("tdx_*.py"))
+            # 去重（避免 tdx_*_tool.py 被掃描兩次）
+            tool_files = list(set(tool_files))
+            
+            for py_file in tool_files:
                 tool_name = py_file.stem
                 module_name = f"{tools_dir}.{tool_name}"
 
@@ -158,11 +155,19 @@ class MCPAutoRegistry:
                 # 使用模組級別的execute函數
                 handler = module.execute
             else:
-                # 使用類別的execute方法（需要實例化）
-                async def wrapper(arguments):
-                    instance = tool_class()
-                    return await instance.execute(arguments)
-                handler = wrapper
+                # 檢查 execute 是否為 classmethod
+                execute_method = getattr(tool_class, 'execute', None)
+                if execute_method and isinstance(inspect.getattr_static(tool_class, 'execute'), classmethod):
+                    # execute 是 classmethod，直接調用類別方法
+                    async def classmethod_wrapper(arguments):
+                        return await tool_class.execute(arguments)
+                    handler = classmethod_wrapper
+                else:
+                    # 使用類別的execute方法（需要實例化）
+                    async def instance_wrapper(arguments):
+                        instance = tool_class()
+                        return await instance.execute(arguments)
+                    handler = instance_wrapper
 
             # 創建工具實例，包含metadata
             tool = Tool(
@@ -361,13 +366,23 @@ class MCPAutoRegistry:
                 # 外部工具已經在register_external_mcp_server中註冊到client_manager
                 # 這裡不需要額外處理，因為工具會在客戶端啟動時自動發現
 
-        # 去重 (基於工具名稱)
+        # 去重 (基於工具名稱，配置文件優先)
         unique_tools = {}
         for tool in all_tools:
             if tool.name not in unique_tools:
                 unique_tools[tool.name] = tool
             else:
-                logger.warning(f"工具名稱重複，跳過: {tool.name}")
+                # 如果是重複的，保留配置文件中的版本（通常在列表後面）
+                current_tool = unique_tools[tool.name]
+                if hasattr(current_tool, 'metadata') and current_tool.metadata:
+                    if current_tool.metadata.get('source') == 'config_placeholder':
+                        # 當前工具是系統占位符，替換為實際工具
+                        unique_tools[tool.name] = tool
+                        logger.debug(f"替換系統占位符工具: {tool.name}")
+                    else:
+                        logger.debug(f"保留現有工具定義: {tool.name}")
+                else:
+                    logger.debug(f"保留現有工具定義: {tool.name}")
 
         # 添加外部工具
         external_tools = self.client_manager.get_all_tools()
@@ -375,7 +390,7 @@ class MCPAutoRegistry:
             if tool_name not in unique_tools:
                 unique_tools[tool_name] = tool
             else:
-                logger.warning(f"外部工具名稱重複，跳過: {tool_name}")
+                logger.debug(f"外部工具已存在，跳過: {tool_name}")
 
         final_tools = list(unique_tools.values())
         logger.info(f"自動發現完成，總計 {len(final_tools)} 個工具")
