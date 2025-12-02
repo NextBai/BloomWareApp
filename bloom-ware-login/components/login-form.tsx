@@ -3,12 +3,15 @@
 import { useEffect, useRef, useCallback, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { TulipIllustration } from "@/components/tulip-illustration"
-import { Mic, ExternalLink } from "lucide-react"
+import { Mic, ExternalLink, Loader2 } from "lucide-react"
 
 export function LoginForm() {
   const popupRef = useRef<Window | null>(null)
   const popupCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const [isInIframe, setIsInIframe] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [loadingType, setLoadingType] = useState<'google' | 'voice' | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   // 檢測是否在 iframe 中（HF Space 嵌入模式）
   useEffect(() => {
@@ -153,12 +156,18 @@ export function LoginForm() {
   }
 
   const handleGoogleLogin = async () => {
+    // 清除之前的錯誤
+    setError(null);
+
     // 如果在 iframe 中，引導用戶在新分頁開啟
     if (isInIframe) {
       console.log('📦 檢測到 iframe 環境，引導用戶在新分頁開啟');
       handleOpenInNewTab();
       return;
     }
+
+    setIsLoading(true);
+    setLoadingType('google');
 
     try {
       console.log('🚀 開始 Google OAuth 登入流程（Popup 模式）...');
@@ -204,6 +213,8 @@ export function LoginForm() {
       popupCheckIntervalRef.current = setInterval(() => {
         if (popupRef.current && popupRef.current.closed) {
           console.log('📪 Popup 視窗已關閉');
+          setIsLoading(false);
+          setLoadingType(null);
           if (popupCheckIntervalRef.current) {
             clearInterval(popupCheckIntervalRef.current);
           }
@@ -212,14 +223,119 @@ export function LoginForm() {
 
     } catch (error) {
       console.error('❌ OAuth 初始化失敗:', error);
-      alert('Google 登入初始化失敗，請稍後再試');
+      setError('Google 登入初始化失敗，請稍後再試');
+      setIsLoading(false);
+      setLoadingType(null);
     }
   }
 
-  const handleVoiceLogin = () => {
+  const [voiceStatus, setVoiceStatus] = useState<string>('');
+
+  const handleVoiceLogin = async () => {
+    setError(null);
+    setIsLoading(true);
+    setLoadingType('voice');
+    setVoiceStatus('請求麥克風權限...');
     console.log('🎤 開始語音登入...');
-    localStorage.setItem('jwt_token', 'anonymous_voice_login');
-    window.location.href = '/static/';
+
+    try {
+      // 請求麥克風權限
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log('✅ 麥克風權限已獲取');
+
+      // 設定錄音參數
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      
+      const audioChunks: Float32Array[] = [];
+      const recordDuration = 4000; // 4 秒（確保足夠長度）
+      
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        audioChunks.push(new Float32Array(inputData));
+      };
+      
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+      
+      setVoiceStatus('🎙️ 錄音中... 請說話 (4秒)');
+      console.log('🎙️ 開始錄音 4 秒...');
+      
+      // 錄音 3 秒
+      await new Promise(resolve => setTimeout(resolve, recordDuration));
+      
+      // 停止錄音
+      processor.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach(track => track.stop());
+      await audioContext.close();
+      
+      setVoiceStatus('辨識中...');
+      console.log('✅ 錄音完成，處理音訊...');
+      
+      // 合併音訊資料
+      const totalLength = audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+      const audioData = new Float32Array(totalLength);
+      let offset = 0;
+      for (const chunk of audioChunks) {
+        audioData.set(chunk, offset);
+        offset += chunk.length;
+      }
+      
+      // 轉換為 PCM16
+      const pcm16 = new Int16Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        const s = Math.max(-1, Math.min(1, audioData[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      
+      // 轉換為 base64
+      const uint8Array = new Uint8Array(pcm16.buffer);
+      let binary = '';
+      for (let i = 0; i < uint8Array.length; i++) {
+        binary += String.fromCharCode(uint8Array[i]);
+      }
+      const audioBase64 = btoa(binary);
+      
+      console.log('📤 發送語音到後端進行辨識...');
+      
+      // 呼叫語音登入 API
+      const response = await fetch('/auth/voice/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_base64: audioBase64,
+          sample_rate: 16000,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('✅ 語音登入成功！');
+        localStorage.setItem('jwt_token', data.access_token);
+        // 儲存情緒標籤供歡迎詞使用
+        if (data.emotion) {
+          localStorage.setItem('voice_login_emotion', data.emotion);
+        }
+        window.location.href = '/static/';
+      } else {
+        throw new Error(data.error || '語音登入失敗');
+      }
+      
+    } catch (error: any) {
+      console.error('❌ 語音登入失敗:', error);
+      if (error.name === 'NotAllowedError') {
+        setError('請允許麥克風權限以使用語音登入');
+      } else {
+        setError(error.message || '語音登入失敗，請重試');
+      }
+      setIsLoading(false);
+      setLoadingType(null);
+    }
   }
 
   return (
@@ -236,6 +352,13 @@ export function LoginForm() {
       </div>
 
       <div className="w-full space-y-3 sm:space-y-4">
+        {/* 錯誤訊息 */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm text-center">
+            {error}
+          </div>
+        )}
+
         {/* iframe 環境提示 - 簡約風格 */}
         {isInIframe && (
           <p className="text-[#8B7355] text-[11px] sm:text-xs text-center tracking-wide opacity-80">
@@ -245,40 +368,56 @@ export function LoginForm() {
 
         {/* Google Login */}
         <Button
+          type="button"
           onClick={handleGoogleLogin}
-          className="w-full h-11 sm:h-12 bg-white hover:bg-gray-50 text-[#2C2C2C] shadow-md hover:shadow-lg transition-all duration-200 rounded-lg border border-gray-200 text-sm sm:text-base"
+          disabled={isLoading}
+          className="w-full h-11 sm:h-12 bg-white hover:bg-gray-50 text-[#2C2C2C] shadow-md hover:shadow-lg transition-all duration-200 rounded-lg border border-gray-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
           variant="outline"
         >
-          <svg className="w-4 h-4 sm:w-5 sm:h-5 mr-2 sm:mr-3" viewBox="0 0 24 24">
-            <path
-              fill="#4285F4"
-              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-            />
-            <path
-              fill="#34A853"
-              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-            />
-            <path
-              fill="#FBBC05"
-              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-            />
-            <path
-              fill="#EA4335"
-              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-            />
-          </svg>
-          <span className="font-medium">Continue with Google</span>
-          {isInIframe && <ExternalLink className="w-3 h-3 ml-2 opacity-50" />}
+          {isLoading && loadingType === 'google' ? (
+            <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 mr-2 sm:mr-3 animate-spin" />
+          ) : (
+            <svg className="w-4 h-4 sm:w-5 sm:h-5 mr-2 sm:mr-3" viewBox="0 0 24 24">
+              <path
+                fill="#4285F4"
+                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              />
+              <path
+                fill="#34A853"
+                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              />
+              <path
+                fill="#FBBC05"
+                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+              />
+              <path
+                fill="#EA4335"
+                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              />
+            </svg>
+          )}
+          <span className="font-medium">
+            {isLoading && loadingType === 'google' ? '登入中...' : 'Continue with Google'}
+          </span>
+          {isInIframe && !isLoading && <ExternalLink className="w-3 h-3 ml-2 opacity-50" />}
         </Button>
 
         {/* Voice Login */}
         <Button
+          type="button"
           onClick={handleVoiceLogin}
-          className="w-full h-11 sm:h-12 bg-white hover:bg-gray-50 text-[#2C2C2C] shadow-md hover:shadow-lg transition-all duration-200 rounded-lg border border-gray-200 text-sm sm:text-base"
+          disabled={isLoading}
+          className="w-full h-11 sm:h-12 bg-white hover:bg-gray-50 text-[#2C2C2C] shadow-md hover:shadow-lg transition-all duration-200 rounded-lg border border-gray-200 text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
           variant="outline"
         >
-          <Mic className="w-4 h-4 sm:w-5 sm:h-5 mr-2 sm:mr-3" />
-          <span className="font-medium">Voice Login</span>
+          {isLoading && loadingType === 'voice' ? (
+            <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 mr-2 sm:mr-3 animate-spin" />
+          ) : (
+            <Mic className="w-4 h-4 sm:w-5 sm:h-5 mr-2 sm:mr-3" />
+          )}
+          <span className="font-medium">
+            {isLoading && loadingType === 'voice' ? (voiceStatus || '處理中...') : 'Voice Login'}
+          </span>
         </Button>
       </div>
 

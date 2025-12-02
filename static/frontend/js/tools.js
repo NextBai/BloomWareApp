@@ -296,15 +296,28 @@ function renderCardContent(toolName, toolData) {
     return renderTrainList(toolData.trains);
   }
 
-  // 模式 8：YouBike 站點資訊
-  if (toolData.stations && Array.isArray(toolData.stations)) {
+  // 模式 8：YouBike 站點資訊（需要確認是 YouBike 工具）
+  if (toolData.stations && Array.isArray(toolData.stations) && 
+      (toolName === 'tdx_youbike' || toolData.stations[0]?.available_bikes !== undefined)) {
     console.log('✅ 匹配到模式 8: YouBike 站點資訊');
     return renderYouBikeStations(toolData.stations);
   }
+  
+  // 模式 8.5：火車站點資訊（tdx_train 的 stations）
+  if (toolData.stations && Array.isArray(toolData.stations) && toolName === 'tdx_train') {
+    console.log('✅ 匹配到模式 8.5: 火車站點資訊');
+    return renderTrainStations(toolData.stations);
+  }
 
-  // 模式 9：通用 raw_data 物件
+  // 模式 9：地理反查資訊（reverse_geocode）
+  if (toolData.display_name && toolData.lat && toolData.lon && toolName === 'reverse_geocode') {
+    console.log('✅ 匹配到模式 9: 地理反查資訊');
+    return renderReverseGeocode(toolData);
+  }
+
+  // 模式 10：通用 raw_data 物件
   if (toolData.raw_data && typeof toolData.raw_data === 'object') {
-    console.log('✅ 匹配到模式 9: 通用 raw_data');
+    console.log('✅ 匹配到模式 10: 通用 raw_data');
     return renderKeyValuePairs(toolData.raw_data);
   }
 
@@ -549,6 +562,46 @@ function renderTrainList(trains) {
 }
 
 /**
+ * 渲染火車站點資訊
+ */
+function renderTrainStations(stations) {
+  if (!stations || stations.length === 0) {
+    return '<p class="data-row">查無車站資訊</p>';
+  }
+
+  let html = '<div class="station-list">';
+
+  stations.forEach((station, index) => {
+    const stationName = station.station_name || station.name || '未知車站';
+    const distance = station.distance_m ? `${Math.round(station.distance_m)}公尺` : '';
+    const walkTime = station.walking_time_min ? `步行約${station.walking_time_min}分鐘` : '';
+
+    html += `
+      <div class="station-item" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === stations.length - 1 ? 'border-bottom: none;' : ''}">
+        <div class="data-row" style="margin-bottom: 4px;">
+          <span class="data-label" style="font-weight: bold; color: #0066cc;">🚉 ${stationName}</span>
+        </div>
+        ${distance ? `
+        <div class="data-row">
+          <span class="data-label">📏 距離</span>
+          <span class="data-value">${distance}</span>
+        </div>
+        ` : ''}
+        ${walkTime ? `
+        <div class="data-row">
+          <span class="data-label">🚶 步行時間</span>
+          <span class="data-value">${walkTime}</span>
+        </div>
+        ` : ''}
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  return html;
+}
+
+/**
  * 渲染 YouBike 站點資訊
  */
 function renderYouBikeStations(stations) {
@@ -655,6 +708,68 @@ function renderBusArrivals(arrivals, routeName) {
   });
 
   return html;
+}
+
+/**
+ * 渲染地理反查資訊（reverse_geocode）
+ */
+function renderReverseGeocode(data) {
+  const displayName = data.display_name || '未知地點';
+  const city = data.city || '';
+  const road = data.road || '';
+  const houseNumber = data.house_number || '';
+  const suburb = data.suburb || '';
+  const admin = data.admin || '';
+  const countryCode = data.country_code || '';
+  const lat = data.lat?.toFixed(6) || '';
+  const lon = data.lon?.toFixed(6) || '';
+
+  // 組合詳細地址
+  let detailedAddress = [];
+  if (city) detailedAddress.push(city);
+  if (admin && admin !== city) detailedAddress.push(admin);
+  if (suburb) detailedAddress.push(suburb);
+  if (road) detailedAddress.push(road);
+  if (houseNumber) detailedAddress.push(houseNumber);
+
+  const addressText = detailedAddress.length > 0 ? detailedAddress.join(', ') : displayName;
+
+  // 生成 Google Maps 連結
+  const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
+
+  return `
+    <div class="data-row">
+      <span class="data-label">📍 位置</span>
+      <span class="data-value" style="font-weight: bold;">${displayName}</span>
+    </div>
+    ${city ? `
+    <div class="data-row">
+      <span class="data-label">🏙️ 城市</span>
+      <span class="data-value">${city}</span>
+    </div>
+    ` : ''}
+    ${road ? `
+    <div class="data-row">
+      <span class="data-label">🛣️ 道路</span>
+      <span class="data-value">${road}${houseNumber ? ' ' + houseNumber : ''}</span>
+    </div>
+    ` : ''}
+    ${suburb ? `
+    <div class="data-row">
+      <span class="data-label">🏘️ 區域</span>
+      <span class="data-value">${suburb}</span>
+    </div>
+    ` : ''}
+    <div class="data-row">
+      <span class="data-label">🌐 座標</span>
+      <span class="data-value" style="font-size: 0.85em;">${lat}, ${lon}</span>
+    </div>
+    <div class="data-row" style="margin-top: 8px;">
+      <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
+        🗺️ 在 Google Maps 中查看 →
+      </a>
+    </div>
+  `;
 }
 
 /**

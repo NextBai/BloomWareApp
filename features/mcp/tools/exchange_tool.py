@@ -101,12 +101,14 @@ class ExchangeTool(MCPTool):
                 return cls.create_success_response(
                     content=formatted_text,
                     data={
-                        "rate": rate,
-                        "from_currency": from_currency,
-                        "to_currency": to_currency,
-                        "amount": amount,
-                        "converted_amount": amount * rate if conversion else None,
-                        "raw_data": rate_data
+                        "raw_data": {
+                            "rate": rate,
+                            "from_currency": from_currency,
+                            "to_currency": to_currency,
+                            "amount": amount,
+                            "converted_amount": amount * rate if conversion else None,
+                            "rate_data": rate_data
+                        }
                     }
                 )
             else:

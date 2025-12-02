@@ -18,16 +18,22 @@ class TDXTrainTool(MCPTool):
     """TDX 台鐵時刻表查詢"""
     
     NAME = "tdx_train"
-    DESCRIPTION = "查詢台鐵列車時刻表、票價、最近車站（含高鐵轉乘資訊）"
+    DESCRIPTION = "查詢台鐵列車時刻表。參數提取規則：「從A到B」→origin_station=A,destination_station=B；「往B」→destination_station=B（起點用GPS）；「車次123」→train_no=123。"
     CATEGORY = "軌道運輸"
     TAGS = ["tdx", "台鐵", "TRA", "火車", "時刻表"]
-    KEYWORDS = ["台鐵", "臺鐵", "火車", "TRA", "列車", "時刻"]
+    KEYWORDS = ["台鐵", "臺鐵", "火車", "TRA", "列車", "時刻", "自強號", "莒光號", "區間車"]
     USAGE_TIPS = [
-        "查詢車次: 「自強號 123 次」",
-        "查詢路線: 「台北到台中的火車」",
-        "查詢最近車站: 「最近的火車站在哪」",
-        "查詢時刻: 「下午3點台北到高雄」"
+        "「自強號 123 次」→ train_no=123",
+        "「台北到台中的火車」→ origin_station=台北, destination_station=台中",
+        "「往台北的火車」→ destination_station=台北（起點用 GPS）",
+        "「下午3點台北到高雄」→ origin_station=台北, destination_station=高雄, departure_time=15:00"
     ]
+    NEGATIVE_EXAMPLES = [
+        "「火車票怎麼買」→ 這是詢問購票方式，不是查時刻表",
+        "「火車站在哪」→ 這是查位置，應用 reverse_geocode 或 forward_geocode"
+    ]
+    PRIORITY = 8
+    ALIASES = ["train", "台鐵", "火車"]
     
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:

@@ -332,10 +332,10 @@ class WebSocketManager {
       this.audioProcessor.connect(this.audioContext.destination);
 
       // 發送開始錄音信號
-      this.send({ 
-        type: 'audio_start', 
+      this.send({
+        type: 'audio_start',
         sample_rate: 16000,
-        mode: 'chat'  // 對話模式（非語音登入）
+        mode: 'realtime_chat'  // 即時轉錄模式（使用 OpenAI Realtime API）
       });
 
       this.isRecording = true;
@@ -427,9 +427,9 @@ class WebSocketManager {
     }
 
     // 發送停止錄音信號
-    this.send({ 
+    this.send({
       type: 'audio_stop',
-      mode: 'chat'  // 對話模式
+      mode: 'realtime_chat'  // 即時轉錄模式
     });
 
     this.isRecording = false;
@@ -448,8 +448,23 @@ function initializeWebSocket(token) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
 
-  // 構建WebSocket URL
-  const wsUrl = `${protocol}//${host}/ws?token=${token}`;
+  // 讀取語音登入的情緒資料（如果有）
+  const voiceEmotion = localStorage.getItem('voice_login_emotion');
+  
+  // 構建WebSocket URL（包含情緒參數）
+  let wsUrl = `${protocol}//${host}/ws?token=${token}`;
+  if (voiceEmotion) {
+    wsUrl += `&emotion=${encodeURIComponent(voiceEmotion)}`;
+    console.log('😊 檢測到語音登入情緒，將傳遞給歡迎詞:', voiceEmotion);
+    // 使用後立即清除，避免重複使用
+    localStorage.removeItem('voice_login_emotion');
+    
+    // 立即套用情緒主題到 UI（不等待後端回應）
+    if (typeof applyEmotion === 'function') {
+      applyEmotion(voiceEmotion);
+      console.log('✅ 語音登入情緒主題已套用:', voiceEmotion);
+    }
+  }
 
   // 創建 WebSocket 管理器
   wsManager = new WebSocketManager(wsUrl);
@@ -523,16 +538,43 @@ function initializeWebSocket(token) {
         transcript.className = 'voice-transcript provisional';
         break;
 
+      case 'stt_delta':
+        // STT 即時增量結果（OpenAI Realtime API）
+        console.log('⚡ STT Delta:', data.text);
+        // 累積顯示轉錄文字（逐字顯示效果）
+        if (!window.realtimeTranscript) {
+          window.realtimeTranscript = '';
+        }
+        window.realtimeTranscript += data.text;
+        transcript.textContent = window.realtimeTranscript;
+        transcript.className = 'voice-transcript realtime';
+        break;
+
       case 'stt_final':
         // STT 最終結果（用戶停止說話）
         console.log('✅ STT 最終結果:', data.text);
         transcript.textContent = data.text;
         transcript.className = 'voice-transcript final';
-        
+
+        // 清空即時轉錄累積文字
+        window.realtimeTranscript = '';
+
         // 應用情緒主題（如果有的話）
         if (data.emotion && typeof applyEmotion === 'function') {
           console.log('😊 應用情緒主題:', data.emotion);
           applyEmotion(data.emotion);
+        }
+        break;
+
+      case 'realtime_stt_status':
+        // OpenAI Realtime API 連線狀態
+        console.log('🔌 Realtime STT 狀態:', data.status, data.message);
+        if (data.status === 'connected') {
+          console.log('✅ 即時轉錄已啟動');
+          // 清空之前的累積文字
+          window.realtimeTranscript = '';
+        } else if (data.status === 'disconnected') {
+          console.log('🔌 即時轉錄已結束');
         }
         break;
 

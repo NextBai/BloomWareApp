@@ -39,6 +39,35 @@ route_cache_collection = None
 MAX_MEMORIES_PER_USER = 500
 
 
+def _serialize_firestore_data(data: Any) -> Any:
+    """
+    遞迴轉換 Firestore 資料中的 DatetimeWithNanoseconds 物件為 ISO 字串
+
+    Args:
+        data: Firestore 回傳的資料（可能包含 DatetimeWithNanoseconds）
+
+    Returns:
+        JSON 可序列化的資料
+    """
+    from google.cloud.firestore_v1._helpers import DatetimeWithNanoseconds
+
+    if isinstance(data, DatetimeWithNanoseconds):
+        # 轉成 ISO 8601 字串
+        return data.isoformat()
+    elif isinstance(data, datetime):
+        # 一般 Python datetime 也轉成字串
+        return data.isoformat()
+    elif isinstance(data, dict):
+        # 遞迴處理字典
+        return {k: _serialize_firestore_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        # 遞迴處理列表
+        return [_serialize_firestore_data(item) for item in data]
+    else:
+        # 其他型別直接回傳
+        return data
+
+
 def _get_user_doc_ref(user_id: str) -> DocumentReference:
     if users_collection is None:
         raise RuntimeError("Firestore尚未連接，無法操作使用者資料")
@@ -143,13 +172,15 @@ async def get_user_by_id(user_id: str):
             
         user_doc = docs[0]
         user_data = user_doc.to_dict()
-        
-        return {
+
+        result = {
             "id": user_data["user_id"],
             "name": user_data.get("name", ""),
             "email": user_data.get("email", ""),
             "created_at": user_data.get("created_at"),
         }
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        return _serialize_firestore_data(result)
     except Exception as e:
         logger.error(f"查找使用者時發生錯誤: {e}")
         return None
@@ -192,7 +223,8 @@ async def get_user_history(user_id, limit=20):
         
         messages = await _asyncio.to_thread(_fetch_messages)
         logger.info(f"已獲取用戶 {user_id} 的 {len(messages)} 條歷史記錄")
-        return messages
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        return _serialize_firestore_data(messages)
     except Exception as e:
         logger.error(f"獲取歷史記錄時發生錯誤: {e}")
         return []
@@ -371,7 +403,9 @@ async def create_chat(user_id, title="新對話"):
             "created_at": chat["created_at"],
             "updated_at": chat["updated_at"],
         }
-        return {"success": True, "chat": chat_info}
+        # 序列化時間物件，避免 JSON 序列化炸裂
+        serialized_chat_info = _serialize_firestore_data(chat_info)
+        return {"success": True, "chat": serialized_chat_info}
     except Exception as e:
         logger.error(f"創建對話時發生錯誤: {e}")
         return {"success": False, "error": str(e)}
@@ -401,7 +435,9 @@ async def get_user_chats(user_id):
         
         chats = await _asyncio.to_thread(_fetch_chats)
         logger.info(f"獲取到用戶 {user_id} 的 {len(chats)} 個對話")
-        return {"success": True, "chats": chats}
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        serialized_chats = _serialize_firestore_data(chats)
+        return {"success": True, "chats": serialized_chats}
     except Exception as e:
         logger.error(f"獲取用戶對話時發生錯誤: {e}")
         return {"success": False, "error": str(e)}
@@ -524,7 +560,8 @@ async def get_chat_messages(chat_id: str, limit: int | None = None, ascending: b
 
         messages = await _asyncio.to_thread(_query)
         if messages:
-            return messages
+            # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+            return _serialize_firestore_data(messages)
 
         # 向後相容：若子集合無資料，嘗試讀取舊頂層 messages 集合
         if messages_collection is None:
@@ -557,7 +594,8 @@ async def get_chat_messages(chat_id: str, limit: int | None = None, ascending: b
                     logger.warning(f"回填 legacy messages 失敗（可忽略）: {backfill_err}")
 
             await _asyncio.to_thread(_backfill)
-        return view_messages
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        return _serialize_firestore_data(view_messages)
     except Exception as e:
         logger.error(f"讀取對話消息失敗: {e}")
         return []
@@ -730,12 +768,14 @@ async def get_user_by_speaker_label(speaker_label: str):
             return None
 
         data = doc.to_dict()
-        return {
+        result = {
             "id": data.get("user_id"),
             "name": data.get("name", ""),
             "email": data.get("email", ""),
             "created_at": data.get("created_at"),
         }
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        return _serialize_firestore_data(result)
     except Exception as e:
         logger.error(f"查詢語音標籤對應用戶時發生錯誤: {e}")
         return None
@@ -912,7 +952,9 @@ async def get_user_env_current(user_id: str) -> Dict[str, Any]:
         data = await _asyncio.to_thread(_read)
         if not data:
             return {"success": False, "error": "NOT_FOUND"}
-        return {"success": True, "context": data}
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        serialized_data = _serialize_firestore_data(data)
+        return {"success": True, "context": serialized_data}
     except Exception as e:
         logger.error(f"讀取環境現況失敗: {e}")
         return {"success": False, "error": str(e)}
@@ -928,7 +970,9 @@ async def get_geo_cache(geohash7: str) -> Optional[Dict[str, Any]]:
         def _read():
             doc = geo_cache_collection.document(geohash7).get()
             return doc.to_dict() if doc.exists else None
-        return await _asyncio.to_thread(_read)
+        result = await _asyncio.to_thread(_read)
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        return _serialize_firestore_data(result) if result else None
     except Exception as e:
         logger.warning(f"讀取 geo_cache 失敗: {e}")
         return None
@@ -959,7 +1003,9 @@ async def get_route_cache(key: str) -> Optional[Dict[str, Any]]:
         def _read():
             doc = route_cache_collection.document(key).get()
             return doc.to_dict() if doc.exists else None
-        return await _asyncio.to_thread(_read)
+        result = await _asyncio.to_thread(_read)
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        return _serialize_firestore_data(result) if result else None
     except Exception as e:
         logger.warning(f"讀取 route_cache 失敗: {e}")
         return None
@@ -1024,7 +1070,9 @@ async def get_user_memories(
             await _asyncio.to_thread(_mark_accessed, [m["memory_id"] for m in memories])
 
         logger.info(f"獲取到用戶 {user_id} 的 {len(memories)} 條記憶")
-        return {"success": True, "memories": memories}
+        # 序列化 Firestore 時間物件，避免 JSON 序列化炸裂
+        serialized_memories = _serialize_firestore_data(memories)
+        return {"success": True, "memories": serialized_memories}
 
     except Exception as e:
         logger.error(f"獲取記憶時發生錯誤: {e}")

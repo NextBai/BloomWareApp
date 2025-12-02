@@ -110,33 +110,17 @@ class VoiceAuthService:
             raise RuntimeError(f"載入 CNN 說話者辨識模組失敗：{e}")
         self._predict_files = _predict_files
 
-        # 資產檢查：需要 speaker_id_model.pth 與 classes 定義（classes.txt 或 processed_audio 目錄）
-        # 若預設目錄不存在，向下相容：嘗試使用舊的專題cnn 目錄（搬遷前）
+        # 資產檢查：ECAPA-TDNN 需要 speaker_db.pkl
         if not self.model_dir.exists():
             legacy_dir = self.base_dir / "專題cnn"
             if legacy_dir.exists():
                 self.model_dir = legacy_dir
             else:
-                raise FileNotFoundError(f"找不到 CNN 模型目錄：{self.model_dir}")
+                raise FileNotFoundError(f"找不到模型目錄：{self.model_dir}")
 
-        model_file = self.model_dir / "speaker_id_model.pth"
-        classes_txt = self.model_dir / "classes.txt"
-        processed_dir = self.model_dir / "processed_audio"
-        if not model_file.exists():
-            raise FileNotFoundError(f"缺少模型檔：{model_file}")
-        if not classes_txt.exists() and not processed_dir.exists():
-            raise FileNotFoundError(
-                f"缺少類別定義，請提供 {classes_txt.name} 或 {processed_dir.name}/ 子資料夾；或設 VOICE_CNN_CLASSES 指定路徑"
-            )
-        if classes_txt.exists():
-            try:
-                content = classes_txt.read_text(encoding="utf-8").strip()
-            except Exception:
-                content = ""
-            if not content:
-                raise FileNotFoundError(
-                    f"{classes_txt} 內容為空，請填入每行一個類別名稱，或提供 {processed_dir.name}/ 以自動推斷"
-                )
+        speaker_db_file = self.model_dir / "speaker_db.pkl"
+        if not speaker_db_file.exists():
+            raise FileNotFoundError(f"缺少說話者資料庫：{speaker_db_file}")
 
         # 以 user_id 管理暫存錄音緩衝
         self._buffers: Dict[str, bytearray] = {}

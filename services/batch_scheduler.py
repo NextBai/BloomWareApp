@@ -183,10 +183,62 @@ class BatchScheduler:
         Returns:
             {user_id: [memory_1, memory_2, ...]}
         """
-        # TODO: 實作數據庫查詢邏輯
-        # 目前返回空字典（示例）
-        logger.warning("⚠️ _fetch_yesterday_memories 尚未實作，返回空數據")
-        return {}
+        try:
+            if not firestore_db:
+                logger.warning("⚠️ Firestore 未連接，無法獲取記憶")
+                return {}
+
+            from google.cloud.firestore import FieldFilter
+            import asyncio
+
+            # 計算昨日時間範圍
+            yesterday_start = (datetime.now() - timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            yesterday_end = yesterday_start + timedelta(days=1)
+
+            # 獲取所有用戶
+            users_collection = firestore_db.collection("users")
+            
+            def _fetch_users():
+                return list(users_collection.stream())
+
+            users = await asyncio.to_thread(_fetch_users)
+            
+            result: Dict[str, List[str]] = {}
+
+            for user_doc in users:
+                user_id = user_doc.id
+                
+                # 獲取該用戶的昨日記憶
+                def _fetch_user_memories(uid: str):
+                    memories_ref = firestore_db.collection("users").document(uid).collection("memories")
+                    query = memories_ref.where(
+                        filter=FieldFilter("created_at", ">=", yesterday_start)
+                    ).where(
+                        filter=FieldFilter("created_at", "<", yesterday_end)
+                    )
+                    return list(query.stream())
+
+                memories = await asyncio.to_thread(_fetch_user_memories, user_id)
+                
+                if memories:
+                    memory_contents = []
+                    for mem_doc in memories:
+                        mem_data = mem_doc.to_dict()
+                        content = mem_data.get("content", "")
+                        if content:
+                            memory_contents.append(content)
+                    
+                    if memory_contents:
+                        result[user_id] = memory_contents
+
+            logger.info(f"📚 獲取到 {len(result)} 位用戶的昨日記憶")
+            return result
+
+        except Exception as e:
+            logger.exception(f"❌ 獲取昨日記憶失敗: {e}")
+            return {}
 
     async def _save_memory_summaries(self, results: List[Dict[str, Any]]):
         """
@@ -195,26 +247,119 @@ class BatchScheduler:
         Args:
             results: 批次結果列表
         """
-        # TODO: 實作數據庫儲存邏輯
-        logger.info(f"💾 準備儲存 {len(results)} 條記憶摘要")
-        for result in results:
-            custom_id = result.get("custom_id")  # user_id
-            response = result.get("response", {}).get("body", {})
-            summary = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not firestore_db:
+            logger.warning("⚠️ Firestore 未連接，無法儲存摘要")
+            return
 
-            logger.debug(f"📝 用戶 {custom_id} 的摘要: {summary[:50]}...")
-            # await save_memory_summary(custom_id, summary)
+        import asyncio
+        
+        logger.info(f"💾 準備儲存 {len(results)} 條記憶摘要")
+        
+        saved_count = 0
+        for result in results:
+            try:
+                custom_id = result.get("custom_id")  # user_id
+                response = result.get("response", {}).get("body", {})
+                summary = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                if not custom_id or not summary:
+                    continue
+
+                logger.debug(f"📝 用戶 {custom_id} 的摘要: {summary[:50]}...")
+
+                # 儲存到用戶的記憶摘要集合
+                def _save_summary(uid: str, summary_text: str):
+                    summaries_ref = firestore_db.collection("users").document(uid).collection("memory_summaries")
+                    summaries_ref.add({
+                        "summary": summary_text,
+                        "date": datetime.now().date().isoformat(),
+                        "created_at": datetime.now(),
+                        "type": "daily",
+                    })
+
+                await asyncio.to_thread(_save_summary, custom_id, summary)
+                saved_count += 1
+
+            except Exception as e:
+                logger.error(f"❌ 儲存用戶 {custom_id} 的摘要失敗: {e}")
+
+        logger.info(f"✅ 成功儲存 {saved_count}/{len(results)} 條記憶摘要")
 
     async def _fetch_week_health_data(self) -> Dict[str, Dict[str, Any]]:
         """
         從數據庫獲取所有用戶的本週健康數據
 
         Returns:
-            {user_id: {heart_rate: ..., steps: ...}}
+            {user_id: {heart_rate: [...], steps: [...], sleep: [...], ...}}
         """
-        # TODO: 實作數據庫查詢邏輯
-        logger.warning("⚠️ _fetch_week_health_data 尚未實作，返回空數據")
-        return {}
+        try:
+            if not firestore_db:
+                logger.warning("⚠️ Firestore 未連接，無法獲取健康數據")
+                return {}
+
+            from google.cloud.firestore import FieldFilter
+            import asyncio
+
+            # 計算本週時間範圍（週一到今天）
+            today = datetime.now()
+            week_start = today - timedelta(days=today.weekday())
+            week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # 獲取所有用戶
+            users_collection = firestore_db.collection("users")
+            
+            def _fetch_users():
+                return list(users_collection.stream())
+
+            users = await asyncio.to_thread(_fetch_users)
+            
+            result: Dict[str, Dict[str, Any]] = {}
+
+            for user_doc in users:
+                user_id = user_doc.id
+                
+                # 獲取該用戶的本週健康數據
+                def _fetch_user_health(uid: str):
+                    health_ref = firestore_db.collection("health_data")
+                    query = health_ref.where(
+                        filter=FieldFilter("user_id", "==", uid)
+                    ).where(
+                        filter=FieldFilter("timestamp", ">=", week_start)
+                    )
+                    return list(query.stream())
+
+                health_docs = await asyncio.to_thread(_fetch_user_health, user_id)
+                
+                if health_docs:
+                    user_health: Dict[str, List[Any]] = {
+                        "heart_rate": [],
+                        "steps": [],
+                        "sleep": [],
+                        "active_calories": [],
+                    }
+                    
+                    for doc in health_docs:
+                        data = doc.to_dict()
+                        data_type = data.get("type")
+                        value = data.get("value")
+                        timestamp = data.get("timestamp")
+                        
+                        if data_type in user_health and value is not None:
+                            user_health[data_type].append({
+                                "value": value,
+                                "timestamp": timestamp,
+                            })
+                    
+                    # 只保留有數據的用戶
+                    if any(user_health.values()):
+                        result[user_id] = user_health
+
+            logger.info(f"❤️ 獲取到 {len(result)} 位用戶的本週健康數據")
+            return result
+
+        except Exception as e:
+            logger.exception(f"❌ 獲取本週健康數據失敗: {e}")
+            return {}
 
 
 # 全域單例

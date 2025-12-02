@@ -76,10 +76,23 @@ class ChatPipeline:
         if not user_message or not user_message.strip():
             return PipelineResult(text="我沒有收到您的消息，請重新輸入。", is_fallback=True, reason="empty")
 
-        # 0) 檢查是否在關懷模式（新增）
+        # 0) 先進行意圖偵測以提取情緒（需要在關懷模式檢查前執行）
+        detect_res = await self._with_timeout(
+            self._intent_detector(user_message), self._detect_timeout, reason="detect"
+        )
+        if isinstance(detect_res, PipelineResult):
+            return detect_res
+        has_feature, intent_data = detect_res
+
+        # 提取情緒
+        emotion = intent_data.get("emotion", "neutral") if intent_data else "neutral"
+        emotion_value = emotion or "neutral"
+        logger.info(f"😊 用戶情緒: {emotion}")
+
+        # 1) 檢查是否在關懷模式
         if user_id and EmotionCareManager.is_in_care_mode(user_id, chat_id):
-            # 檢查是否解除關懷模式
-            if EmotionCareManager.check_release(user_id, user_message, chat_id):
+            # 檢查是否解除關懷模式（傳入情緒資訊）
+            if EmotionCareManager.check_release(user_id, user_message, chat_id, emotion=emotion_value):
                 logger.info(f"✅ 用戶 {user_id} 情緒恢復，解除關懷模式，繼續正常流程")
                 # 解除後繼續正常流程
             else:
@@ -107,22 +120,9 @@ class ChatPipeline:
                     return PipelineResult(text="我在這裡陪你，隨時可以聊聊。", is_fallback=True, reason="ai-care-empty")
                 return PipelineResult(text=text, is_fallback=False, meta={"care_mode": True, "emotion": care_emotion})
 
-        # 1) 意圖偵測（限時）
-        detect_res = await self._with_timeout(
-            self._intent_detector(user_message), self._detect_timeout, reason="detect"
-        )
-        if isinstance(detect_res, PipelineResult):
-            return detect_res
-        has_feature, intent_data = detect_res
-
-        # 提取情緒（新增）
-        emotion = intent_data.get("emotion", "neutral") if intent_data else "neutral"
-        emotion_value = emotion or "neutral"
-        logger.info(f"😊 用戶情緒: {emotion}")
-
-        # 檢查是否需要進入關懷模式（新增）
-        if user_id and EmotionCareManager.check_and_enter_care_mode(user_id, emotion, chat_id):
-            logger.warning(f"⚠️ 偵測到極端情緒 [{emotion}]，進入關懷模式")
+        # 2) 檢查是否需要進入關懷模式
+        if user_id and EmotionCareManager.check_and_enter_care_mode(user_id, emotion_value, chat_id):
+            logger.warning(f"⚠️ 偵測到極端情緒 [{emotion_value}]，進入關懷模式")
             # 立即使用關懷模式 AI 回應
             ai_res = await self._with_timeout(
                 self._ai_generator(
@@ -132,8 +132,8 @@ class ChatPipeline:
                     request_id,
                     chat_id,
                     use_care_mode=True,
-                    care_emotion=emotion,
-                    emotion_label=emotion,
+                    care_emotion=emotion_value,
+                    emotion_label=emotion_value,
                 ),
                 self._ai_timeout,
                 reason="ai-care",
@@ -146,9 +146,9 @@ class ChatPipeline:
 
             # 第一次進入關懷模式時，附加退出提示（新增）
             exit_hint = "\n\n💙 關懷模式已啟動。說「我沒事了」可以退出。"
-            return PipelineResult(text=text + exit_hint, is_fallback=False, meta={"care_mode": True, "emotion": emotion})
+            return PipelineResult(text=text + exit_hint, is_fallback=False, meta={"care_mode": True, "emotion": emotion_value})
 
-        # 2) 有功能 → 功能處理(限時)
+        # 3) 有功能 → 功能處理(限時)
         if has_feature and intent_data:
             feat_res = await self._with_timeout(
                 self._feature_processor(intent_data, user_id, user_message, chat_id),
@@ -193,7 +193,7 @@ class ChatPipeline:
                         meta={"emotion": emotion_value},
                     )
 
-        # 3) 無功能 → 一般聊天（限時）
+        # 4) 無功能 → 一般聊天（限時）
         # 注意：不傳 messages，改傳 user_message，讓 ai_generator 自動載入歷史對話和記憶
         ai_res = await self._with_timeout(
             self._ai_generator(

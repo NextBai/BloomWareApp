@@ -98,7 +98,14 @@ class NewsTool(MCPTool):
                         "content": {"type": "string"},
                         "url": {"type": "string"},
                         "published_at": {"type": "string"},
-                        "source": {"type": "string"},
+                        "source": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "id": {"type": "string"},
+                                "url": {"type": "string"}
+                            }
+                        },
                         "category": {"type": "array"},
                         "language": {"type": "string"},
                         "sentiment": {"type": "string"}
@@ -151,9 +158,11 @@ class NewsTool(MCPTool):
                 return cls.create_success_response(
                     content=formatted_text,
                     data={
-                        "articles": articles,
-                        "count": len(articles),
-                        "totalResults": total_results
+                        "raw_data": {
+                            "articles": articles,
+                            "count": len(articles),
+                            "totalResults": total_results
+                        }
                     }
                 )
             else:

@@ -33,12 +33,18 @@ class WeatherTool(MCPTool):
     DESCRIPTION = "查詢指定城市的即時天氣資訊（溫度、濕度、天氣狀況等）"
     CATEGORY = "生活資訊"
     TAGS = ["weather", "天氣", "氣象"]
-    KEYWORDS = ["天氣", "氣溫", "下雨", "晴天", "陰天", "weather", "溫度"]
+    KEYWORDS = ["天氣", "氣溫", "下雨", "晴天", "陰天", "weather", "溫度", "濕度", "會不會下雨", "熱不熱", "冷不冷"]
     USAGE_TIPS = [
-        "提供城市名稱（英文）如 Taipei, Tokyo",
-        "支援經緯度查詢",
-        "可指定語言 (zh_tw, en, zh_cn)"
+        "「台北天氣」→ city=Taipei",
+        "「東京今天會下雨嗎」→ city=Tokyo",
+        "「現在幾度」→ 使用用戶位置"
     ]
+    NEGATIVE_EXAMPLES = [
+        "「天氣預報 App」→ 這是詢問 App，不是查天氣",
+        "「天氣好好」→ 這是感嘆，不是查詢"
+    ]
+    PRIORITY = 1  # 高優先級
+    ALIASES = ["weather", "氣象"]
 
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:
@@ -57,7 +63,7 @@ class WeatherTool(MCPTool):
                 "default": "zh_tw",
                 "enum": ["zh_tw", "en", "zh_cn"]
             }
-        }, ["city"])  # city 可留空，若 lat/lon 有值則忽略
+        }, [])  # 所有參數都是可選的，由 execute 方法內部邏輯判斷
 
     @classmethod
     def get_output_schema(cls) -> Dict[str, Any]:

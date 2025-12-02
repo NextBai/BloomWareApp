@@ -111,6 +111,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="reverse_geocode",
                 requires_env={"lat", "lon"},
+                enable_reformat=True,
             )
         )
         register(
@@ -214,8 +215,69 @@ class MCPAgentBridge:
             await self.mcp_server.start_external_servers()
             logger.info(f"異步初始化完成，完整可用 MCP 工具數量: {len(self.mcp_server.tools)}")
 
+        # 將 MCP Server 的工具註冊到 tool_registry
+        self._sync_tools_to_registry()
+
         # 2025 最佳實踐：啟動時預熱熱門查詢快取
         await self._preheat_cache()
+
+    def _sync_tools_to_registry(self) -> int:
+        """
+        將 MCP Server 的工具同步到 tool_registry
+        
+        Returns:
+            註冊的工具數量
+        """
+        from core.tool_registry import tool_registry
+        
+        count = 0
+        for tool_name, tool in self.mcp_server.tools.items():
+            # 取得工具描述
+            description = getattr(tool, 'description', f'{tool_name} 工具')
+            
+            # 取得參數 Schema
+            parameters = {"type": "object", "properties": {}, "required": []}
+            keywords = []
+            examples = []
+            negative_examples = []
+            category = "general"
+            priority = 100
+            
+            if hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
+                tool_class = tool.handler.__self__
+                
+                # 嘗試從 MCPTool 類別提取完整資訊
+                if hasattr(tool_class, 'get_input_schema'):
+                    try:
+                        parameters = tool_class.get_input_schema()
+                    except Exception as e:
+                        logger.warning(f"取得 {tool_name} schema 失敗: {e}")
+                
+                # 提取增強元資料
+                keywords = getattr(tool_class, 'KEYWORDS', [])
+                examples = getattr(tool_class, 'USAGE_TIPS', [])
+                negative_examples = getattr(tool_class, 'NEGATIVE_EXAMPLES', [])
+                category = getattr(tool_class, 'CATEGORY', 'general')
+                priority = getattr(tool_class, 'PRIORITY', 100)
+            
+            # 判斷是否需要位置
+            props = parameters.get("properties", {})
+            requires_location = "lat" in props or "lon" in props
+            
+            tool_registry.register(
+                name=tool_name,
+                description=description,
+                parameters=parameters,
+                handler=getattr(tool, 'handler', None),
+                category=category,
+                requires_location=requires_location,
+                keywords=keywords,
+                examples=examples,
+            )
+            count += 1
+        
+        logger.info(f"🔧 同步 {count} 個工具到 tool_registry")
+        return count
 
     def _normalize_tool_name(self, raw_name: Optional[str]) -> Optional[str]:
         """
@@ -414,8 +476,11 @@ class MCPAgentBridge:
     async def detect_intent(self, message: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
         檢測用戶消息中的意圖 (保持與舊 FeatureRouter 相同介面)
-        使用 OpenAI Structured Outputs 確保100%返回有效JSON
-        帶快取機制，相同消息直接返回
+        
+        2025 重構版：使用 OpenAI 原生 Function Calling
+        - 不再使用巨大的 system_prompt 描述每個工具
+        - 工具定義由 tools 參數傳遞，GPT 原生選擇
+        - 新增工具只需註冊到 Registry，不需更新任何 prompt
 
         參數:
         message (str): 用戶消息
@@ -423,362 +488,130 @@ class MCPAgentBridge:
         返回:
         tuple: (是否檢測到意圖, 意圖數據)
         """
+        # 使用新的 IntentDetector（基於 OpenAI Function Calling）
+        return await self._detect_intent_with_function_calling(message)
+
+    async def _detect_intent_with_function_calling(self, message: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        使用 OpenAI 原生 Function Calling 進行意圖檢測
+        
+        核心改進：
+        1. 工具定義自動從 Registry 生成
+        2. GPT 原生選擇工具並生成結構化參數
+        3. 不需要自定義 prompt 描述每個工具
+        """
         import hashlib
         import time as time_module
-
+        
         # 生成快取鍵
         cache_key = hashlib.md5(message.encode()).hexdigest()
 
         # 檢查快取
         if cache_key in self._intent_cache:
             has_feature, intent_data, cached_time = self._intent_cache[cache_key]
-            # 檢查是否過期
             if time_module.time() - cached_time < self._intent_cache_ttl:
                 logger.debug(f"💾 意圖快取命中: {message[:50]}...")
                 return has_feature, intent_data
             else:
-                # 過期，刪除快取
                 del self._intent_cache[cache_key]
 
-        logger.info(f"檢測意圖: \"{message}\"")
-        logger.debug("意圖偵測輸入 - user_id=%s, chat_id=%s", "intent_detection", None)
+        logger.info(f"🔍 檢測意圖（Function Calling）: \"{message[:100]}...\"")
 
         # 檢查特殊命令
         for command in ["功能列表", "有什麼功能", "能做什麼"]:
             if command in message:
                 logger.info(f"檢測到特殊命令: {command}")
-                return True, {
-                    "type": "special_command",
-                    "command": "feature_list"
-                }
+                return True, {"type": "special_command", "command": "feature_list"}
 
-        # 使用 GPT + Structured Outputs 進行意圖解析
         try:
-            logger.info("開始使用 GPT Structured Outputs 進行意圖解析")
-
-            # 構建可用工具的描述
-            tools_description = self._get_tools_description()
-
-            # GPT 意圖解析 Prompt - 適配新的 schema（不使用 oneOf）
-            system_prompt = f"""你是一個精確的意圖解析助手。
-
-可用工具：
-{tools_description}
-
-任務：分析用戶消息，決定是否需要調用工具，並判斷用戶情緒。
-
-重要規則：
-1. 健康相關需求（心率、步數、血氧、呼吸、睡眠）使用 healthkit_query
-2. 不需要傳入 user_id，系統會自動補齊
-3. 若無法判斷具體參數，使用合理預設值
-4. 一般閒聊設置 is_tool_call 為 false
-
-特殊處理：
-- 天氣查詢：城市名稱必須使用英文（如 Taipei, Tokyo, New York）
-  * 台北 → Taipei
-  * 東京 → Tokyo
-  * 紐約 → New York
-  * 倫敦 → London
-  * 巴黎 → Paris
-  * 如無指定城市，預設使用 Taipei
-
-- 匯率查詢：
-  * 必須明確指定 from_currency 和 to_currency（ISO 4217 代碼）
-  * 預設：from_currency=USD, to_currency=TWD
-  * 美元 → USD, 台幣 → TWD, 日圓 → JPY, 歐元 → EUR
-  * 金額預設 amount=1.0, conversion=true
-
-- 新聞查詢：
-  * 任何提到「新聞」「消息」「報導」的請求都使用 news_query
-  * 參數：query（關鍵詞）、country（國家，預設 tw）、category（分類，預設 top）、language（語言，預設 zh）
-  * 今日新聞、科技新聞、台灣新聞都應該調用此工具
-
-- 公車查詢（重要！）：
-  * 任何提到「公車」「巴士」「幾號公車」「什麼時候來」的請求都使用 tdx_bus_arrival
-  * **參數名稱是 route_name（不是 stop_name）**
-  * 從用戶訊息中提取路線號碼（如「137」「紅30」「307」）
-  * 範例：
-    - 「137公車什麼時候來」→ tdx_bus_arrival:route_name=137
-    - 「307還要多久」→ tdx_bus_arrival:route_name=307
-    - 「附近有什麼公車」→ tdx_bus_arrival（不需參數，系統自動用 GPS 查詢附近站點）
-    - 「紅30公車」→ tdx_bus_arrival:route_name=紅30
-  * ❌ 錯誤：tdx_bus_arrival:stop_name=137
-  * ✅ 正確：tdx_bus_arrival:route_name=137
-
-- 台鐵/火車查詢（重要！）：
-  * 任何提到「火車」「台鐵」「列車」「自強號」「莒光號」「區間車」的請求都使用 tdx_train
-  * **參數名稱是 origin_station（起站）和 destination_station（迄站）**
-  * **「往XX」「到XX」「去XX」表示目的地（destination_station），不是起點！**
-  * **「從XX」「在XX」表示起點（origin_station）**
-  * **如果用戶沒有明確說起點，就不要填 origin_station，讓系統用 GPS 自動找最近車站**
-  * 範例：
-    - 「往台北的火車」→ tdx_train:destination_station=台北（只填目的地，起點由 GPS 決定）
-    - 「到高雄的火車」→ tdx_train:destination_station=高雄（只填目的地）
-    - 「從桃園到台北」→ tdx_train:origin_station=桃園,destination_station=台北（明確說了起點）
-    - 「台北到台中的火車」→ tdx_train:origin_station=台北,destination_station=台中
-    - 「下一班火車」→ tdx_train（不需參數，系統自動用 GPS 查詢最近車站）
-    - 「自強號 123 次」→ tdx_train:train_no=123
-  * ❌ 錯誤：「往台北」解析為 origin_station=台灣,destination_station=台北（不要亂填起點！）
-  * ❌ 錯誤：「往台北」解析為 origin_station=台北（方向搞反了）
-  * ✅ 正確：「往台北」解析為 destination_station=台北（只填目的地）
-
-- YouBike/共享單車查詢（重要！必須識別！）：
-  * 任何提到以下關鍵詞的請求都使用 tdx_youbike：
-    - 「YouBike」「Youbike」「youbike」「YOUBIKE」
-    - 「UBike」「Ubike」「ubike」「UBIKE」
-    - 「微笑單車」「共享單車」「公共單車」
-    - 「腳踏車站」「單車站」「自行車站」
-    - 「借車」「還車」（在單車語境下）
-    - 「最近的站點」「附近站點」（在單車語境下）
-  * **不是 tdx_parking！YouBike 是單車，不是停車場**
-  * **不是一般聊天！這是工具調用！**
-  * 範例：
-    - 「附近的 YouBike」→ tdx_youbike（不需參數，系統自動用 GPS 查詢）
-    - 「離我最近的 Ubike 站點」→ tdx_youbike
-    - 「最近的Ubike站點」→ tdx_youbike
-    - 「Ubike在哪」→ tdx_youbike
-    - 「哪裡有Ubike」→ tdx_youbike
-    - 「市政府 YouBike 還有車嗎」→ tdx_youbike:station_name=市政府
-  * ❌ 錯誤：is_tool_call=false（這不是聊天！）
-  * ❌ 錯誤：tdx_parking:query=Ubike
-  * ✅ 正確：tdx_youbike
-
-- 停車場查詢：
-  * 任何提到「停車場」「停車位」「汽車停車」的請求才使用 tdx_parking
-  * 範例：
-    - 「附近的停車場」→ tdx_parking
-    - 「市政府停車場」→ tdx_parking:parking_name=市政府
-
-- 地點查詢與導航（重要！）：
-  * **當前位置查詢**：
-    - 問「我在哪」「這是哪裡」「現在在哪」「我的位置」→ 使用 reverse_geocode（不需參數，系統自動用 GPS 座標）
-    - ❌ 錯誤：forward_geocode:query=我在哪
-    - ✅ 正確：reverse_geocode
-  * **導航需求判斷**：
-    - 問「怎麼去 X」「如何去 X」「去 X 怎麼走」「到 X 怎麼走」→ 使用 forward_geocode 查詢目的地座標
-    - 問「從 A 到 B 要多久」「A 到 B 怎麼走」→ 同時使用 forward_geocode 查詢起點與終點
-  * **不要猜測座標**：
-    - ❌ 錯誤：directions:origin_lat=25.1288,origin_lon=121.9234,dest_lat=24.9932,dest_lon=121.3261
-    - ✅ 正確：forward_geocode:query=銘傳大學桃園校區
-  * **工具使用順序**：
-    1. 先使用 forward_geocode 將地點名稱轉換為座標
-    2. 再使用 directions 規劃路線（系統會自動處理）
-  * **範例**：
-    - 「我在哪」→ reverse_geocode（系統自動補 lat/lon）
-    - 「怎麼去桃園火車站」→ forward_geocode:query=桃園火車站
-    - 「從銘傳大學到桃園火車站」→ forward_geocode:query=銘傳大學桃園校區
-    - 「台北車站到淡水捷運站」→ forward_geocode:query=台北車站
-
-情緒判斷（emotion）：
-根據文字的語氣、用詞、標點符號判斷用戶情緒，選擇以下之一：
-- neutral: 平靜、中性（預設）
-- happy: 開心、興奮、愉快（如「好開心！」「太棒了」「哈哈」）
-- sad: 難過、沮喪、失落（如「好難過」「唉...」「心情不好」）
-- angry: 生氣、憤怒、煩躁（如「煩死了」「幹嘛啦」「氣死我了」）
-- fear: 恐懼、擔心、焦慮（如「好害怕」「好擔心」「怎麼辦」）
-- surprise: 驚訝、意外（如「什麼！」「真的假的」「不會吧」）
-
-回應格式：
-- is_tool_call: true/false（是否調用工具）
-- tool_name: 工具名稱和參數（僅當 is_tool_call=true 時提供，格式：tool_name:param1=value1,param2=value2）
-- emotion: 用戶情緒標籤（必填）
-
-示例：
-- "我在哪" → {{"is_tool_call": true, "tool_name": "reverse_geocode", "emotion": "neutral"}}
-- "這是哪裡" → {{"is_tool_call": true, "tool_name": "reverse_geocode", "emotion": "neutral"}}
-- "台北天氣" → {{"is_tool_call": true, "tool_name": "weather_query:city=Taipei", "emotion": "neutral"}}
-- "好開心！今天天氣好嗎" → {{"is_tool_call": true, "tool_name": "weather_query:city=Taipei", "emotion": "happy"}}
-- "美元匯率" → {{"is_tool_call": true, "tool_name": "exchange_query:from_currency=USD,to_currency=TWD,amount=1.0", "emotion": "neutral"}}
-- "今日新聞" → {{"is_tool_call": true, "tool_name": "news_query:country=tw,language=zh", "emotion": "neutral"}}
-- "科技新聞" → {{"is_tool_call": true, "tool_name": "news_query:query=科技,category=technology,language=zh", "emotion": "neutral"}}
-- "最近的Ubike站點" → {{"is_tool_call": true, "tool_name": "tdx_youbike", "emotion": "neutral"}}
-- "附近的YouBike" → {{"is_tool_call": true, "tool_name": "tdx_youbike", "emotion": "neutral"}}
-- "Ubike在哪" → {{"is_tool_call": true, "tool_name": "tdx_youbike", "emotion": "neutral"}}
-- "往台北的火車" → {{"is_tool_call": true, "tool_name": "tdx_train:destination_station=台北", "emotion": "neutral"}}
-- "你好" → {{"is_tool_call": false, "tool_name": "", "emotion": "neutral"}}
-- "我好難過..." → {{"is_tool_call": false, "tool_name": "", "emotion": "sad"}}
-- "煩死了" → {{"is_tool_call": false, "tool_name": "", "emotion": "angry"}}"""
-
+            # 從 tool_registry 取得 OpenAI tools 格式
+            from core.tool_registry import tool_registry
+            from core.tool_router import tool_router
+            
+            all_tools = tool_registry.get_openai_tools(strict=False)
+            
+            if not all_tools:
+                logger.warning("⚠️ 沒有可用的工具，降級為聊天")
+                return False, {"emotion": "neutral"}
+            
+            # 使用 ToolRouter 動態過濾和排序工具
+            context = {"hour": datetime.now().hour}
+            tools = tool_router.filter_tools(all_tools, message, context)
+            
+            logger.info(f"🔧 載入 {len(all_tools)} 個工具，過濾後 {len(tools)} 個")
+            
+            # 建構精簡的 system prompt（只處理特殊規則）
+            system_prompt = self._build_function_calling_prompt()
+            
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": message}
             ]
-
-            # 使用 Structured Outputs（動態推理強度）
+            
+            # 使用 OpenAI Function Calling
+            from core.reasoning_strategy import get_optimal_reasoning_effort
             optimal_effort = get_optimal_reasoning_effort("intent_detection")
             logger.info(f"🧠 意圖檢測推理強度: {optimal_effort}")
-
-            response = await ai_service.generate_response_for_user(
+            
+            response = await ai_service.generate_response_with_tools(
                 messages=messages,
+                tools=tools,
                 user_id="intent_detection",
-                model="gpt-5-nano",
-                chat_id=None,
-                use_structured_outputs=True,
-                response_schema=self._get_intent_schema(),
-                reasoning_effort=optimal_effort  # 動態調整
+                model="gpt-4o-mini",  # 使用更強的模型以提升參數提取準確度
+                reasoning_effort=None,  # gpt-4o-mini 不支援 reasoning_effort
+                tool_choice="auto",
             )
-
-            logger.debug("GPT Structured Outputs 回應: %s", response)
-
-            # 檢查是否為 fallback 錯誤訊息
-            if response.strip() in ["抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？", "抱歉，生成回應時遇到問題。請重試。"]:
-                logger.warning("Structured Outputs 返回 fallback 訊息，視為失敗")
-                raise Exception("Structured Outputs failed with fallback message")
-
-            # Structured Outputs 保證返回有效JSON，直接解析
-            try:
-                response_text = response.strip()
+            
+            # 解析回應
+            tool_calls = response.get("tool_calls", [])
+            
+            if tool_calls:
+                # GPT 選擇了工具
+                tool_call = tool_calls[0]
+                function = tool_call.get("function", {})
+                tool_name = function.get("name", "")
+                arguments_str = function.get("arguments", "{}")
                 
-                # 處理 GPT 回應重複 JSON 的情況（如 {...}{...}）
-                # 只取第一個完整的 JSON 物件
-                if response_text.startswith("{"):
-                    brace_count = 0
-                    end_idx = 0
-                    for i, char in enumerate(response_text):
-                        if char == "{":
-                            brace_count += 1
-                        elif char == "}":
-                            brace_count -= 1
-                            if brace_count == 0:
-                                end_idx = i + 1
-                                break
-                    if end_idx > 0:
-                        response_text = response_text[:end_idx]
-                
-                intent_data = json.loads(response_text)
-                logger.debug("解析後的意圖資料: %s", _safe_json(intent_data))
-
-                # 新的 schema 格式：is_tool_call, tool_name（包含參數）
-                is_tool_call = intent_data.get("is_tool_call", False)
-
-                if is_tool_call:
-                    tool_name_with_params = intent_data.get("tool_name", "").strip()
-
-                    if not tool_name_with_params:
-                        logger.warning("⚠️ GPT 標記為工具調用但未提供工具名稱，降級為聊天")
-                        return False, None
-
-                    raw_tool_name = tool_name_with_params
-                    params_str = ""
-                    if ":" in tool_name_with_params:
-                        raw_tool_name, params_str = tool_name_with_params.split(":", 1)
-
-                    tool_name = self._normalize_tool_name(raw_tool_name)
-                    if not tool_name:
-                        logger.warning(f"⚠️ 工具 {raw_tool_name} 無法對應到註冊名稱，降級為聊天")
-                        return False, None
-
-                    # 解析參數
+                try:
+                    arguments = json.loads(arguments_str)
+                except json.JSONDecodeError:
                     arguments = {}
-                    if params_str.strip():
-                        # 獲取工具的 input schema 以確定參數類型
-                        tool = self.mcp_server.tools.get(tool_name)
-                        input_schema = {}
-                        if tool and hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
-                            tool_class = tool.handler.__self__
-                            if hasattr(tool_class, 'get_input_schema'):
-                                try:
-                                    input_schema = tool_class.get_input_schema()
-                                except:
-                                    pass
-                        
-                        properties = input_schema.get('properties', {})
-                        
-                        for param_pair in params_str.split(","):
-                            if "=" not in param_pair:
-                                continue
-                            key, value = param_pair.split("=", 1)
-                            key = key.strip()
-                            value = value.strip()
-
-                            # 跳過空鍵或空值（避免傳入空字串導致驗證失敗）
-                            if not key or not value:
-                                continue
-
-                            # 根據 schema 中的類型定義來轉換值
-                            param_schema = properties.get(key, {})
-                            param_type = param_schema.get('type', 'string')
-                            
-                            normalized_value = value
-                            
-                            # 根據 schema 類型進行轉換
-                            if param_type == 'integer':
-                                try:
-                                    normalized_value = int(value)
-                                except ValueError:
-                                    normalized_value = value
-                            elif param_type == 'number':
-                                try:
-                                    normalized_value = float(value)
-                                except ValueError:
-                                    normalized_value = value
-                            elif param_type == 'boolean':
-                                lower_value = value.lower()
-                                if lower_value in ("true", "false"):
-                                    normalized_value = lower_value == "true"
-                            # 其他類型（包括 string）保持原樣
-
-                            arguments[key] = normalized_value
-
-                    logger.info(f"✅ GPT 檢測到工具調用: {raw_tool_name.strip()} → {tool_name}")
-                    logger.debug("工具調用參數: %s", _safe_json(arguments))
-
-                    # 驗證工具是否存在
-                    if tool_name not in self.mcp_server.tools:
-                        logger.warning(f"⚠️ 工具 {tool_name} 不存在，降級為聊天")
-                        return False, None
-
-                    # 基礎參數驗證（可選，Structured Outputs 已保證格式）
-                    tool = self.mcp_server.tools[tool_name]
-                    if hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
-                        tool_class = tool.handler.__self__
-                        if hasattr(tool_class, 'validate_input'):
-                            try:
-                                validated_args = tool_class.validate_input(arguments)
-                                logger.debug("✓ 參數驗證通過: %s", _safe_json(validated_args))
-                            except Exception as e:
-                                logger.warning(f"⚠️ 參數驗證失敗: {e}，仍然嘗試執行")
-                                # 不中斷，讓工具自己處理
-
-                    # 提取情緒（新增）
-                    emotion = intent_data.get("emotion", "neutral")
-                    logger.info(f"😊 偵測到情緒: {emotion}")
-
-                    intent_result = (True, {
-                        "type": "mcp_tool",
-                        "tool_name": tool_name,
-                        "arguments": arguments,
-                        "emotion": emotion  # 新增情緒欄位
-                    })
-
-                    # 寫入快取
-                    self._intent_cache[cache_key] = (*intent_result, time_module.time())
-                    logger.debug(f"💾 意圖結果已快取: {tool_name}")
-
-                    return intent_result
-
-                else:
-                    # is_tool_call = False，表示一般聊天
-                    logger.info("💬 GPT 判斷為一般聊天")
-
-                    # 提取情緒（新增）
-                    emotion = intent_data.get("emotion", "neutral")
-                    logger.info(f"😊 偵測到情緒: {emotion}")
-
-                    # 寫入快取（一般聊天也要回傳情緒）
-                    intent_result = (False, {"emotion": emotion})
-                    self._intent_cache[cache_key] = (*intent_result, time_module.time())
-
-                    return intent_result
-
-            except json.JSONDecodeError as e:
-                # Structured Outputs 不應該發生這種錯誤，記錄異常
-                logger.error(f"❌ Structured Outputs JSON 解析失敗（異常情況）: {e}, response: {response}")
-                return False, None
-
+                
+                # 正規化工具名稱
+                normalized_name = self._normalize_tool_name(tool_name)
+                if not normalized_name:
+                    logger.warning(f"⚠️ 工具 {tool_name} 無法對應到註冊名稱，降級為聊天")
+                    return False, {"emotion": "neutral"}
+                
+                logger.info(f"✅ GPT 選擇工具: {normalized_name}")
+                logger.debug(f"工具參數: {_safe_json(arguments)}")
+                
+                # 提取情緒（從 content 或預設）
+                emotion = self._extract_emotion_from_content(response.get("content", ""))
+                
+                intent_result = (True, {
+                    "type": "mcp_tool",
+                    "tool_name": normalized_name,
+                    "arguments": arguments,
+                    "emotion": emotion,
+                })
+                
+                # 寫入快取
+                self._intent_cache[cache_key] = (*intent_result, time_module.time())
+                return intent_result
+            
+            else:
+                # GPT 未選擇工具，視為一般聊天
+                logger.info("💬 GPT 判斷為一般聊天")
+                emotion = self._extract_emotion_from_content(response.get("content", ""))
+                
+                intent_result = (False, {"emotion": emotion})
+                self._intent_cache[cache_key] = (*intent_result, time_module.time())
+                return intent_result
+                
         except Exception as e:
-            logger.error(f"❌ GPT 意圖解析發生錯誤: {e}")
-            # 降級處理：使用關鍵詞匹配
+            logger.error(f"❌ Function Calling 意圖檢測失敗: {e}")
+            # 降級：使用關鍵詞匹配
             logger.info("🔄 嘗試使用關鍵詞匹配作為降級方案")
             try:
                 fallback_result = self._keyword_intent_detection(message)
@@ -787,10 +620,177 @@ class MCPAgentBridge:
                     return fallback_result
             except Exception as fallback_error:
                 logger.error(f"❌ 關鍵詞匹配也失敗: {fallback_error}")
-
+        
         # 最終降級：視為一般聊天
         logger.info("💬 降級為一般聊天")
-        return False, None
+        return False, {"emotion": "neutral"}
+
+    def _build_function_calling_prompt(self) -> str:
+        """
+        建構精簡的 Function Calling system prompt
+        
+        注意：不再描述每個工具，工具定義由 tools 參數傳遞
+        只處理特殊規則和情緒判斷
+        """
+        return """你是一個智能助手，根據用戶需求選擇合適的工具。
+
+規則：
+1. 如果用戶需求可以用工具解決，選擇最適合的工具
+2. 如果是一般聊天或問候，不要選擇任何工具
+3. 工具參數盡量從用戶消息中提取，無法確定的使用合理預設值
+
+【重要】語言使用規範：
+- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）
+- 回覆用戶時：必須使用繁體中文
+- 範例：用戶說「台北天氣」→ 參數 {"city": "Taipei"}，回覆「台北目前...」
+
+參數語言轉換規則：
+- 城市名稱：台北→Taipei, 新北→NewTaipei, 桃園→Taoyuan, 台中→Taichung, 台南→Tainan, 高雄→Kaohsiung, 新竹→Hsinchu
+- 國家名稱：台灣→Taiwan, 美國→USA, 日本→Japan, 英國→UK
+- 貨幣代碼：美元→USD, 台幣→TWD, 日圓→JPY, 歐元→EUR, 英鎊→GBP
+
+【重要】城市參數提取原則：
+- 只有在用戶明確提到城市名稱時才填 city 參數
+- 「附近」「這裡」「我這邊」等詞 → 不填 city 參數，系統會自動從 GPS 判斷
+- 「台北的XX」「桃園XX」→ 填對應的英文城市名
+- 範例：「附近的 YouBike」→ {}，「桃園的 YouBike」→ {"city": "Taoyuan"}
+
+匯率查詢（重要！參數提取規則）：
+當用戶詢問匯率資訊時，你必須從消息中提取貨幣代碼並填入參數。
+
+參數提取規則：
+1. 句型「[貨幣A]轉[貨幣B]」「[貨幣A]換[貨幣B]」「[貨幣A]兌[貨幣B]」→ {"from_currency": "代碼A", "to_currency": "代碼B"}
+2. 句型「[數字][貨幣A]是多少[貨幣B]」→ {"from_currency": "代碼A", "to_currency": "代碼B", "amount": 數字}
+3. 句型「匯率」「美金」「日幣」→ 提取提到的貨幣
+4. 貨幣代碼必須用 ISO 4217 標準（3個大寫字母）
+
+常見貨幣代碼對照：
+- 美元/美金 → USD
+- 台幣/新台幣 → TWD
+- 日圓/日幣 → JPY
+- 歐元 → EUR
+- 英鎊 → GBP
+- 人民幣 → CNY
+- 港幣 → HKD
+- 韓元 → KRW
+
+實際範例：
+- 「美元轉日幣的匯率」→ {"from_currency": "USD", "to_currency": "JPY"}
+- 「台幣換美金」→ {"from_currency": "TWD", "to_currency": "USD"}
+- 「100美元是多少台幣」→ {"from_currency": "USD", "to_currency": "TWD", "amount": 100}
+- 「歐元兌日圓」→ {"from_currency": "EUR", "to_currency": "JPY"}
+- 「匯率」→ {"from_currency": "USD", "to_currency": "TWD"}（預設）
+
+重要：必須提取貨幣代碼！不要返回空參數！
+
+公車查詢（重要！參數提取規則）：
+當用戶詢問公車資訊時，你必須從消息中提取路線號碼並填入參數。
+
+tdx_bus_arrival 適用場景：
+- 查詢「已知路線號碼」的到站時間
+- 查詢附近公車站點（不需 route_name）
+
+參數提取規則：
+1. 句型「[數字]公車」「[數字]號公車」→ {"route_name": "數字"}
+2. 句型「[顏色][數字]」（如「紅30」）→ {"route_name": "顏色數字"}
+3. 句型「[數字]還要多久」「[數字]什麼時候到」→ {"route_name": "數字"}
+4. 句型「[路線名]公車到站」→ {"route_name": "路線名"}
+5. 「附近公車」「公車站」「有什麼公車」→ {}（系統自動從 GPS 判斷城市）
+6. 城市參數：只在用戶明確提到城市時才填，否則留空讓系統自動判斷
+
+實際範例：
+- 「261公車什麼時候到」→ {"route_name": "261"}（不填 city）
+- 「307還要多久」→ {"route_name": "307"}（不填 city）
+- 「台北261公車」→ {"route_name": "261", "city": "Taipei"}（明確提到台北）
+- 「桃園紅30公車」→ {"route_name": "紅30", "city": "Taoyuan"}（明確提到桃園）
+- 「附近有什麼公車」→ {}（完全空參數，系統自動判斷）
+
+不適用場景（應使用 directions）：
+- 「從A到B的公車」「往XX的公車」→ 這是路線規劃，不是查詢特定路線
+- 「去台北的公車」→ 台北是目的地，不是路線號碼
+
+重要：如果提到路線號碼，必須提取！城市參數必須用英文！
+
+火車查詢（重要！參數提取規則）：
+當用戶詢問火車資訊時，你必須從消息中提取站名並填入參數。
+
+參數提取規則（適用於任何地名）：
+1. 句型「從 [地名A] 往/到 [地名B]」→ {"origin_station": "地名A", "destination_station": "地名B"}
+2. 句型「[地名A] 到/往 [地名B]」→ {"origin_station": "地名A", "destination_station": "地名B"}
+3. 句型「往/去 [地名]」→ {"destination_station": "地名"}
+4. 句型「[車種][數字]次」→ {"train_no": "數字"}
+5. 包含時間 → 提取為 departure_time（HH:MM 格式）
+
+實際範例：
+- 「從彰化往台北的火車」→ {"origin_station": "彰化", "destination_station": "台北"}
+- 「台中到高雄」→ {"origin_station": "台中", "destination_station": "高雄"}
+- 「往新竹的火車」→ {"destination_station": "新竹"}
+- 「自強號123次」→ {"train_no": "123"}
+- 「早上8點台南到台北」→ {"origin_station": "台南", "destination_station": "台北", "departure_time": "08:00"}
+
+重要：絕對不要返回空的 {} 參數！必須從用戶消息中提取站名！
+
+位置查詢：
+- 「我在哪」使用 reverse_geocode，不需要參數
+- 「怎麼去XX」使用 forward_geocode 或 directions
+
+YouBike 查詢（重要！參數提取規則）：
+當用戶詢問 YouBike/Ubike/微笑單車時，你必須調用 tdx_youbike 工具。
+
+參數提取規則：
+1. 「附近的 YouBike」「Ubike 在哪」→ {}（不填 city，系統自動從 GPS 判斷）
+2. 「市政府 YouBike」「台北車站 Ubike」→ {"station_name": "市政府"}（不填 city）
+3. 「XX站還有車嗎」→ {"station_name": "XX站"}（不填 city）
+4. 「台北的 YouBike」「桃園 YouBike」→ 填對應英文城市名
+5. 站名可用中文，城市必須用英文
+
+實際範例：
+- 「附近的 YouBike」→ {}（完全空參數，系統自動判斷城市）
+- 「市政府 YouBike 還有車嗎」→ {"station_name": "市政府"}（不填 city）
+- 「台北車站 Ubike」→ {"station_name": "台北車站"}（不填 city）
+- 「台北的 YouBike」→ {"city": "Taipei"}（明確提到台北）
+- 「桃園 YouBike」→ {"city": "Taoyuan"}（明確提到桃園）
+
+重要：只在用戶明確提到城市時才填 city 參數！站名可保持中文！
+
+【情緒偵測】（重要！）：
+- 分析用戶的情緒狀態（根據用詞、語氣、標點符號、表情符號）
+- 在回應的最後一行加上情緒標籤：[EMOTION:情緒]
+- 情緒類型：neutral（平靜）、happy（開心）、sad（難過）、angry（生氣）、fear（害怕）、surprise（驚訝）
+- 範例：
+  * 用戶說「我現在覺得很生氣」→ 回應最後加上 [EMOTION:angry]
+  * 用戶說「好開心啊！」→ 回應最後加上 [EMOTION:happy]
+  * 用戶說「我好難過...」→ 回應最後加上 [EMOTION:sad]
+  * 用戶說「好可怕」→ 回應最後加上 [EMOTION:fear]
+  * 用戶說「哇！」→ 回應最後加上 [EMOTION:surprise]
+  * 一般對話 → 回應最後加上 [EMOTION:neutral]
+"""
+
+    def _extract_emotion_from_content(self, content: str) -> str:
+        """從回應內容中提取情緒標籤 [EMOTION:xxx]"""
+        if not content:
+            return "neutral"
+        
+        # 優先從標籤提取
+        import re
+        emotion_match = re.search(r'\[EMOTION:(neutral|happy|sad|angry|fear|surprise)\]', content, re.IGNORECASE)
+        if emotion_match:
+            emotion = emotion_match.group(1).lower()
+            logger.info(f"😊 從標籤提取情緒: {emotion}")
+            return emotion
+        
+        # 降級：從內容搜尋英文關鍵字
+        content_lower = content.lower()
+        emotions = ["happy", "sad", "angry", "fear", "surprise"]
+        
+        for emotion in emotions:
+            if emotion in content_lower:
+                logger.debug(f"從內容搜尋到情緒關鍵字: {emotion}")
+                return emotion
+        
+        return "neutral"
+
+    # 舊版 _detect_intent_legacy 已移除，改用 _detect_intent_with_function_calling
 
     def _get_intent_schema(self) -> Dict[str, Any]:
         """
@@ -1138,23 +1138,33 @@ class MCPAgentBridge:
                 "你是一個友善、健談的AI助手。\n"
                 "用戶剛剛問了一個問題，我已經用工具查詢到資料了。\n"
                 "請用自然、口語化的方式回答用戶，就像朋友聊天一樣。\n\n"
-                "要求：\n"
+                "【核心原則】\n"
+                "⭐ 只回答使用者問的問題，不要把所有數據都說出來\n"
+                "⭐ 分析使用者的核心意圖（問溫度？天氣？時間？地點？數量？）\n"
+                "⭐ 從工具數據中只提取相關資訊，無關資訊一律省略\n\n"
+                "【回應要求】\n"
                 "1. 使用口語化、親切的語氣（可以用「喔」「呢」「哦」等語氣詞）\n"
                 "2. 不要列表式的羅列數據，而是用對話方式描述\n"
-                "3. 突出最重要的資訊（2-3句話）\n"
+                "3. 只說使用者問的內容（2-3句話）\n"
                 "4. 適當使用 emoji 增加親和力\n"
-                "5. 如果數據很多，只說重點\n"
+                "5. 如有額外有用資訊，可簡短補充（不超過一句話）\n"
                 "6. 保持簡短（50字以內最好）\n\n"
-                "範例：\n"
-                "❌ 不好：「當前溫度23.88°C，體感溫度24.02°C，天氣狀況多雲...」\n"
-                "✅ 良好：「台北現在23度左右，有點多雲呢！體感還蠻舒服的～」\n\n"
-                "記住：你是在聊天，不是在報告數據！"
+                "【範例】\n"
+                "用戶問：「台北現在幾度？」\n"
+                "工具返回：溫度23.88°C、濕度65%、風速3m/s、氣壓1013hPa...\n"
+                "❌ 錯誤：「台北現在23度，濕度65%，風速3m/s...」（說太多）\n"
+                "✅ 正確：「台北現在23度左右喔！」（只回答溫度）\n"
+                "✅ 可接受：「台北現在23度，體感蠻舒服的～」（簡短補充）\n\n"
+                "記住：精準回答使用者的問題，不要喧賓奪主！"
             )
 
             user_prompt = (
-                f"用戶問：「{original_message}」\n\n"
-                f"我用 {tool_name} 查到的資料：\n{content}\n\n"
-                f"請用自然對話的方式回答用戶（簡短、親切、口語化）："
+                f"【使用者的核心問題】\n"
+                f"「{original_message}」\n\n"
+                f"【工具 {tool_name} 返回的數據】\n"
+                f"{content}\n\n"
+                f"【任務】\n"
+                f"請只回答使用者問的問題（簡短、親切、口語化）："
             )
 
             messages = [

@@ -118,6 +118,40 @@ class Settings:
     ENV_CONTEXT_HEADING_THRESHOLD: float = float(os.getenv("ENV_CONTEXT_HEADING_THRESHOLD", "25"))
     ENV_CONTEXT_TTL_SECONDS: float = float(os.getenv("ENV_CONTEXT_TTL_SECONDS", "300"))
 
+    # ===== CORS 安全設定 =====
+    # 生產環境應設定具體的允許來源，多個來源用逗號分隔
+    # 例如：CORS_ORIGINS=https://example.com,https://app.example.com
+    _cors_origins_raw: str = os.getenv("CORS_ORIGINS", "*")
+
+    @classmethod
+    def get_cors_origins(cls) -> list:
+        """取得 CORS 允許的來源列表"""
+        if cls._cors_origins_raw == "*":
+            return ["*"]
+        return [origin.strip() for origin in cls._cors_origins_raw.split(",") if origin.strip()]
+
+    # ===== 安全性設定 =====
+    # 登入失敗封鎖閾值
+    FAILED_LOGIN_THRESHOLD: int = int(os.getenv("FAILED_LOGIN_THRESHOLD", "5"))
+    # 封鎖時間（秒）
+    LOGIN_BLOCK_DURATION: int = int(os.getenv("LOGIN_BLOCK_DURATION", "900"))  # 15 分鐘
+    # JWT Secret 最小長度
+    JWT_SECRET_MIN_LENGTH: int = 32
+
+    # ===== 效能調優常數 =====
+    # WebSocket 會話超時（秒）
+    WEBSOCKET_SESSION_TIMEOUT: int = int(os.getenv("WEBSOCKET_SESSION_TIMEOUT", "1800"))  # 30 分鐘
+    # 定期清理間隔（秒）
+    CLEANUP_INTERVAL: int = int(os.getenv("CLEANUP_INTERVAL", "1800"))  # 30 分鐘
+    # 記憶重要性閾值
+    MEMORY_IMPORTANCE_THRESHOLD: float = float(os.getenv("MEMORY_IMPORTANCE_THRESHOLD", "0.6"))
+    # 意圖快取 TTL（秒）
+    INTENT_CACHE_TTL: int = int(os.getenv("INTENT_CACHE_TTL", "300"))  # 5 分鐘
+    # 對話歷史載入限制
+    CHAT_HISTORY_LIMIT: int = int(os.getenv("CHAT_HISTORY_LIMIT", "12"))
+    # 關懷模式對話歷史限制
+    CARE_MODE_HISTORY_LIMIT: int = int(os.getenv("CARE_MODE_HISTORY_LIMIT", "3"))
+
     @classmethod
     def validate(cls) -> bool:
         """
@@ -156,9 +190,16 @@ class Settings:
         if not cls.OPENAI_API_KEY.startswith("sk-"):
             print("⚠️ OpenAI API Key 格式可能不正確（應以 'sk-' 開頭）")
 
-        # 驗證 JWT Secret 長度
-        if len(cls.JWT_SECRET_KEY) < 32:
-            print("⚠️ JWT Secret Key 長度建議至少 32 個字符")
+        # 驗證 JWT Secret 長度（強制檢查）
+        if len(cls.JWT_SECRET_KEY) < cls.JWT_SECRET_MIN_LENGTH:
+            print(f"❌ JWT Secret Key 長度必須至少 {cls.JWT_SECRET_MIN_LENGTH} 個字符")
+            if cls.IS_PRODUCTION:
+                return False
+            print("⚠️ 開發環境允許繼續，但生產環境將拒絕啟動")
+
+        # 生產環境 CORS 檢查
+        if cls.IS_PRODUCTION and cls._cors_origins_raw == "*":
+            print("⚠️ 生產環境建議設定具體的 CORS_ORIGINS，而非 '*'")
 
         return True
 
