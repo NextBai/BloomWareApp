@@ -44,7 +44,7 @@ COPY . .
 
 # Build Next.js 前端
 RUN cd bloom-ware-login \
-    && npm install \
+    && npm install --legacy-peer-deps \
     && npm run build \
     && cd ..
 
