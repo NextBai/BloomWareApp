@@ -44,8 +44,13 @@ COPY . .
 
 # Build Next.js 前端
 RUN cd bloom-ware-login \
+    && echo "=== 檢查檔案結構 ===" \
+    && ls -la lib/ \
+    && echo "=== 檢查 tsconfig.json ===" \
+    && cat tsconfig.json | grep -A 5 "paths" \
     && npm install --legacy-peer-deps \
-    && npm run build \
+    && echo "=== 使用 webpack 建置（禁用 Turbopack） ===" \
+    && NEXT_USE_TURBOPACK=0 npm run build \
     && cd ..
 
 ENV PORT=7860
