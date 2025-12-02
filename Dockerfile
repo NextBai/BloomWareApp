@@ -9,6 +9,7 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /app
 
+# 安裝系統依賴（包含 Node.js）
 COPY requirements.txt ./
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -23,6 +24,9 @@ RUN apt-get update \
         ffmpeg \
         libasound2-dev \
         portaudio19-dev \
+        curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && pip install --no-cache-dir --prefer-binary -r requirements.txt \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
@@ -37,6 +41,12 @@ RUN mkdir -p ${XDG_CACHE_HOME}/fontconfig \
     && chmod -R 777 /tmp/voice_cache
 
 COPY . .
+
+# Build Next.js 前端
+RUN cd bloom-ware-login \
+    && npm install \
+    && npm run build \
+    && cd ..
 
 ENV PORT=7860
 

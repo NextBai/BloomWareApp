@@ -37,3 +37,6 @@ soundfile>=0.12.0
 noisereduce>=0.4.3
 pyaudio
 transformers
+
+# Voice authentication (speaker recognition)
+speechbrain>=1.0.0
