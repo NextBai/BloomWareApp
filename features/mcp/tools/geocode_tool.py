@@ -168,7 +168,7 @@ class ReverseGeocodeTool(MCPTool):
         
         # 地點名稱（優先使用繁中）
         name = data.get("name") or ""
-        namedetails = data.get("namedetails", {})
+        namedetails = data.get("namedetails") or {}
         name_zh = namedetails.get("name:zh") or namedetails.get("name:zh-TW") or name
         
         display_name = data.get("display_name") or ""

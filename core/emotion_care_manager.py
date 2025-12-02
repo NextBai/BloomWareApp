@@ -90,13 +90,15 @@ class EmotionCareManager:
         return True
 
     @classmethod
-    def check_release(cls, user_id: str, message: str, chat_id: Optional[str] = None) -> bool:
+    def check_release(cls, user_id: str, message: str, chat_id: Optional[str] = None, emotion: Optional[str] = None) -> bool:
         """
-        檢查用戶訊息是否包含解除關鍵字
+        檢查用戶訊息是否包含解除關鍵字或情緒恢復為 neutral
 
         參數:
             user_id: 用戶 ID
             message: 用戶訊息
+            chat_id: 對話 ID（可選）
+            emotion: 當前偵測到的情緒（可選）
 
         返回:
             bool: 是否解除關懷模式（True=解除，False=繼續關懷）
@@ -105,18 +107,29 @@ class EmotionCareManager:
         if not state or not state.get("in_care_mode", False):
             return False
 
+        # 優先檢查情緒：如果偵測到 neutral，立即解除關懷模式
+        if emotion and emotion.lower() == "neutral":
+            original_emotion = state.get("emotion", "unknown")
+            duration = time.time() - state.get("start_time", 0)
+
+            state["in_care_mode"] = False
+            state["last_exit_time"] = time.time()
+
+            logger.info(f"✅ 用戶 {user_id}（chat={chat_id or 'default'}）情緒恢復為 neutral（{original_emotion} → neutral），解除關懷模式（持續 {duration:.1f}秒）")
+            return True
+
         # 檢查是否包含解除關鍵字
         message_lower = message.lower().strip()
         for keyword in cls.RELEASE_KEYWORDS:
             if keyword in message_lower:
                 # 解除關懷模式
-                emotion = state.get("emotion", "unknown")
+                original_emotion = state.get("emotion", "unknown")
                 duration = time.time() - state.get("start_time", 0)
 
                 state["in_care_mode"] = False
                 state["last_exit_time"] = time.time()
 
-                logger.info(f"✅ 用戶 {user_id}（chat={chat_id or 'default'}）情緒恢復（{emotion} → 正常），解除關懷模式（持續 {duration:.1f}秒）")
+                logger.info(f"✅ 用戶 {user_id}（chat={chat_id or 'default'}）情緒恢復（{original_emotion} → 正常），解除關懷模式（持續 {duration:.1f}秒）")
                 return True
 
         return False

@@ -36,7 +36,9 @@ class STTService:
         self,
         audio_data: bytes,
         language: str = "zh",
-        prompt: Optional[str] = None
+        prompt: Optional[str] = None,
+        stream: bool = False,
+        on_delta: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
         使用 Whisper API 將音頻轉文字
@@ -45,6 +47,8 @@ class STTService:
             audio_data: 音頻數據（PCM16 raw bytes 或完整 WAV 文件）
             language: 語言代碼（zh, en, ja, ko 等）
             prompt: 提示詞（可選，幫助提高準確度）
+            stream: 是否啟用串流轉錄（邊轉邊發）
+            on_delta: 串流模式下的回調函數，接收部分轉錄結果
 
         Returns:
             {

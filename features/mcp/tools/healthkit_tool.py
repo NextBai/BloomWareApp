@@ -110,8 +110,8 @@ class HealthKitTool(MCPTool):
 
             logger.debug("✅ 使用 Firestore 數據庫連接")
 
-            # 解析參數
-            user_id = arguments.get('user_id')
+            # 解析參數（_user_id 由 coordinator 注入）
+            user_id = arguments.get('_user_id')
             metric_type = arguments.get('metric_type', 'all')
             days = arguments.get('days', 7)
             latest_only = arguments.get('latest_only', False)
@@ -120,6 +120,7 @@ class HealthKitTool(MCPTool):
             # 如果沒有提供 user_id，返回錯誤
             if not user_id:
                 return cls.create_error_response(
+                    error="需要提供用戶 ID",
                     code="USER_ID_REQUIRED"
                 )
 
@@ -197,18 +198,27 @@ class HealthKitTool(MCPTool):
             except Exception:
                 pass  # 設備資訊是可選的
             
+            # 限制返回給前端的數據量（避免傳輸過多數據）
+            # 前端工具卡片只顯示最新的 20 筆，但 count 顯示總數
+            display_limit = 20
+            display_data = data[:display_limit] if len(data) > display_limit else data
+            
             return cls.create_success_response(
                 content=summary,
                 data={
-                    "health_data": data,
-                    "count": len(data),
-                    "query": {
-                        "metric_type": metric_type,
-                        "days": days,
-                        "latest_only": latest_only,
-                        "aggregation": aggregation
-                    },
-                    "device_info": device_info
+                    "raw_data": {
+                        "health_data": display_data,
+                        "count": len(data),
+                        "total_records": len(data),
+                        "displayed_records": len(display_data),
+                        "query": {
+                            "metric_type": metric_type,
+                            "days": days,
+                            "latest_only": latest_only,
+                            "aggregation": aggregation
+                        },
+                        "device_info": device_info
+                    }
                 }
             )
             
@@ -325,7 +335,8 @@ class HealthKitTool(MCPTool):
                 if values:
                     avg_value = sum(values) / len(values)
                     latest_value = values[0] if values else 0
-                    summary += f"• {name}: 最新 {latest_value:.1f}，平均 {avg_value:.1f} ({len(values)} 筆記錄)\n"
+                    # 不顯示記錄數，避免使用者困惑
+                    summary += f"• {name}: 最新 {latest_value:.1f}，平均 {avg_value:.1f}\n"
         else:
             name = metric_names.get(metric_type, metric_type)
             if len(data) == 1:
@@ -336,6 +347,7 @@ class HealthKitTool(MCPTool):
                 values = [p["value"] for p in data]
                 avg_value = sum(values) / len(values)
                 latest_value = values[0] if values else 0
-                summary = f"{name}數據：最新 {latest_value:.1f} {data[0]['unit']}，平均 {avg_value:.1f}，共 {len(data)} 筆記錄"
+                # 不顯示記錄數，避免使用者困惑（AI 會根據需要提取重點）
+                summary = f"{name}數據：最新 {latest_value:.1f} {data[0]['unit']}，平均 {avg_value:.1f}"
         
         return summary

@@ -79,13 +79,6 @@ async function checkLoginStatus() {
 function initializeApp(token) {
   console.log('🚀 初始化應用...');
 
-  // 隱藏登入覆蓋層
-  const loginOverlay = document.getElementById('loginOverlay');
-  if (loginOverlay) {
-    loginOverlay.classList.add('hidden');
-    console.log('✅ 登入覆蓋層已隱藏');
-  }
-
   // 初始化各個模組的事件監聽器
   initLoginButton();
   initLogoutButton();
@@ -106,8 +99,14 @@ function initializeApp(token) {
 
 // ========== 頁面初始化 ==========
 
-// 檢查登入狀態
-checkLoginStatus();
+// 只在聊天室頁面（/static/）執行登入檢查
+console.log('📍 當前路徑:', window.location.pathname);
+if (window.location.pathname.startsWith('/static')) {
+  console.log('✅ 在聊天室頁面，執行登入檢查');
+  checkLoginStatus();
+} else {
+  console.log('⏭️ 不在聊天室頁面，跳過登入檢查');
+}
 
 console.log('💡 WebSocket 整合已載入');
 console.log('📝 部署時請執行: initializeWebSocket(your_jwt_token)');
@@ -115,3 +114,5 @@ console.log('📝 部署時請執行: initializeWebSocket(your_jwt_token)');
 // ========== 提示訊息 ==========
 console.log('%c Bloom Ware 語音沉浸式 - 多層蓮花版', 'color: #16A34A; font-size: 16px; font-weight: bold;');
 console.log('%c✨ 核心特色:\n- 8片蓮花瓣設計（clip-path 打造自然曲線）\n- 多層次花蕊（radial gradient + 光澤細節）\n- 花瓣中心脈絡增加真實感\n- 待機狀態：花瓣完全閉合（含苞待放）\n- Agent 思考中：8片花瓣順時針依序綻放\n- 斷線/重連：花瓣逆時針綻放變紅色警示\n- 錄音中：花蕊變紅脈衝，花瓣保持閉合\n- 品牌特色：優雅、精緻、現代', 'color: rgba(0,0,0,0.7); font-size: 12px;');
+
+

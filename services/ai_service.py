@@ -1,39 +1,21 @@
-import os
-import sys
-import logging
 import asyncio
-from dotenv import load_dotenv
 from datetime import datetime, timezone, timedelta
 import time
 import json
 from typing import Dict, List, Any, Optional
 
-# 設置日誌
-# 設定日誌等級：預設 WARNING，可透過 BLOOMWARE_LOG_LEVEL 覆寫
-LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
-LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("AI_Service")
-# 將終端日誌級別設置為 ERROR（保留重要訊息）
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.ERROR)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
-logger.propagate = False  # 防止日誌重複輸出
-logger.setLevel(LOG_LEVEL)
-
-# 載入環境變數
-load_dotenv()
+# 統一日誌配置
+from core.logging import get_logger
+logger = get_logger("AI_Service")
 
 # 統一配置管理
 from core.config import settings
 
+# 統一 OpenAI 客戶端
+from core.ai_client import get_openai_client
+
 # 超時設定（秒）
-OPENAI_TIMEOUT = settings.OPENAI_TIMEOUT  # 關懷模式 reasoning model 需要更長時間
+OPENAI_TIMEOUT = settings.OPENAI_TIMEOUT
 
 # 情緒關懷模式 System Prompt（新增）
 CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」，由銘傳大學人工智慧應用學系槓上開發團隊打造。你不是 GPT，也不要自稱 GPT；你的任務是在情緒低落時傾聽、陪伴。
@@ -55,21 +37,13 @@ CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」�
 用戶：「我很生氣」 → 你：「這件事讓你超級生氣，情緒一定卡著。要不要跟我說說最困擾你的地方？」
 用戶：「講笑話給我聽」 → 你：「你想聽點輕鬆的，我當然可以陪你。想先聽小笑話還是先聊聊怎麼了？」"""
 
-# 導入時間服務模組
-# from features.daily_life.time_service import get_current_time_data, format_time_for_messages  # 已整合到 MCPAgentBridge
+# 取得 OpenAI 客戶端（使用統一管理）
+def _get_client():
+    """取得 OpenAI 客戶端"""
+    return get_openai_client()
 
-# 嘗試導入 OpenAI
-try:
-    import openai
-    from openai import OpenAI
-    client = OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        timeout=30.0,  # 增加超時時間
-        max_retries=3   # 添加重試次數
-    )
-except Exception as e:
-    logger.error(f"初始化 OpenAI 客戶端失敗: {e}")
-    client = None
+# 向後相容：保留 client 變數名稱
+client = None  # 將在首次使用時透過 _get_client() 取得
 
 # 導入DB函數
 try:
@@ -486,22 +460,9 @@ def _extract_text_from_message_obj(message: Any) -> str:
         return ""
 
 def initialize_openai():
-    """初始化OpenAI客戶端"""
-    global client
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
-        logger.error("OpenAI API密鑰未設置，請在.env文件中設置OPENAI_API_KEY環境變數")
-        print("\n❌ 錯誤: OpenAI API密鑰未設置！請在.env文件中設置OPENAI_API_KEY\n")
-        return False
-    try:
-        logger.info("正在初始化OpenAI客戶端...")
-        client = OpenAI(api_key=api_key)
-        logger.info("OpenAI 客戶端初始化完成")
-        return True
-    except Exception as e:
-        logger.error(f"初始化OpenAI客戶端失敗: {e}")
-        print(f"\n❌ OpenAI API連接失敗: {e}\n")
-        return False
+    """初始化OpenAI客戶端（使用統一管理）"""
+    from core.ai_client import is_available
+    return is_available()
 
 ## 已移除內部測試函式 test_openai_response，避免干擾正式流程
 
@@ -532,7 +493,8 @@ async def generate_response_async(
         stream: 是否啟用串流模式（2025 最佳實踐）
         on_chunk: 串流 chunk 回調函數（async callable）
     """
-    if client is None and not initialize_openai():
+    openai_client = _get_client()
+    if openai_client is None:
         return "抱歉，AI服務暫時不可用。系統無法連接到OpenAI服務。"
     try:
         start_time = time.time()
@@ -579,7 +541,7 @@ async def generate_response_async(
             full_response = ""
             stream_obj = await loop.run_in_executor(
                 None,
-                lambda: client.chat.completions.create(**request_kwargs)
+                lambda: openai_client.chat.completions.create(**request_kwargs)
             )
 
             # 逐塊處理
@@ -602,7 +564,7 @@ async def generate_response_async(
             response = await asyncio.wait_for(
                 loop.run_in_executor(
                     None,
-                    lambda: client.chat.completions.create(**request_kwargs),
+                    lambda: openai_client.chat.completions.create(**request_kwargs),
                 ),
                 timeout=OPENAI_TIMEOUT,
             )
@@ -779,7 +741,11 @@ async def _generate_response_with_chat_db(
                     system_prompt = (
                         "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
                         "你不是 GPT，也不要自稱 GPT。"
-                        "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。請使用繁體中文回覆，保持簡潔清晰的表達。"
+                        "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。\n\n"
+                        "【重要】語言使用規範：\n"
+                        "- 回覆用戶時：必須使用繁體中文，保持簡潔清晰的表達\n"
+                        "- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）\n"
+                        "- 範例：用戶問「台北天氣」→ 調用工具時參數用 {\"city\": \"Taipei\"}，回覆時說「台北目前...\""
                     )
 
                 # 在系統提示前加上用戶名稱
@@ -982,7 +948,11 @@ async def _generate_response_with_global_history(
                     system_prompt = (
                         "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
                         "你不是 GPT，也不要自稱 GPT。"
-                        "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。請使用繁體中文回覆，保持簡潔清晰的表達。"
+                        "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。\n\n"
+                        "【重要】語言使用規範：\n"
+                        "- 回覆用戶時：必須使用繁體中文，保持簡潔清晰的表達\n"
+                        "- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）\n"
+                        "- 範例：用戶問「台北天氣」→ 調用工具時參數用 {\"city\": \"Taipei\"}，回覆時說「台北目前...\""
                     )
 
                 # 在系統提示前加上用戶名稱
@@ -1093,3 +1063,107 @@ async def _generate_response_with_global_history(
             raise
         logger.error(f"全局歷史處理出錯: {e}")
         raise
+
+
+async def generate_response_with_tools(
+    messages: List[Dict[str, str]],
+    tools: List[Dict[str, Any]],
+    user_id: str = "default",
+    model: str = "gpt-5-nano",
+    reasoning_effort: Optional[str] = None,
+    tool_choice: str = "auto",
+) -> Dict[str, Any]:
+    """
+    使用 OpenAI Function Calling 生成回應
+    
+    2025 最佳實踐：讓 GPT 原生選擇工具，不需要自定義意圖檢測 Prompt
+    
+    Args:
+        messages: 對話訊息列表
+        tools: OpenAI tools 格式的工具定義列表
+        user_id: 用戶 ID（用於日誌）
+        model: 模型名稱
+        reasoning_effort: 推理強度 (minimal/low/medium/high)
+        tool_choice: 工具選擇策略 ("auto", "none", "required", 或特定工具名)
+    
+    Returns:
+        包含 tool_calls 和 content 的字典
+    """
+    openai_client = _get_client()
+    if openai_client is None:
+        logger.error("OpenAI 客戶端不可用")
+        return {"content": "", "tool_calls": []}
+    
+    try:
+        start_time = time.time()
+        loop = asyncio.get_event_loop()
+        
+        request_kwargs = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "max_completion_tokens": 1000,
+        }
+        
+        # 加入 reasoning_effort 控制
+        if reasoning_effort:
+            request_kwargs["reasoning_effort"] = reasoning_effort
+            logger.info(f"🧠 Function Calling 推理強度: {reasoning_effort}")
+        
+        logger.info(f"🔧 Function Calling 請求: {len(tools)} 個工具, tool_choice={tool_choice}")
+        logger.debug(f"📤 發送的訊息: {messages}")
+        
+        response = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: openai_client.chat.completions.create(**request_kwargs),
+            ),
+            timeout=OPENAI_TIMEOUT,
+        )
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"⏱️ Function Calling 完成，耗時: {elapsed_time:.2f}秒")
+        
+        # 解析回應
+        message = response.choices[0].message
+        logger.debug(f"📥 原始 message 物件: {message}")
+        
+        result = {
+            "content": message.content or "",
+            "tool_calls": [],
+        }
+        
+        # 提取 tool_calls
+        if message.tool_calls:
+            for tool_call in message.tool_calls:
+                result["tool_calls"].append({
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    }
+                })
+            logger.info(f"✅ GPT 選擇了 {len(result['tool_calls'])} 個工具")
+            for tc in result["tool_calls"]:
+                logger.info(f"   🔧 工具: {tc['function']['name']}")
+                logger.info(f"   📋 參數 JSON: {tc['function']['arguments']}")
+                # 嘗試解析參數
+                try:
+                    import json
+                    parsed = json.loads(tc['function']['arguments'])
+                    logger.info(f"   ✅ 解析後參數: {parsed}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 參數解析失敗: {e}")
+        else:
+            logger.info("💬 GPT 未選擇任何工具（一般聊天）")
+        
+        return result
+        
+    except asyncio.TimeoutError:
+        logger.error("Function Calling 請求超時")
+        return {"content": "", "tool_calls": []}
+    except Exception as e:
+        logger.error(f"Function Calling 失敗: {e}")
+        return {"content": "", "tool_calls": []}

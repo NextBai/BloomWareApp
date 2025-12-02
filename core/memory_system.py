@@ -1,31 +1,19 @@
-import os
-import logging
+import json
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
-import json
 
-# 設置日誌
-LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
-LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
-logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("MemorySystem")
-logger.setLevel(LOG_LEVEL)
+# 統一日誌配置
+from core.logging import get_logger
+logger = get_logger("MemorySystem")
 
-# 載入環境變數
-from dotenv import load_dotenv
-load_dotenv()
+# 統一 OpenAI 客戶端
+from core.ai_client import get_openai_client
 
-# 嘗試導入 OpenAI
-try:
-    from openai import OpenAI
-    memory_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    logger.info("記憶系統成功導入 OpenAI SDK")
-except ImportError:
-    logger.error("Failed to import OpenAI for memory system")
-    memory_client = None
-except Exception as e:
-    logger.error(f"初始化記憶系統 OpenAI 客戶端時出錯: {e}")
-    memory_client = None
+def _get_memory_client():
+    """取得記憶系統用的 OpenAI 客戶端"""
+    return get_openai_client()
+
+
 
 # 導入數據庫函數
 try:
@@ -139,7 +127,8 @@ class MemoryAnalyzer:
     async def analyze_conversation(self, user_message: str, assistant_response: str = "",
                                   conversation_history: List[Dict] = None) -> List[Dict[str, Any]]:
         """使用AI分析對話內容，提取重要記憶"""
-        if not memory_client:
+        client = _get_memory_client()
+        if not client:
             logger.warning("OpenAI客戶端不可用，跳過AI記憶分析")
             return []
 
@@ -196,11 +185,11 @@ class MemoryAnalyzer:
                     else:
                         max_tokens_value = 2000
 
-                    response = memory_client.chat.completions.create(
+                    response = client.chat.completions.create(
                         model="gpt-5-nano",
                         messages=messages,
-                        max_completion_tokens=max_tokens_value,  # 修正：使用 max_completion_tokens 而非 max_tokens
-                        reasoning_effort="low"  # 記憶分析需要理解，但不需深度推理
+                        max_completion_tokens=max_tokens_value,
+                        reasoning_effort="low"
                     )
                     break  # 成功後跳出重試循環
 
@@ -279,7 +268,7 @@ class MemoryManager:
 
             # 2. 使用AI分析提取記憶（如果可用）
             ai_memories = []
-            if memory_client:
+            if _get_memory_client():
                 ai_memories = await self.analyzer.analyze_conversation(
                     user_message, assistant_response, conversation_history
                 )
@@ -439,3 +428,6 @@ class MemoryManager:
 
 # 全局記憶管理器實例
 memory_manager = MemoryManager()
+
+# 向後兼容別名
+memory_system = memory_manager

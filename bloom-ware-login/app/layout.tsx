@@ -13,6 +13,8 @@ export const metadata: Metadata = {
   generator: "v0.app",
 }
 
+import { OfflineIndicator } from "@/components/offline-indicator"
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -21,6 +23,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans antialiased`}>
+        <OfflineIndicator />
         {children}
       </body>
     </html>

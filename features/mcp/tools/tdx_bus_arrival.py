@@ -24,15 +24,24 @@ class TDXBusArrivalTool(MCPTool):
     """TDX 公車即時到站查詢"""
     
     NAME = "tdx_bus_arrival"
-    DESCRIPTION = "查詢公車即時到站時間（自動感知用戶位置，找最近站點）"
+    DESCRIPTION = "查詢公車即時到站時間。適用於：1) 已知路線號碼（如307、紅30）的到站查詢；2) 查詢附近公車站。不適用於路線規劃（如「從A到B的公車」應用directions）。"
     CATEGORY = "道路運輸"
     TAGS = ["tdx", "公車", "即時到站", "公共運輸"]
-    KEYWORDS = ["公車", "巴士", "bus", "到站", "即時", "幾分鐘"]
+    KEYWORDS = ["公車", "巴士", "bus", "到站", "即時", "幾分鐘", "公車站", "等公車", "路線號碼"]
     USAGE_TIPS = [
-        "查詢特定路線: 「307 公車還要多久」",
-        "查詢附近公車站: 「附近有什麼公車」",
-        "指定城市: 「台北 307」「高雄紅30」"
+        "「307 公車還要多久」→ route_name=307",
+        "「紅30 什麼時候來」→ route_name=紅30",
+        "「附近有什麼公車」→ 不需參數，用 GPS 查詢附近站點"
     ]
+    NEGATIVE_EXAMPLES = [
+        "「埔鹽站往彰化的公車」→ 這是路線規劃，不是查詢特定路線！應用 directions",
+        "「往彰化的公車」→ 彰化是目的地，不是路線號碼！應用 directions",
+        "「去台北的公車」→ 台北是目的地，不是路線號碼！應用 directions",
+        "「從A到B的公車」→ 這是路線規劃，應用 directions",
+        "「公車路線圖」→ 這是詢問路線圖，不是查到站時間"
+    ]
+    PRIORITY = 5
+    ALIASES = ["bus", "公車", "巴士"]
     
     # TDX 城市代碼
     VALID_CITIES = {
@@ -81,7 +90,7 @@ class TDXBusArrivalTool(MCPTool):
                         "route_name": {"type": "string"},
                         "stop_name": {"type": "string"},
                         "direction": {"type": "integer"},
-                        "estimate_time": {"type": "integer"},
+                        "estimate_time": {"type": ["integer", "null"]},
                         "status": {"type": "string"}
                     }
                 }

@@ -5,6 +5,7 @@ import base64
 import mimetypes
 import logging
 import secrets
+import jwt
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
@@ -108,94 +109,26 @@ def serialize_for_json(obj: Any) -> Any:
             return None
 
 # -----------------------------
-# Pydantic 模型
+# Pydantic 模型（從統一模組導入）
 # -----------------------------
-class UserCreate(BaseModel):
-    name: str
-    email: EmailStr
-    password: str = Field(min_length=6)
-
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class ChatCreateRequest(BaseModel):
-    user_id: str
-    title: Optional[str] = "新對話"
-
-
-class MessageCreateRequest(BaseModel):
-    sender: str
-    content: str
-
-
-class ChatTitleUpdateRequest(BaseModel):
-    title: str
-
-
-class UserInfo(BaseModel):
-    id: str
-    name: str
-    email: EmailStr
-    created_at: datetime
-
-
-class UserPublic(BaseModel):
-    success: bool
-    user: UserInfo
-
-
-class UserLoginPublicResponse(BaseModel):
-    success: bool
-    user: UserInfo
-    token: Optional[str] = None
-
-
-class ChatPublic(BaseModel):
-    chat_id: str
-    user_id: str
-    title: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class MessagePublic(BaseModel):
-    sender: str
-    content: str
-    timestamp: datetime
-
-
-class ChatDetailResponse(ChatPublic):
-    messages: List[MessagePublic]
-
-
-class ChatSummary(BaseModel):
-    chat_id: str
-    title: str
-    updated_at: datetime
-
-
-class ChatListResponse(BaseModel):
-    chats: List[ChatSummary]
-
-
-class FileAnalysisRequest(BaseModel):
-    filename: str
-    content: str
-    mime_type: str
-    user_prompt: Optional[str] = "請分析這個檔案的內容"
-
-
-class FileAnalysisResponse(BaseModel):
-    success: bool
-    filename: str
-    analysis: Optional[str] = None
-    error: Optional[str] = None
-
-class SpeakerLabelBindRequest(BaseModel):
-    speaker_label: str
+from models.schemas import (
+    UserCreate,
+    UserLogin,
+    ChatCreateRequest,
+    MessageCreateRequest,
+    ChatTitleUpdateRequest,
+    UserInfo,
+    UserPublic,
+    UserLoginPublicResponse,
+    ChatPublic,
+    MessagePublic,
+    ChatDetailResponse,
+    ChatSummary,
+    ChatListResponse,
+    FileAnalysisRequest,
+    FileAnalysisResponse,
+    SpeakerLabelBindRequest,
+)
 
 
 # -----------------------------
@@ -278,8 +211,8 @@ async def lifespan(app: FastAPI):
                 window_seconds=3,
                 required_windows=1,
                 sample_rate=16000,
-                prob_threshold=0.40,
-                margin_threshold=0.01,
+                prob_threshold=0.50,  # ECAPA-TDNN 餘弦相似度 + 0.35 加成後門檻
+                margin_threshold=0.05,
                 min_snr_db=12.0,
             ))
         except Exception as e:
@@ -351,8 +284,8 @@ async def periodic_cleanup():
     """定期清理過期的會話和數據"""
     while True:
         try:
-            # 每30分鐘清理一次
-            await asyncio.sleep(1800)  # 30分鐘
+            # 定期清理（使用配置常數）
+            await asyncio.sleep(settings.CLEANUP_INTERVAL)
 
             # 清理過期的WebSocket會話
             await manager.cleanup_expired_sessions()
@@ -378,10 +311,10 @@ async def periodic_cleanup():
 
 app = FastAPI(title="聊天機器人API（整合版）", lifespan=lifespan)
 
-# CORS 設定
+# CORS 設定（從環境變數讀取，生產環境應設定具體來源）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -419,7 +352,7 @@ app.add_middleware(CSPMiddleware)
 
 # 掛載靜態檔案目錄（語音沉浸式前端）
 static_dir = Path("static/frontend")
-login_dir = Path("static/frontend/login")
+login_dir = Path("bloom-ware-login/out")  # 直接使用 Next.js 專案的輸出目錄
 
 if static_dir.exists() and static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir), html=True), name="frontend")
@@ -433,7 +366,7 @@ if login_dir.exists() and login_dir.is_dir():
     app.mount("/login", StaticFiles(directory=str(login_dir), html=True), name="login_static")
     logger.info(f"✅ 已掛載登入頁面: /login → {login_dir}")
 else:
-    logger.warning("⚠️ 未找到 static/frontend/login/ 目錄，請先 build bloom-ware-login 專案")
+    logger.warning(f"⚠️ 未找到 {login_dir} 目錄，請先執行: cd bloom-ware-login && npm run build")
 
 # 環境設定
 app.state.intent_model = settings.OPENAI_MODEL
@@ -452,226 +385,30 @@ def get_client_ip(request: Request) -> str:
             return ip
     return request.client.host if request.client else "unknown"
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# 注意：CORS 已在上方配置，此處移除重複配置
 
 # -----------------------------
-# WebSocket 連線管理（JWT認證）
+# WebSocket 連線管理（從統一模組導入）
 # -----------------------------
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-        self.client_info: Dict[str, dict] = {}
-        self.user_sessions: Dict[str, Dict[str, Any]] = {}  # 用戶會話信息
-        self.last_env: Dict[str, Dict[str, Any]] = {}  # 最近的環境快照
-
-    async def connect(self, websocket: WebSocket, user_id: str, user_info: Dict[str, Any]):
-        await websocket.accept()
-        self.active_connections[user_id] = websocket
-        self.user_sessions[user_id] = user_info
-        logger.info(f"新的WebSocket連接: {user_id}")
-
-    def disconnect(self, user_id: str):
-        if user_id in self.active_connections:
-            del self.active_connections[user_id]
-            if user_id in self.user_sessions:
-                del self.user_sessions[user_id]
-            logger.info(f"WebSocket連接關閉: {user_id}")
-
-    async def send_message(self, message: str, user_id: str, message_type: str = "bot_message"):
-        if user_id in self.active_connections:
-            try:
-                payload = {"type": message_type, "message": message, "timestamp": time.time()}
-                await self.active_connections[user_id].send_json(
-                    payload
-                )
-                try:
-                    preview = (str(message) or "").strip().replace("\n", " ")
-                    if len(preview) > 120:
-                        preview = preview[:120] + "..."
-                    logger.info(f"WebSocket已發送 → client={user_id} type={message_type} bytes≈{len((str(message) or '').encode('utf-8'))} preview=\"{preview}\"")
-                except Exception:
-                    pass
-            except Exception as e:
-                logger.error(f"發送消息到客戶端 {user_id} 時出錯: {str(e)}")
-
-    def set_client_info(self, user_id: str, info: dict):
-        self.client_info[user_id] = info
-
-    def get_client_info(self, user_id: str) -> dict:
-        return self.client_info.get(user_id, {})
-
-    def get_user_session(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """獲取用戶會話信息"""
-        return self.user_sessions.get(user_id)
-
-    async def cleanup_expired_sessions(self):
-        """清理過期的用戶會話"""
-        current_time = datetime.now()
-        expired_users = []
-
-        for user_id, session_info in self.user_sessions.items():
-            # 如果會話超過30分鐘沒有活動，標記為過期
-            last_activity = session_info.get("last_activity", current_time)
-            if (current_time - last_activity).total_seconds() > 1800:  # 30分鐘
-                expired_users.append(user_id)
-
-        for user_id in expired_users:
-            logger.info(f"清理過期會話: {user_id}")
-            self.disconnect(user_id)
-
-
-manager = ConnectionManager()
-
+from websocket import manager
 
 # -----------------------------
-# 語音綁定狀態管理器（關鍵字匹配，無 GPT）
+# 語音綁定狀態管理器（從統一模組導入）
 # -----------------------------
-class VoiceBindingStateMachine:
-    """
-    語音帳號綁定狀態機（硬編碼關鍵字匹配）
-
-    流程：
-    1. 用戶說「我要綁定語音登入」
-    2. Agent 回應「好的，你現在要綁定誰？」
-    3. 用戶提供名稱
-    4. 系統綁定 speaker_label 到用戶帳號
-    5. Agent 回應「綁定成功！」
-    """
-
-    def __init__(self):
-        # 用戶狀態：{user_id: {state: str, speaker_label: str}}
-        self.user_states: Dict[str, Dict[str, Any]] = {}
-
-    def check_binding_trigger(self, user_id: str, message: str) -> Optional[str]:
-        """
-        檢查是否觸發綁定流程
-
-        Returns:
-            - "TRIGGER": 觸發綁定流程
-            - "AWAITING_NAME": 等待用戶提供名稱
-            - None: 不是綁定相關訊息
-        """
-        message_lower = message.lower().replace(" ", "")
-
-        # 檢測觸發關鍵字
-        trigger_keywords = ["綁定語音登入", "語音登入綁定", "綁定語音", "設定語音登入"]
-        for keyword in trigger_keywords:
-            if keyword.replace(" ", "") in message_lower:
-                # 進入等待狀態
-                self.user_states[user_id] = {
-                    "state": "AWAITING_NAME",
-                    "timestamp": datetime.now()
-                }
-                return "TRIGGER"
-
-        # 檢查是否在等待名稱狀態
-        if user_id in self.user_states:
-            state_info = self.user_states[user_id]
-            if state_info.get("state") == "AWAITING_NAME":
-                # 檢查是否超時（5分鐘）
-                if (datetime.now() - state_info.get("timestamp")).total_seconds() > 300:
-                    del self.user_states[user_id]
-                    return None
-                return "AWAITING_NAME"
-
-        return None
-
-    async def handle_binding_flow(
-        self,
-        user_id: str,
-        message: str,
-        websocket: WebSocket,
-        voice_service: Optional[VoiceAuthService] = None
-    ) -> bool:
-        """
-        處理綁定流程
-
-        Returns:
-            True: 已處理（不要繼續到 Agent）
-            False: 未處理（繼續到 Agent）
-        """
-        state = self.check_binding_trigger(user_id, message)
-
-        if state == "TRIGGER":
-            # 用戶觸發綁定 - 先檢查是否已經綁定過
-            logger.info(f"🎙️ 用戶 {user_id} 觸發語音綁定流程")
-
-            # 檢查使用者是否已經綁定過 speaker_label
-            from core.database import get_user_by_id
-            try:
-                user_data = await get_user_by_id(user_id)
-                if user_data and user_data.get("speaker_label"):
-                    # 已經綁定過了
-                    existing_label = user_data.get("speaker_label")
-                    logger.info(f"⚠️ 用戶 {user_id} 已綁定 speaker_label: {existing_label}")
-
-                    await websocket.send_json({
-                        "type": "bot_message",
-                        "message": f"你已經綁定過語音了！目前的聲紋標籤是：{existing_label}。如果需要重新綁定，請聯繫管理員。",
-                        "timestamp": time.time()
-                    })
-
-                    # 清理 FSM 狀態
-                    self.clear_state(user_id)
-                    return True
-            except Exception as e:
-                logger.error(f"❌ 檢查使用者綁定狀態失敗: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "系統錯誤，無法檢查綁定狀態"
-                })
-                return True
-
-            # 未綁定，繼續綁定流程
-            logger.info(f"✅ 用戶 {user_id} 尚未綁定，啟動綁定流程")
-
-            # 標記用戶進入語音綁定等待狀態
-            user_session = manager.get_client_info(user_id) or {}
-            user_session["voice_binding_pending"] = True
-            user_session["voice_binding_started_at"] = datetime.now()
-            manager.set_client_info(user_id, user_session)
-
-            await websocket.send_json({
-                "type": "bot_message",
-                "message": "好的，請錄製一段語音（約3-5秒），用於建立你的聲紋特徵。系統會自動識別並綁定到你的帳號。",
-                "timestamp": time.time()
-            })
-            await websocket.send_json({
-                "type": "voice_binding_ready",
-                "message": "請點擊錄音按鈕開始錄製"
-            })
-            return True
-
-        elif state == "AWAITING_NAME":
-            # 這個狀態已不再使用，因為我們改為直接錄音綁定
-            # 但保留以防萬一
-            pass
-
-        return False
-
-    def clear_state(self, user_id: str):
-        """清理用戶狀態"""
-        self.user_states.pop(user_id, None)
-
-
-voice_binding_fsm = VoiceBindingStateMachine()
+from services.voice_binding import voice_binding_fsm
 
 
 # -----------------------------
 # 統一 WebSocket 端點（JWT認證）
 # -----------------------------
 @app.websocket("/ws")
-async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(None)):
+async def websocket_endpoint_with_jwt(
+    websocket: WebSocket, 
+    token: str = Query(None),
+    emotion: str = Query("")
+):
     """JWT認證的WebSocket端點（支援語音登入匿名連線）"""
-    logger.info("WebSocket連接請求 - JWT認證")
+    logger.info(f"WebSocket連接請求 - JWT認證 (emotion={emotion})")
 
     # 特殊處理：語音登入匿名連線
     is_voice_login_mode = token == "anonymous_voice_login"
@@ -756,11 +493,11 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                     logger.debug(f"讀取使用者時區失敗: {tz_err}")
 
                 td = app.state.feature_router.get_current_time_data()
-                # WebSocket 連線時沒有語音情緒，使用空字串
+                # 使用語音登入傳遞的情緒（如果有）
                 welcome_msg = compose_welcome(
                     user_name=user_info.get('name'),
                     time_data=td,
-                    emotion_label="",
+                    emotion_label=emotion,
                     timezone=tz_hint,
                 )
             except Exception as e:
@@ -833,7 +570,10 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                         {
                             "role": "system",
                             "content": (
-                                "你是一個友善、有禮且能夠提供幫助的AI助手。請使用繁體中文回覆，保持簡潔清晰的表達。"
+                                "你是一個友善、有禮且能夠提供幫助的AI助手。\n\n"
+                                "【重要】語言使用規範：\n"
+                                "- 回覆用戶時：必須使用繁體中文，保持簡潔清晰的表達\n"
+                                "- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）\n\n"
                                 "另外，請勿自稱為 GPT-4 或其他版本。若需要自我介紹，請表述為 '基於 gpt-5-nano 模型'。"
                             ),
                         },
@@ -971,28 +711,119 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                         await websocket.send_json({"type": "error", "message": f"CHAT_FOCUS_ERROR: {str(e)}"})
 
                 elif message_type == "audio_start":
-                    # 語音處理邏輯（保持不變）
+                    # 語音處理邏輯（支援多種模式）
+                    mode = message_data.get("mode", "voice_login")
+
                     try:
                         sr = int(message_data.get("sample_rate", 16000))
                     except Exception:
                         sr = 16000
-                    try:
-                        if hasattr(app.state, "voice_auth") and app.state.voice_auth:
-                            app.state.voice_auth.start_session(user_id, sr)
-                            await websocket.send_json({"type": "voice_login_status", "message": "recording_started"})
-                        else:
-                            await websocket.send_json({"type": "voice_login_result", "success": False, "error": "VOICE_AUTH_NOT_AVAILABLE"})
-                    except Exception as e:
-                        await websocket.send_json({"type": "voice_login_result", "success": False, "error": f"START_ERROR: {str(e)}"})
+
+                    if mode == "realtime_chat":
+                        # === 即時轉錄模式（使用 OpenAI Realtime API）===
+                        try:
+                            from services.realtime_stt_service import RealtimeSTTService
+
+                            logger.info(f"🎙️ 啟動即時轉錄模式，用戶 {user_id}")
+
+                            # 建立 Realtime STT 服務實例
+                            realtime_stt = RealtimeSTTService()
+
+                            # 定義轉錄回調函數
+                            async def on_transcript_delta(delta_text: str):
+                                """接收部分轉錄結果並即時發送給前端"""
+                                await websocket.send_json({
+                                    "type": "stt_delta",
+                                    "text": delta_text,
+                                    "timestamp": time.time()
+                                })
+                                logger.debug(f"📤 STT Delta: {delta_text}")
+
+                            async def on_transcript_done(full_text: str):
+                                """接收完整轉錄結果"""
+                                await websocket.send_json({
+                                    "type": "stt_final",
+                                    "text": full_text,
+                                    "timestamp": time.time()
+                                })
+                                logger.info(f"✅ STT Final: {full_text}")
+
+                                # 儲存轉錄文字到 client_info，供 audio_stop 使用
+                                client_info = manager.get_client_info(user_id) or {}
+                                client_info["realtime_transcript"] = full_text
+                                manager.set_client_info(user_id, client_info)
+
+                            async def on_vad_committed(item_id: str):
+                                """VAD 偵測到語音段結束"""
+                                logger.debug(f"🎤 VAD Committed: {item_id}")
+
+                            # 連線到 OpenAI Realtime API
+                            success = await realtime_stt.connect(
+                                on_transcript_delta=on_transcript_delta,
+                                on_transcript_done=on_transcript_done,
+                                on_vad_committed=on_vad_committed,
+                                model="gpt-4o-mini-transcribe",
+                                language="zh"
+                            )
+
+                            if success:
+                                # 儲存 Realtime STT 實例到 client info
+                                client_info = manager.get_client_info(user_id) or {}
+                                client_info["realtime_stt"] = realtime_stt
+                                manager.set_client_info(user_id, client_info)
+
+                                await websocket.send_json({
+                                    "type": "realtime_stt_status",
+                                    "status": "connected",
+                                    "message": "即時轉錄已啟動"
+                                })
+                                logger.info(f"✅ 用戶 {user_id} 即時轉錄已啟動")
+                            else:
+                                raise Exception("無法連接到 OpenAI Realtime API")
+
+                        except Exception as e:
+                            logger.error(f"❌ 啟動即時轉錄失敗: {e}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"即時轉錄啟動失敗: {str(e)}"
+                            })
+
+                    else:
+                        # === 傳統模式（語音登入或語音綁定）===
+                        try:
+                            if hasattr(app.state, "voice_auth") and app.state.voice_auth:
+                                app.state.voice_auth.start_session(user_id, sr)
+                                await websocket.send_json({"type": "voice_login_status", "message": "recording_started"})
+                            else:
+                                await websocket.send_json({"type": "voice_login_result", "success": False, "error": "VOICE_AUTH_NOT_AVAILABLE"})
+                        except Exception as e:
+                            await websocket.send_json({"type": "voice_login_result", "success": False, "error": f"START_ERROR: {str(e)}"})
 
                 elif message_type == "audio_chunk":
                     try:
                         b64 = message_data.get("pcm16_base64", "")
-                        if b64 and hasattr(app.state, "voice_auth") and app.state.voice_auth:
+
+                        # 檢查是否為即時轉錄模式
+                        client_info = manager.get_client_info(user_id) or {}
+                        realtime_stt = client_info.get("realtime_stt")
+
+                        if realtime_stt and b64:
+                            # === 即時轉錄模式：轉發到 OpenAI Realtime API ===
+                            try:
+                                import base64
+                                audio_bytes = base64.b64decode(b64)
+                                await realtime_stt.send_audio_chunk(audio_bytes)
+                                logger.debug(f"🎤 轉發音頻到 OpenAI: {len(audio_bytes)} bytes")
+                            except Exception as e:
+                                logger.error(f"❌ 轉發音頻失敗: {e}")
+
+                        elif b64 and hasattr(app.state, "voice_auth") and app.state.voice_auth:
+                            # === 傳統模式：存到 buffer ===
                             app.state.voice_auth.append_chunk_base64(user_id, b64)
                             # 添加調試日誌
                             current_buffer_size = len(app.state.voice_auth._buffers.get(user_id, b""))
                             logger.info(f"🎤 收到音頻chunk，用戶 {user_id}，當前緩衝區大小: {current_buffer_size} bytes")
+
                     except Exception as e:
                         await websocket.send_json({"type": "voice_login_result", "success": False, "error": f"CHUNK_ERROR: {str(e)}"})
 
@@ -1189,6 +1020,112 @@ async def websocket_endpoint_with_jwt(websocket: WebSocket, token: str = Query(N
                                 "success": False,
                                 "error": result.get("error", "UNKNOWN_ERROR"),
                                 "detail": {k: v for k, v in result.items() if k not in {"success"}},
+                            })
+
+                    elif mode == "realtime_chat":
+                        # === 即時轉錄模式：關閉 OpenAI Realtime 連線並處理轉錄結果 ===
+                        try:
+                            client_info = manager.get_client_info(user_id) or {}
+                            realtime_stt = client_info.get("realtime_stt")
+                            transcription = client_info.get("realtime_transcript", "")
+
+                            if realtime_stt:
+                                logger.info(f"🔌 關閉即時轉錄連線，用戶 {user_id}")
+                                await realtime_stt.disconnect()
+
+                                # 清理 client info
+                                client_info.pop("realtime_stt", None)
+                                client_info.pop("realtime_transcript", None)
+                                manager.set_client_info(user_id, client_info)
+
+                                await websocket.send_json({
+                                    "type": "realtime_stt_status",
+                                    "status": "disconnected",
+                                    "message": "即時轉錄已結束"
+                                })
+                                logger.info(f"✅ 用戶 {user_id} 即時轉錄已結束")
+                            else:
+                                logger.warning(f"⚠️ 找不到 realtime_stt 實例，用戶 {user_id}")
+
+                            # 如果有轉錄文字，送給 AI Agent 處理
+                            if transcription:
+                                logger.info(f"🤖 處理即時轉錄結果: {transcription}")
+
+                                # 通知前端開始思考
+                                await websocket.send_json({"type": "typing", "message": "thinking"})
+
+                                # 異步處理對話邏輯
+                                async def _process_realtime_chat():
+                                    chat_id = message_data.get("chat_id")
+
+                                    # 如果沒有 chat_id，創建新對話
+                                    if not chat_id:
+                                        try:
+                                            user_chats_result = await get_user_chats(user_id)
+                                            if user_chats_result["success"] and user_chats_result["chats"]:
+                                                latest_chat = user_chats_result["chats"][0]
+                                                chat_id = latest_chat["chat_id"]
+                                            else:
+                                                chat_title = f"語音對話 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                                                chat_result = await create_chat(user_id, chat_title)
+                                                if chat_result["success"]:
+                                                    chat_id = chat_result["chat"]["chat_id"]
+                                        except Exception as e:
+                                            logger.error(f"創建對話失敗: {e}")
+                                            await websocket.send_json({"type": "error", "message": "無法創建對話"})
+                                            return
+
+                                    # 保存用戶訊息
+                                    await save_message_to_db(user_id, chat_id, "user", transcription)
+
+                                    # 處理對話（透過 handle_message，自動處理 pipeline）
+                                    response = await handle_message(
+                                        transcription,
+                                        user_id,
+                                        chat_id,
+                                        []  # messages 參數（會自動從數據庫載入）
+                                    )
+
+                                    # 發送回應
+                                    if isinstance(response, PipelineResult):
+                                        message_text = response.text
+
+                                        await websocket.send_json({
+                                            "type": "bot_message",
+                                            "message": message_text,
+                                            "timestamp": time.time(),
+                                            "tool_name": None,
+                                            "tool_data": None
+                                        })
+                                    elif isinstance(response, dict):
+                                        tool_name = response.get('tool_name')
+                                        tool_data = response.get('tool_data')
+                                        message_text = response.get('message', response.get('content', ''))
+
+                                        await websocket.send_json({
+                                            "type": "bot_message",
+                                            "message": message_text,
+                                            "timestamp": time.time(),
+                                            "tool_name": tool_name,
+                                            "tool_data": tool_data
+                                        })
+                                    else:
+                                        # 字串回應
+                                        await websocket.send_json({
+                                            "type": "bot_message",
+                                            "message": str(response),
+                                            "timestamp": time.time()
+                                        })
+
+                                await _process_realtime_chat()
+                            else:
+                                logger.debug(f"沒有轉錄文字，返回待機狀態")
+
+                        except Exception as e:
+                            logger.error(f"❌ 關閉即時轉錄失敗: {e}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"關閉即時轉錄失敗: {str(e)}"
                             })
 
                     elif mode == "chat":
@@ -1837,6 +1774,134 @@ async def logout():
         "success": True,
         "message": "登出成功"
     }
+
+
+# -----------------------------
+# 語音登入 API
+# -----------------------------
+class VoiceLoginRequest(BaseModel):
+    """語音登入請求"""
+    audio_base64: str  # base64 編碼的 PCM16 音訊
+    sample_rate: int = 16000
+
+
+@app.post("/auth/voice/login")
+async def voice_login(request: VoiceLoginRequest):
+    """
+    語音登入 API
+    
+    流程：
+    1. 接收 base64 編碼的音訊
+    2. 執行身份辨識 + 情緒辨識
+    3. 查詢 speaker_label 對應的用戶
+    4. 生成 JWT token
+    5. 回傳 token + 情緒
+    """
+    import base64
+    
+    try:
+        # 取得 VoiceAuthService 實例
+        voice_auth = getattr(app.state, "voice_auth", None)
+        if not voice_auth:
+            logger.error("❌ VoiceAuthService 未初始化")
+            return JSONResponse(status_code=503, content={
+                "success": False,
+                "error": "語音辨識服務未就緒，請稍後再試"
+            })
+        
+        # 解碼音訊
+        try:
+            audio_bytes = base64.b64decode(request.audio_base64)
+        except Exception as e:
+            logger.error(f"❌ 音訊解碼失敗: {e}")
+            return JSONResponse(status_code=400, content={
+                "success": False,
+                "error": "音訊格式錯誤"
+            })
+        
+        logger.info(f"🎙️ 收到語音登入請求，音訊大小: {len(audio_bytes)} bytes")
+        
+        # 建立臨時 session 並處理音訊
+        temp_user_id = f"voice_login_{datetime.now().timestamp()}"
+        voice_auth.start_session(temp_user_id, request.sample_rate)
+        voice_auth._buffers[temp_user_id] = bytearray(audio_bytes)
+        
+        # 執行辨識
+        result = voice_auth.stop_and_authenticate(temp_user_id)
+        
+        # 清理 session
+        voice_auth.clear_session(temp_user_id)
+        
+        if not result.get("success"):
+            error_code = result.get("error", "UNKNOWN_ERROR")
+            error_messages = {
+                "NO_AUDIO": "沒有收到音訊資料",
+                "AUDIO_TOO_SHORT": "音訊太短，請錄製至少 3 秒",
+                "LOW_SNR": "環境太吵，請在安靜的地方重試",
+                "INCONSISTENT_WINDOWS": "無法確認身份，請重試",
+                "THRESHOLD_NOT_MET": "無法確認身份，請重試",
+                "MODEL_ERROR": "辨識系統錯誤，請稍後重試",
+            }
+            logger.warning(f"🎙️ 語音辨識失敗: {error_code}")
+            return JSONResponse(content={
+                "success": False,
+                "error": error_messages.get(error_code, f"辨識失敗：{error_code}")
+            })
+        
+        # 取得辨識結果
+        speaker_label = result.get("label")
+        emotion = result.get("emotion", {})
+        emotion_label = emotion.get("label", "neutral") if isinstance(emotion, dict) else "neutral"
+        
+        logger.info(f"🎙️ 語音辨識成功: speaker={speaker_label}, emotion={emotion_label}")
+        
+        # 查詢對應的用戶
+        from core.database import get_user_by_speaker_label
+        user = await get_user_by_speaker_label(speaker_label)
+        
+        if not user:
+            logger.warning(f"🎙️ 找不到綁定的帳號: speaker_label={speaker_label}")
+            return JSONResponse(content={
+                "success": False,
+                "error": f"找不到綁定的帳號。請先使用 Google 登入並綁定語音。"
+            })
+        
+        # 生成 JWT token
+        user_id = user.get("id")
+        user_name = user.get("name", "用戶")
+        user_email = user.get("email", "")
+        
+        payload = {
+            "sub": user_id,
+            "name": user_name,
+            "email": user_email,
+            "iat": datetime.utcnow(),
+            "exp": datetime.utcnow() + timedelta(days=7),
+            "login_method": "voice",
+            "emotion": emotion_label,
+        }
+        
+        token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm="HS256")
+        
+        logger.info(f"✅ 語音登入成功: user={user_name}, emotion={emotion_label}")
+        
+        return {
+            "success": True,
+            "access_token": token,
+            "user": {
+                "id": user_id,
+                "name": user_name,
+                "email": user_email,
+            },
+            "emotion": emotion_label,
+        }
+        
+    except Exception as e:
+        logger.exception(f"❌ 語音登入失敗: {e}")
+        return JSONResponse(status_code=500, content={
+            "success": False,
+            "error": f"系統錯誤：{str(e)}"
+        })
 
     """
     Google OAuth 2.0 登入端點 (向後兼容)

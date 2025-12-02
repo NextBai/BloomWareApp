@@ -20,12 +20,24 @@ class TDXBikeTool(MCPTool):
     DESCRIPTION = "查詢附近 YouBike 站點、即時車輛數、空位數（支援 YouBike 1.0/2.0）"
     CATEGORY = "微型運具"
     TAGS = ["tdx", "youbike", "ubike", "共享單車", "微笑單車"]
-    KEYWORDS = ["YouBike", "UBike", "微笑單車", "共享單車", "腳踏車", "自行車"]
-    USAGE_TIPS = [
-        "查詢附近站點: 「附近的 YouBike 在哪」",
-        "查詢特定站點: 「市政府 YouBike 還有車嗎」",
-        "指定城市: 「台北 YouBike」「高雄 CityBike」"
+    KEYWORDS = [
+        "YouBike", "Youbike", "youbike", "YOUBIKE",
+        "UBike", "Ubike", "ubike", "UBIKE",
+        "微笑單車", "共享單車", "公共單車",
+        "腳踏車站", "單車站", "自行車站",
+        "借車", "還車", "腳踏車"
     ]
+    USAGE_TIPS = [
+        "「附近的 YouBike」→ 查詢最近站點",
+        "「Ubike 在哪」→ 查詢最近站點",
+        "「市政府 YouBike 還有車嗎」→ station_name=市政府"
+    ]
+    NEGATIVE_EXAMPLES = [
+        "「YouBike 怎麼註冊」→ 這是詢問註冊方式，不是查站點",
+        "「YouBike 費率」→ 這是詢問價格，不是查站點"
+    ]
+    PRIORITY = 6
+    ALIASES = ["youbike", "ubike", "微笑單車", "共享單車"]
     
     # 城市對應
     CITY_MAP = {
@@ -43,6 +55,16 @@ class TDXBikeTool(MCPTool):
     
     @classmethod
     def get_input_schema(cls) -> Dict[str, Any]:
+        # 建立包含中文和英文的城市列表
+        all_cities = list(cls.CITY_MAP.keys()) + list(cls.CITY_MAP.values())
+        # 去重並保持順序
+        unique_cities = []
+        seen = set()
+        for city in all_cities:
+            if city not in seen:
+                unique_cities.append(city)
+                seen.add(city)
+        
         return StandardToolSchemas.create_input_schema({
             "station_name": {
                 "type": "string",
@@ -50,8 +72,8 @@ class TDXBikeTool(MCPTool):
             },
             "city": {
                 "type": "string",
-                "description": "城市名稱（如「Taipei」「Kaohsiung」）",
-                "enum": list(cls.CITY_MAP.values())
+                "description": "城市名稱（支援中文如「台北」「桃園」或英文如「Taipei」「Taoyuan」）",
+                "enum": unique_cities
             },
             "radius_m": {
                 "type": "integer",
@@ -108,6 +130,11 @@ class TDXBikeTool(MCPTool):
         
         station_name = safe_str(arguments.get("station_name"))
         city = arguments.get("city")
+        
+        # 如果 city 是中文，轉換為英文
+        if city:
+            city = cls._map_city_name(city)
+        
         radius_m = min(int(arguments.get("radius_m", 500)), 2000)
         limit = min(int(arguments.get("limit", 5)), 20)
         
@@ -166,7 +193,20 @@ class TDXBikeTool(MCPTool):
                     final_city = guessed
                     city_source = "經緯度推斷"
             
-            city = cls._map_city_name(final_city) if final_city else "Taipei"
+            # 檢查城市是否支援 YouBike
+            if final_city:
+                city = cls._map_city_name(final_city)
+                if city == "Taipei" and final_city not in cls.CITY_MAP:
+                    # 城市不在支援列表中，提供友善錯誤訊息
+                    nearest_city = cls._find_nearest_supported_city(user_lat, user_lon)
+                    raise ExecutionError(
+                        f"🚲 很抱歉，{final_city}目前沒有 YouBike 服務。\n\n"
+                        f"最近有 YouBike 的城市是：{nearest_city}\n"
+                        f"支援 YouBike 的城市：台北、新北、桃園、新竹、台中、台南、高雄"
+                    )
+            else:
+                city = "Taipei"
+            
             logger.info(f"🏙️ 最終使用城市代碼: {city} (來源={city_source})")
         
         # 3. 查詢分支
@@ -365,6 +405,7 @@ class TDXBikeTool(MCPTool):
             ("新北", 24.67, 25.30, 121.35, 122.01),
             ("新竹", 24.68, 24.90, 120.90, 121.10),
             ("台中", 24.00, 24.45, 120.45, 121.05),
+            ("彰化", 23.85, 24.15, 120.35, 120.70),  # 新增彰化範圍
             ("台南", 22.85, 23.40, 120.00, 120.55),
             ("高雄", 22.45, 23.15, 120.15, 120.80),
         ]
@@ -385,6 +426,31 @@ class TDXBikeTool(MCPTool):
             if key in chinese_city:
                 return value
         return "Taipei"
+    
+    @staticmethod
+    def _find_nearest_supported_city(lat: float, lon: float) -> str:
+        """找出最近的支援 YouBike 的城市"""
+        # 支援 YouBike 的城市中心點（大約位置）
+        city_centers = {
+            "台北": (25.033, 121.565),
+            "新北": (25.012, 121.466),
+            "桃園": (24.994, 121.301),
+            "新竹": (24.806, 120.968),
+            "台中": (24.148, 120.674),
+            "台南": (22.997, 120.213),
+            "高雄": (22.627, 120.301),
+        }
+        
+        min_distance = float('inf')
+        nearest_city = "台北"
+        
+        for city_name, (city_lat, city_lon) in city_centers.items():
+            distance = TDXBaseAPI.haversine_distance(lat, lon, city_lat, city_lon)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_city = city_name
+        
+        return nearest_city
     
     @staticmethod
     def _detect_bike_type(station: Dict, station_name: str) -> str:
