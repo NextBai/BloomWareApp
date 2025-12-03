@@ -1,8 +1,121 @@
-// ========== 工具卡片管理（改良版：支援位置滿了的情況）==========
+// ========== 工具卡片管理（改良版：支援抽屜面板）==========
 
 const positions = ['pos-top-right', 'pos-top-left', 'pos-bottom-right', 'pos-bottom-left'];
 let usedPositions = [];
 const MAX_CARDS = 4;
+
+// 抽屜相關元素
+let toolDrawer = null;
+let toolDrawerToggle = null;
+let toolDrawerContent = null;
+let toolDrawerOverlay = null;
+let toolDrawerClose = null;
+let isDrawerOpen = false;
+
+/**
+ * 初始化工具抽屜
+ */
+function initToolDrawer() {
+  toolDrawer = document.getElementById('toolDrawer');
+  toolDrawerToggle = document.getElementById('toolDrawerToggle');
+  toolDrawerContent = document.getElementById('toolDrawerContent');
+  toolDrawerOverlay = document.getElementById('toolDrawerOverlay');
+  toolDrawerClose = document.getElementById('toolDrawerClose');
+
+  if (!toolDrawer || !toolDrawerToggle) {
+    console.warn('⚠️ 工具抽屜元素未找到');
+    return;
+  }
+
+  // 綁定切換按鈕事件
+  toolDrawerToggle.addEventListener('click', toggleToolDrawer);
+
+  // 綁定關閉按鈕事件
+  if (toolDrawerClose) {
+    toolDrawerClose.addEventListener('click', hideToolDrawer);
+  }
+
+  // 綁定遮罩層點擊關閉
+  if (toolDrawerOverlay) {
+    toolDrawerOverlay.addEventListener('click', hideToolDrawer);
+  }
+
+  console.log('✅ 工具抽屜已初始化');
+}
+
+/**
+ * 顯示工具抽屜切換按鈕（有工具結果時調用）
+ */
+function showToolDrawerToggle() {
+  if (toolDrawerToggle) {
+    toolDrawerToggle.classList.add('visible');
+    console.log('📊 工具抽屜按鈕已顯示');
+  }
+}
+
+/**
+ * 隱藏工具抽屜切換按鈕
+ */
+function hideToolDrawerToggle() {
+  if (toolDrawerToggle) {
+    toolDrawerToggle.classList.remove('visible');
+    toolDrawerToggle.classList.remove('open');
+  }
+}
+
+/**
+ * 切換工具抽屜開關
+ */
+function toggleToolDrawer() {
+  if (isDrawerOpen) {
+    hideToolDrawer();
+  } else {
+    showToolDrawer();
+  }
+}
+
+/**
+ * 打開工具抽屜
+ */
+function showToolDrawer() {
+  if (toolDrawer) {
+    toolDrawer.classList.add('open');
+    toolDrawerToggle?.classList.add('open');
+    toolDrawerOverlay?.classList.add('visible');
+    isDrawerOpen = true;
+    console.log('📂 工具抽屜已打開');
+  }
+}
+
+/**
+ * 關閉工具抽屜
+ */
+function hideToolDrawer() {
+  if (toolDrawer) {
+    toolDrawer.classList.remove('open');
+    toolDrawerToggle?.classList.remove('open');
+    toolDrawerOverlay?.classList.remove('visible');
+    isDrawerOpen = false;
+    console.log('📁 工具抽屜已關閉');
+  }
+}
+
+/**
+ * 隱藏工具卡片（下一個請求或關懷模式時調用）
+ */
+function hideToolCards() {
+  // 隱藏抽屜
+  hideToolDrawer();
+  // 隱藏切換按鈕
+  hideToolDrawerToggle();
+  // 清空抽屜內容
+  if (toolDrawerContent) {
+    toolDrawerContent.innerHTML = '';
+  }
+  // 清空桌面端卡片容器
+  clearAllCards();
+  console.log('🗑️ 工具卡片已隱藏');
+}
 
 function getNextPosition() {
   // 如果卡片數量已達上限，不允許新增
@@ -209,6 +322,7 @@ function getIconForTool(toolName, category) {
 
 /**
  * 動態顯示工具卡片（通用版本，支援所有 MCP 工具）
+ * 優先渲染到抽屜面板（手機端），同時保留桌面端卡片
  */
 function displayToolCard(toolName, toolData) {
   // 清除舊卡片
@@ -219,27 +333,38 @@ function displayToolCard(toolName, toolData) {
   const category = toolMeta.category || '未知';
   const icon = getIconForTool(toolName, category);
 
-  // 根據 toolData 結構自動渲染
-  const position = getNextPosition();
-  if (!position) return;
-
-  const card = document.createElement('div');
-  card.className = `voice-tool-card ${position}`;
-  card.dataset.type = toolName;
-
-  // 渲染卡片內容
+  // 渲染卡片內容（處理後的結果，非 raw data）
   const contentHTML = renderCardContent(toolName, toolData);
+
+  // 創建卡片元素
+  const card = document.createElement('div');
+  card.className = 'voice-tool-card';
+  card.dataset.type = toolName;
 
   card.innerHTML = `
     <div class="card-header">
       <div class="card-icon">${icon}</div>
       <h3>${category}</h3>
     </div>
-    <div class="card-content" style="max-height: 400px; overflow-y: auto; overflow-x: hidden; padding-right: 8px;">${contentHTML}</div>
+    <div class="card-content" style="max-height: 300px; overflow-y: auto; overflow-x: hidden; padding-right: 8px;">${contentHTML}</div>
   `;
 
-  cardsContainer.appendChild(card);
-  console.log(`🃏 顯示工具卡片: ${toolName} (${category})`);
+  // 渲染到抽屜面板
+  if (toolDrawerContent) {
+    toolDrawerContent.innerHTML = '';
+    toolDrawerContent.appendChild(card.cloneNode(true));
+    // 顯示抽屜切換按鈕
+    showToolDrawerToggle();
+    console.log(`📊 工具卡片已渲染到抽屜: ${toolName} (${category})`);
+  }
+
+  // 同時渲染到桌面端卡片容器（保留原有邏輯）
+  const position = getNextPosition();
+  if (position && cardsContainer) {
+    card.classList.add(position);
+    cardsContainer.appendChild(card);
+    console.log(`🃏 工具卡片已渲染到桌面: ${toolName} (${category})`);
+  }
 }
 
 /**
@@ -253,16 +378,18 @@ function renderCardContent(toolName, toolData) {
     return '<p class="data-row">無數據</p>';
   }
 
-  // 模式 1：health_data 陣列
-  if (toolData.health_data && Array.isArray(toolData.health_data)) {
+  // 模式 1：health_data 陣列（直接或在 raw_data 中）
+  const healthData = toolData.health_data || toolData.raw_data?.health_data;
+  if (healthData && Array.isArray(healthData)) {
     console.log('✅ 匹配到模式 1: health_data');
-    return renderHealthMetrics(toolData.health_data);
+    return renderHealthMetrics(healthData);
   }
 
-  // 模式 2：articles 陣列
-  if (toolData.articles && Array.isArray(toolData.articles)) {
+  // 模式 2：articles 陣列（直接或在 raw_data 中）
+  const articlesData = toolData.articles || toolData.raw_data?.articles;
+  if (articlesData && Array.isArray(articlesData)) {
     console.log('✅ 匹配到模式 2: articles');
-    return renderNewsList(toolData.articles);
+    return renderNewsList(articlesData);
   }
 
   // 模式 3：天氣數據（直接檢查，無論是否包在 raw_data 中）
@@ -284,10 +411,11 @@ function renderCardContent(toolName, toolData) {
     return renderNearbyStops(toolData.stops);
   }
 
-  // 模式 6：匯率數據
-  if (toolData.rate !== undefined && toolData.from_currency !== undefined) {
+  // 模式 6：匯率數據（直接或在 raw_data 中）
+  const exchangeData = toolData.raw_data || toolData;
+  if (exchangeData.rate !== undefined && exchangeData.from_currency !== undefined) {
     console.log('✅ 匹配到模式 6: 匯率數據');
-    return renderExchangeRate(toolData);
+    return renderExchangeRate(exchangeData);
   }
 
   // 模式 7：火車列車資訊
@@ -315,9 +443,34 @@ function renderCardContent(toolName, toolData) {
     return renderReverseGeocode(toolData);
   }
 
-  // 模式 10：通用 raw_data 物件
+  // 模式 10：導航路線（directions）
+  if ((toolData.distance_m !== undefined || toolData.duration_s !== undefined) && 
+      (toolName === 'directions' || toolData.polyline !== undefined)) {
+    console.log('✅ 匹配到模式 10: 導航路線');
+    return renderDirections(toolData);
+  }
+
+  // 模式 11：捷運到站資訊（tdx_metro arrivals）
+  if (toolData.arrivals && Array.isArray(toolData.arrivals) && toolName === 'tdx_metro') {
+    console.log('✅ 匹配到模式 11: 捷運到站資訊');
+    return renderMetroArrivals(toolData.arrivals);
+  }
+
+  // 模式 12：捷運站點資訊（tdx_metro stations）
+  if (toolData.stations && Array.isArray(toolData.stations) && toolName === 'tdx_metro') {
+    console.log('✅ 匹配到模式 12: 捷運站點資訊');
+    return renderMetroStations(toolData.stations);
+  }
+
+  // 模式 13：正向地理編碼（forward_geocode）
+  if (toolData.lat && toolData.lon && toolData.display_name && toolName === 'forward_geocode') {
+    console.log('✅ 匹配到模式 13: 正向地理編碼');
+    return renderForwardGeocode(toolData);
+  }
+
+  // 模式 14：通用 raw_data 物件
   if (toolData.raw_data && typeof toolData.raw_data === 'object') {
-    console.log('✅ 匹配到模式 10: 通用 raw_data');
+    console.log('✅ 匹配到模式 14: 通用 raw_data');
     return renderKeyValuePairs(toolData.raw_data);
   }
 
@@ -383,26 +536,86 @@ function renderWeatherData(data) {
  * 渲染健康指標
  */
 function renderHealthMetrics(healthData) {
+  if (!healthData || healthData.length === 0) {
+    return '<p class="data-row">無健康數據</p>';
+  }
+
   const metricNames = {
-    heart_rate: '心率',
-    step_count: '步數',
-    oxygen_level: '血氧',
-    respiratory_rate: '呼吸',
-    sleep_analysis: '睡眠'
+    heart_rate: '❤️ 心率',
+    step_count: '👟 步數',
+    oxygen_level: '🫁 血氧',
+    respiratory_rate: '💨 呼吸',
+    sleep_analysis: '😴 睡眠'
   };
 
-  let html = '';
-  healthData.slice(0, 3).forEach(item => {
-    const label = metricNames[item.metric] || item.metric;
+  const metricIcons = {
+    heart_rate: '❤️',
+    step_count: '👟',
+    oxygen_level: '🫁',
+    respiratory_rate: '💨',
+    sleep_analysis: '😴'
+  };
+
+  // 按指標類型分組
+  const grouped = {};
+  healthData.forEach(item => {
+    const metric = item.metric || item.type;
+    if (!grouped[metric]) {
+      grouped[metric] = [];
+    }
+    grouped[metric].push(item);
+  });
+
+  let html = '<div class="health-metrics">';
+
+  // 渲染每種指標
+  Object.entries(grouped).forEach(([metric, items], index) => {
+    const icon = metricIcons[metric] || '📊';
+    const label = metricNames[metric]?.replace(/^.+\s/, '') || metric;
+    const latestItem = items[0]; // 最新的數據
+    const value = latestItem.value;
+    const unit = latestItem.unit || '';
+    
+    // 格式化時間
+    let timeStr = '';
+    if (latestItem.timestamp) {
+      try {
+        const date = new Date(latestItem.timestamp);
+        timeStr = date.toLocaleString('zh-TW', { 
+          month: 'numeric', 
+          day: 'numeric', 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
+      } catch (e) {
+        timeStr = '';
+      }
+    }
+
     html += `
-      <div class="data-row">
-        <span class="data-label">${label}</span>
-        <span class="data-value">${item.value} ${item.unit || ''}</span>
+      <div class="health-metric-item" style="border-bottom: 1px solid #eee; padding: 10px 0; ${index === Object.keys(grouped).length - 1 ? 'border-bottom: none;' : ''}">
+        <div class="data-row">
+          <span class="data-label">${icon} ${label}</span>
+          <span class="data-value" style="font-weight: bold;">${value} ${unit}</span>
+        </div>
+        ${timeStr ? `
+        <div class="data-row" style="opacity: 0.7;">
+          <span class="data-label" style="font-size: 0.85em;">記錄時間</span>
+          <span class="data-value" style="font-size: 0.85em;">${timeStr}</span>
+        </div>
+        ` : ''}
+        ${items.length > 1 ? `
+        <div class="data-row" style="opacity: 0.6;">
+          <span class="data-label" style="font-size: 0.8em;">平均值</span>
+          <span class="data-value" style="font-size: 0.8em;">${(items.reduce((sum, i) => sum + i.value, 0) / items.length).toFixed(1)} ${unit}</span>
+        </div>
+        ` : ''}
       </div>
     `;
   });
 
-  return html || '<p>無健康數據</p>';
+  html += '</div>';
+  return html;
 }
 
 /**
@@ -797,6 +1010,222 @@ function renderNearbyStops(stops) {
   });
 
   return html;
+}
+
+/**
+ * 渲染導航路線（directions）
+ */
+function renderDirections(data) {
+  const originLabel = data.origin_label || '起點';
+  const destLabel = data.dest_label || '目的地';
+  const distanceM = data.distance_m;
+  const durationS = data.duration_s;
+  
+  // 格式化距離
+  let distanceStr = '--';
+  if (distanceM !== undefined) {
+    distanceStr = distanceM >= 1000 
+      ? `${(distanceM / 1000).toFixed(1)} 公里` 
+      : `${Math.round(distanceM)} 公尺`;
+  }
+  
+  // 格式化時間
+  let durationStr = '--';
+  if (durationS !== undefined) {
+    const minutes = Math.round(durationS / 60);
+    if (minutes >= 60) {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      durationStr = mins > 0 ? `${hours} 小時 ${mins} 分鐘` : `${hours} 小時`;
+    } else {
+      durationStr = `${minutes} 分鐘`;
+    }
+  }
+  
+  // 生成 Google Maps 連結（如果有座標）
+  let mapsLink = '';
+  if (data.origin_lat && data.origin_lon && data.dest_lat && data.dest_lon) {
+    const mapsUrl = `https://www.google.com/maps/dir/${data.origin_lat},${data.origin_lon}/${data.dest_lat},${data.dest_lon}`;
+    mapsLink = `
+      <div class="data-row" style="margin-top: 8px;">
+        <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
+          🗺️ 在 Google Maps 中查看 →
+        </a>
+      </div>
+    `;
+  }
+  
+  return `
+    <div class="data-row">
+      <span class="data-label">📍 起點</span>
+      <span class="data-value">${originLabel}</span>
+    </div>
+    <div class="data-row">
+      <span class="data-label">🎯 目的地</span>
+      <span class="data-value">${destLabel}</span>
+    </div>
+    <div class="data-row">
+      <span class="data-label">📏 距離</span>
+      <span class="data-value">${distanceStr}</span>
+    </div>
+    <div class="data-row">
+      <span class="data-label">⏱️ 預估時間</span>
+      <span class="data-value">${durationStr}</span>
+    </div>
+    ${mapsLink}
+  `;
+}
+
+/**
+ * 渲染捷運到站資訊（tdx_metro arrivals）
+ */
+function renderMetroArrivals(arrivals) {
+  if (!arrivals || arrivals.length === 0) {
+    return '<p class="data-row">目前無捷運到站資訊</p>';
+  }
+
+  let html = '<div class="metro-arrivals">';
+
+  // 按路線分組
+  const lineGroups = {};
+  arrivals.forEach(arr => {
+    const lineName = arr.line_name || '未知路線';
+    if (!lineGroups[lineName]) {
+      lineGroups[lineName] = [];
+    }
+    lineGroups[lineName].push(arr);
+  });
+
+  // 渲染每條路線
+  Object.entries(lineGroups).forEach(([lineName, lineArrivals], index) => {
+    html += `
+      <div class="metro-line" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === Object.keys(lineGroups).length - 1 ? 'border-bottom: none;' : ''}">
+        <div class="data-row" style="margin-bottom: 8px;">
+          <span class="data-label" style="font-weight: bold; color: #0066cc;">🚇 ${lineName}</span>
+        </div>
+    `;
+    
+    lineArrivals.slice(0, 3).forEach(arr => {
+      const dest = arr.destination || '未知';
+      const timeSec = arr.arrival_time_sec;
+      const status = arr.train_status || '未知';
+      
+      let timeStr = status;
+      if (timeSec > 0) {
+        const min = Math.floor(timeSec / 60);
+        const sec = timeSec % 60;
+        timeStr = min > 0 ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
+      }
+      
+      html += `
+        <div class="data-row">
+          <span class="data-label">→ ${dest}</span>
+          <span class="data-value">${timeStr}</span>
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+  });
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * 渲染捷運站點資訊（tdx_metro stations）
+ */
+function renderMetroStations(stations) {
+  if (!stations || stations.length === 0) {
+    return '<p class="data-row">附近無捷運站</p>';
+  }
+
+  let html = '<div class="metro-stations">';
+
+  stations.forEach((station, index) => {
+    const stationName = station.station_name || '未知車站';
+    const distance = station.distance_m ? `${Math.round(station.distance_m)} 公尺` : '';
+    const walkTime = station.walking_time_min ? `步行約 ${station.walking_time_min} 分鐘` : '';
+    const address = station.address || '';
+
+    html += `
+      <div class="metro-station-item" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === stations.length - 1 ? 'border-bottom: none;' : ''}">
+        <div class="data-row" style="margin-bottom: 4px;">
+          <span class="data-label" style="font-weight: bold; color: #0066cc;">🚇 ${stationName}</span>
+        </div>
+        ${distance ? `
+        <div class="data-row">
+          <span class="data-label">📏 距離</span>
+          <span class="data-value">${distance}</span>
+        </div>
+        ` : ''}
+        ${walkTime ? `
+        <div class="data-row">
+          <span class="data-label">🚶 步行時間</span>
+          <span class="data-value">${walkTime}</span>
+        </div>
+        ` : ''}
+        ${address ? `
+        <div class="data-row">
+          <span class="data-label">📍 地址</span>
+          <span class="data-value" style="font-size: 0.85em;">${address}</span>
+        </div>
+        ` : ''}
+      </div>
+    `;
+  });
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * 渲染正向地理編碼（forward_geocode）
+ */
+function renderForwardGeocode(data) {
+  const displayName = data.display_name || '未知地點';
+  const lat = data.lat?.toFixed(6) || '';
+  const lon = data.lon?.toFixed(6) || '';
+  const city = data.city || '';
+  const road = data.road || '';
+  const suburb = data.suburb || '';
+
+  // 生成 Google Maps 連結
+  const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
+
+  return `
+    <div class="data-row">
+      <span class="data-label">📍 地點</span>
+      <span class="data-value" style="font-weight: bold;">${displayName}</span>
+    </div>
+    ${city ? `
+    <div class="data-row">
+      <span class="data-label">🏙️ 城市</span>
+      <span class="data-value">${city}</span>
+    </div>
+    ` : ''}
+    ${road ? `
+    <div class="data-row">
+      <span class="data-label">🛣️ 道路</span>
+      <span class="data-value">${road}</span>
+    </div>
+    ` : ''}
+    ${suburb ? `
+    <div class="data-row">
+      <span class="data-label">🏘️ 區域</span>
+      <span class="data-value">${suburb}</span>
+    </div>
+    ` : ''}
+    <div class="data-row">
+      <span class="data-label">🌐 座標</span>
+      <span class="data-value" style="font-size: 0.85em;">${lat}, ${lon}</span>
+    </div>
+    <div class="data-row" style="margin-top: 8px;">
+      <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
+        🗺️ 在 Google Maps 中查看 →
+      </a>
+    </div>
+  `;
 }
 
 /**

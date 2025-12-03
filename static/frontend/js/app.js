@@ -87,6 +87,7 @@ function initializeApp(token) {
   initTranscriptControls();
   initToolCardControls();
   initAgentControls();
+  initToolDrawer(); // 初始化工具抽屜
 
   // 同步 MCP 工具 metadata
   syncToolMetadata();

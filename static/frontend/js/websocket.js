@@ -496,9 +496,13 @@ function initializeWebSocket(token) {
         break;
 
       case 'typing':
-        // 思考中提示
+        // 思考中提示（新請求開始，隱藏工具卡片）
         if (data.message === 'thinking') {
           setState('thinking');
+          // 隱藏上一次的工具卡片
+          if (typeof hideToolCards === 'function') {
+            hideToolCards();
+          }
         }
         break;
 
@@ -613,9 +617,12 @@ function initializeWebSocket(token) {
           console.warn('⚠️ applyEmotion 函數未定義或情緒值無效');
         }
 
-        // 如果啟用關懷模式，可以在這裡添加額外的 UI 提示
+        // 如果啟用關懷模式，隱藏工具卡片
         if (data.care_mode) {
-          console.log('💙 關懷模式已啟動');
+          console.log('💙 關懷模式已啟動，隱藏工具卡片');
+          if (typeof hideToolCards === 'function') {
+            hideToolCards();
+          }
         }
         break;
 
