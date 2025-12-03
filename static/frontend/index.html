@@ -1483,33 +1483,101 @@
     }
 
     /* === 響應式設計：根據裝置類型切換工具卡片顯示方式 === */
-    /* 手機/平板模式（寬度 <= 1024px）：只顯示抽屜，隱藏桌面端卡片 */
-    @media (max-width: 1024px) {
-      #tool-cards-container {
-        display: none !important;
+    /* ========== 響應式設計：設備檢測與適配 ========== */
+    
+    /* === 1. 手機模式（寬度 <= 480px）=== */
+    @media (max-width: 480px) {
+      #tool-cards-container { display: none !important; }
+      .tool-drawer-toggle.visible { display: flex; }
+      .tool-drawer { display: flex; }
+      
+      /* 花朵縮小 */
+      .voice-waveform-container { width: 280px; height: 280px; }
+      .voice-mic-container { width: 180px; height: 180px; }
+      .bloom-core { width: 28px; height: 28px; }
+      .bloom-petal:nth-child(-n+8) { width: 50px; height: 80px; }
+      .bloom-petal:nth-child(n+9) { width: 38px; height: 65px; }
+      
+      /* 文字輸出區域 */
+      .voice-agent-output { max-width: 90vw; font-size: 14px; padding: 16px 20px; }
+    }
+
+    /* === 2. 平板模式（481px - 1024px）=== */
+    @media (min-width: 481px) and (max-width: 1024px) {
+      #tool-cards-container { display: none !important; }
+      .tool-drawer-toggle.visible { display: flex; }
+      .tool-drawer { display: flex; }
+      
+      /* 花朵適中 */
+      .voice-waveform-container { width: 350px; height: 350px; }
+      .voice-mic-container { width: 210px; height: 210px; }
+    }
+
+    /* === 3. 電腦模式（寬度 > 1024px 且非直立螢幕）=== */
+    @media (min-width: 1025px) and (orientation: landscape) {
+      #tool-cards-container { display: block; }
+      .tool-drawer-toggle { display: none !important; }
+      .tool-drawer { display: none !important; }
+      .tool-drawer-overlay { display: none !important; }
+    }
+
+    /* === 4. 90度橫屏/直立螢幕模式（寬度 < 高度，無論實際寬度）=== */
+    /* 這適用於外接顯示器 90 度旋轉的情況 */
+    @media (orientation: portrait) and (min-width: 600px) {
+      /* 使用抽屜模式 */
+      #tool-cards-container { display: none !important; }
+      .tool-drawer-toggle.visible { display: flex; }
+      .tool-drawer { display: flex; }
+      
+      /* 花朵響應式放大（根據視窗高度）*/
+      .voice-waveform-container {
+        width: min(50vh, 500px);
+        height: min(50vh, 500px);
       }
-      .tool-drawer-toggle.visible {
-        display: flex;
+      .voice-mic-container {
+        width: min(30vh, 300px);
+        height: min(30vh, 300px);
       }
-      .tool-drawer {
-        display: flex;
+      .bloom-core {
+        width: min(5vh, 45px);
+        height: min(5vh, 45px);
+      }
+      .bloom-petal:nth-child(-n+8) {
+        width: min(8vh, 80px);
+        height: min(13vh, 130px);
+      }
+      .bloom-petal:nth-child(n+9) {
+        width: min(6vh, 60px);
+        height: min(10vh, 100px);
+      }
+      
+      /* 文字輸出區域適配 */
+      .voice-agent-output {
+        max-width: 80vw;
+        font-size: clamp(14px, 2vh, 18px);
       }
     }
 
-    /* 電腦模式（寬度 > 1024px）：只顯示桌面端卡片，隱藏抽屜 */
-    @media (min-width: 1025px) {
-      #tool-cards-container {
-        display: block;
-      }
-      .tool-drawer-toggle {
-        display: none !important;
-      }
-      .tool-drawer {
-        display: none !important;
-      }
-      .tool-drawer-overlay {
-        display: none !important;
-      }
+    /* === 5. 超寬螢幕（寬度 > 1920px）=== */
+    @media (min-width: 1921px) {
+      .voice-waveform-container { width: 500px; height: 500px; }
+      .voice-mic-container { width: 300px; height: 300px; }
+      .bloom-core { width: 45px; height: 45px; }
+      .bloom-petal:nth-child(-n+8) { width: 80px; height: 130px; }
+      .bloom-petal:nth-child(n+9) { width: 60px; height: 100px; }
+    }
+
+    /* === 6. 強制直立模式（JS 動態添加 class）=== */
+    body.portrait-mode #tool-cards-container { display: none !important; }
+    body.portrait-mode .tool-drawer-toggle.visible { display: flex; }
+    body.portrait-mode .tool-drawer { display: flex; }
+    body.portrait-mode .voice-waveform-container {
+      width: min(50vh, 500px);
+      height: min(50vh, 500px);
+    }
+    body.portrait-mode .voice-mic-container {
+      width: min(30vh, 300px);
+      height: min(30vh, 300px);
     }
   </style>
 </head>
@@ -1664,5 +1732,39 @@
   <script src="js/location.js"></script>
   <script src="js/websocket.js"></script>
   <script src="js/app.js"></script>
+
+  <!-- 響應式螢幕檢測 -->
+  <script>
+    (function() {
+      function detectScreenOrientation() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const isPortrait = height > width;
+        const isLargePortrait = isPortrait && width >= 600;
+        
+        document.body.classList.remove('mobile-mode', 'tablet-mode', 'desktop-mode', 'portrait-mode');
+        
+        if (isLargePortrait) {
+          document.body.classList.add('portrait-mode');
+          console.log('📱 螢幕模式: 直立螢幕（90度橫屏）', width, 'x', height);
+        } else if (width <= 480) {
+          document.body.classList.add('mobile-mode');
+          console.log('📱 螢幕模式: 手機', width, 'x', height);
+        } else if (width <= 1024) {
+          document.body.classList.add('tablet-mode');
+          console.log('📱 螢幕模式: 平板', width, 'x', height);
+        } else {
+          document.body.classList.add('desktop-mode');
+          console.log('🖥️ 螢幕模式: 桌機/筆電', width, 'x', height);
+        }
+      }
+      
+      detectScreenOrientation();
+      window.addEventListener('resize', detectScreenOrientation);
+      if (screen.orientation) {
+        screen.orientation.addEventListener('change', detectScreenOrientation);
+      }
+    })();
+  </script>
 </body>
 </html>
