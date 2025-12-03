@@ -890,19 +890,35 @@
       color: #1A1A1A;
       text-align: left;
       line-height: 1.7;
-      min-height: 60px;
       box-shadow: 0 6px 28px rgba(0, 0, 0, 0.1);
       font-family: 'Inter', -apple-system, sans-serif;
       display: none; /* 預設隱藏 */
       opacity: 0;
       transform: translateY(10px);
       transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      /* 限制兩行高度 + 滾動 */
+      max-height: calc(1.7em * 2 + 40px); /* 兩行文字 + padding */
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
     }
 
     .voice-agent-output.active {
       display: block;
       opacity: 1;
       transform: translateY(0);
+    }
+
+    /* 自訂滾動條樣式 */
+    .voice-agent-output::-webkit-scrollbar {
+      width: 4px;
+    }
+    .voice-agent-output::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .voice-agent-output::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.15);
+      border-radius: 2px;
     }
 
     /* 打字游標效果 */
@@ -935,7 +951,7 @@
       color: #1A1A1A;
       text-align: center;
       line-height: 1.6;
-      min-height: 80px;
+      min-height: 60px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -946,6 +962,11 @@
     .voice-transcript.provisional {
       color: rgba(0, 0, 0, 0.4);
       font-style: italic;
+      /* 打字狀態：限制一行 */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-height: calc(1.6em + 48px); /* 一行文字 + padding */
     }
 
     .voice-transcript.final {
@@ -1306,6 +1327,190 @@
       width: 20px;
       height: 20px;
     }
+
+    /* === 工具抽屜（手機端右側拉出面板）=== */
+    .tool-drawer-toggle {
+      position: fixed;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 200;
+      width: 24px;
+      height: 60px;
+      background: rgba(255, 255, 255, 0.6);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-right: none;
+      border-radius: 12px 0 0 12px;
+      display: none; /* 預設隱藏，有工具結果時才顯示 */
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+      box-shadow: -2px 0 8px rgba(0, 0, 0, 0.06);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .tool-drawer-toggle.visible {
+      display: flex;
+    }
+
+    .tool-drawer-toggle:hover {
+      background: rgba(255, 255, 255, 0.9);
+      width: 28px;
+    }
+
+    .tool-drawer-toggle::before {
+      content: '‹';
+      font-size: 18px;
+      color: rgba(0, 0, 0, 0.5);
+      transition: transform 0.3s;
+    }
+
+    .tool-drawer-toggle.open::before {
+      transform: rotate(180deg);
+    }
+
+    /* 工具抽屜面板 */
+    .tool-drawer {
+      position: fixed;
+      right: -320px;
+      top: 0;
+      width: 320px;
+      height: 100%;
+      height: 100dvh;
+      background: rgba(255, 255, 255, 0.98);
+      border-left: 1px solid rgba(0, 0, 0, 0.08);
+      z-index: 199;
+      backdrop-filter: blur(20px) saturate(180%);
+      box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+      transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .tool-drawer.open {
+      right: 0;
+    }
+
+    .tool-drawer-header {
+      padding: 20px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .tool-drawer-header h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1A1A1A;
+      margin: 0;
+    }
+
+    .tool-drawer-close {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: rgba(0, 0, 0, 0.05);
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      color: rgba(0, 0, 0, 0.5);
+      transition: all 0.2s;
+    }
+
+    .tool-drawer-close:hover {
+      background: rgba(0, 0, 0, 0.1);
+      color: rgba(0, 0, 0, 0.8);
+    }
+
+    .tool-drawer-content {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 16px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* 抽屜內的工具卡片樣式覆寫 */
+    .tool-drawer-content .voice-tool-card {
+      position: relative;
+      top: auto;
+      left: auto;
+      right: auto;
+      bottom: auto;
+      width: 100%;
+      max-width: none;
+      min-width: auto;
+      margin-bottom: 16px;
+      animation: none;
+    }
+
+    /* 抽屜內滾動條樣式 */
+    .tool-drawer-content::-webkit-scrollbar {
+      width: 4px;
+    }
+    .tool-drawer-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .tool-drawer-content::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.15);
+      border-radius: 2px;
+    }
+
+    /* 抽屜遮罩層 */
+    .tool-drawer-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.3);
+      z-index: 198;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s;
+    }
+
+    .tool-drawer-overlay.visible {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    /* === 響應式設計：根據裝置類型切換工具卡片顯示方式 === */
+    /* 手機/平板模式（寬度 <= 1024px）：只顯示抽屜，隱藏桌面端卡片 */
+    @media (max-width: 1024px) {
+      #tool-cards-container {
+        display: none !important;
+      }
+      .tool-drawer-toggle.visible {
+        display: flex;
+      }
+      .tool-drawer {
+        display: flex;
+      }
+    }
+
+    /* 電腦模式（寬度 > 1024px）：只顯示桌面端卡片，隱藏抽屜 */
+    @media (min-width: 1025px) {
+      #tool-cards-container {
+        display: block;
+      }
+      .tool-drawer-toggle {
+        display: none !important;
+      }
+      .tool-drawer {
+        display: none !important;
+      }
+      .tool-drawer-overlay {
+        display: none !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1428,8 +1633,25 @@
       </div>
     </div>
 
-    <!-- 工具卡片容器 -->
+    <!-- 工具卡片容器（保留用於桌面端） -->
     <div id="tool-cards-container"></div>
+  </div>
+
+  <!-- 工具抽屜遮罩層 -->
+  <div class="tool-drawer-overlay" id="toolDrawerOverlay"></div>
+
+  <!-- 工具抽屜切換按鈕（右側透明箭頭） -->
+  <div class="tool-drawer-toggle" id="toolDrawerToggle"></div>
+
+  <!-- 工具抽屜面板 -->
+  <div class="tool-drawer" id="toolDrawer">
+    <div class="tool-drawer-header">
+      <h3>📊 工具結果</h3>
+      <button class="tool-drawer-close" id="toolDrawerClose">✕</button>
+    </div>
+    <div class="tool-drawer-content" id="toolDrawerContent">
+      <!-- 工具卡片將渲染到這裡 -->
+    </div>
   </div>
 
   <!-- JavaScript 模組化引入 -->
