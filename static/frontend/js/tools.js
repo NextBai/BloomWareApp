@@ -4,6 +4,115 @@ const positions = ['pos-top-right', 'pos-top-left', 'pos-bottom-right', 'pos-bot
 let usedPositions = [];
 const MAX_CARDS = 4;
 
+// 多語言標籤定義
+const LABELS = {
+  zh: {
+    temperature: '溫度', condition: '狀況', humidity: '濕度', wind_speed: '風速',
+    weather: '天氣', city: '城市', description: '描述',
+    feels_like: '體感', pressure: '氣壓', sunrise: '日出', sunset: '日落',
+    heart_rate: '心率', step_count: '步數', oxygen_level: '血氧', respiratory_rate: '呼吸',
+    sleep_analysis: '睡眠', record_time: '記錄時間', average: '平均值',
+    no_news: '無新聞', no_data: '無數據', unknown: '未知',
+    exchange_rate: '匯率', conversion: '轉換', time: '時間',
+    train_type: '車種', origin_station: '起站', dest_station: '迄站',
+    departure: '出發', arrival: '抵達', duration: '行駛時間',
+    distance: '距離', walking_time: '步行時間', station: '車站',
+    available_bikes: '可借車輛', available_spaces: '可還空位',
+    bike_type: '類型', service_status: '服務狀態', operating: '營運中', suspended: '暫停服務',
+    location: '位置', coordinates: '座標', origin: '起點', destination: '目的地',
+    estimated_time: '預估時間', view_in_maps: '在 Google Maps 中查看',
+    line: '路線', address: '地址', road: '道路', area: '區域'
+  },
+  en: {
+    temperature: 'Temperature', condition: 'Condition', humidity: 'Humidity', wind_speed: 'Wind Speed',
+    weather: 'Weather', city: 'City', description: 'Description',
+    feels_like: 'Feels Like', pressure: 'Pressure', sunrise: 'Sunrise', sunset: 'Sunset',
+    heart_rate: 'Heart Rate', step_count: 'Steps', oxygen_level: 'Oxygen', respiratory_rate: 'Respiratory',
+    sleep_analysis: 'Sleep', record_time: 'Record Time', average: 'Average',
+    no_news: 'No News', no_data: 'No Data', unknown: 'Unknown',
+    exchange_rate: 'Exchange Rate', conversion: 'Conversion', time: 'Time',
+    train_type: 'Train Type', origin_station: 'Origin', dest_station: 'Destination',
+    departure: 'Departure', arrival: 'Arrival', duration: 'Duration',
+    distance: 'Distance', walking_time: 'Walking Time', station: 'Station',
+    available_bikes: 'Available Bikes', available_spaces: 'Available Spaces',
+    bike_type: 'Type', service_status: 'Service Status', operating: 'Operating', suspended: 'Suspended',
+    location: 'Location', coordinates: 'Coordinates', origin: 'Origin', destination: 'Destination',
+    estimated_time: 'Estimated Time', view_in_maps: 'View in Google Maps',
+    line: 'Line', address: 'Address', road: 'Road', area: 'Area'
+  },
+  ko: {
+    temperature: '온도', condition: '상태', humidity: '습도', wind_speed: '풍속',
+    weather: '날씨', city: '도시', description: '설명',
+    feels_like: '체감', pressure: '기압', sunrise: '일출', sunset: '일몰',
+    heart_rate: '심박수', step_count: '걸음 수', oxygen_level: '혈중 산소', respiratory_rate: '호흡',
+    sleep_analysis: '수면', record_time: '기록 시간', average: '평균',
+    no_news: '뉴스 없음', no_data: '데이터 없음', unknown: '알 수 없음',
+    exchange_rate: '환율', conversion: '환전', time: '시간',
+    train_type: '열차 종류', origin_station: '출발역', dest_station: '도착역',
+    departure: '출발', arrival: '도착', duration: '소요 시간',
+    distance: '거리', walking_time: '도보 시간', station: '역',
+    available_bikes: '대여 가능', available_spaces: '반납 가능',
+    bike_type: '유형', service_status: '서비스 상태', operating: '운영 중', suspended: '일시 중단',
+    location: '위치', coordinates: '좌표', origin: '출발지', destination: '목적지',
+    estimated_time: '예상 시간', view_in_maps: 'Google Maps에서 보기',
+    line: '노선', address: '주소', road: '도로', area: '지역'
+  },
+  ja: {
+    temperature: '気温', condition: '状況', humidity: '湿度', wind_speed: '風速',
+    weather: '天気', city: '都市', description: '説明',
+    feels_like: '体感', pressure: '気圧', sunrise: '日の出', sunset: '日の入り',
+    heart_rate: '心拍数', step_count: '歩数', oxygen_level: '血中酸素', respiratory_rate: '呼吸',
+    sleep_analysis: '睡眠', record_time: '記録時刻', average: '平均',
+    no_news: 'ニュースなし', no_data: 'データなし', unknown: '不明',
+    exchange_rate: '為替レート', conversion: '換算', time: '時刻',
+    train_type: '列車種別', origin_station: '出発駅', dest_station: '到着駅',
+    departure: '出発', arrival: '到着', duration: '所要時間',
+    distance: '距離', walking_time: '徒歩時間', station: '駅',
+    available_bikes: '利用可能', available_spaces: '返却可能',
+    bike_type: 'タイプ', service_status: 'サービス状態', operating: '運行中', suspended: '一時停止',
+    location: '場所', coordinates: '座標', origin: '出発地', destination: '目的地',
+    estimated_time: '予想時間', view_in_maps: 'Google Mapsで見る',
+    line: '路線', address: '住所', road: '道路', area: 'エリア'
+  },
+  id: {
+    temperature: 'Suhu', condition: 'Kondisi', humidity: 'Kelembaban', wind_speed: 'Kecepatan Angin',
+    weather: 'Cuaca', city: 'Kota', description: 'Deskripsi',
+    feels_like: 'Terasa', pressure: 'Tekanan', sunrise: 'Matahari Terbit', sunset: 'Matahari Terbenam',
+    heart_rate: 'Detak Jantung', step_count: 'Langkah', oxygen_level: 'Oksigen', respiratory_rate: 'Pernapasan',
+    sleep_analysis: 'Tidur', record_time: 'Waktu Rekam', average: 'Rata-rata',
+    no_news: 'Tidak Ada Berita', no_data: 'Tidak Ada Data', unknown: 'Tidak Diketahui',
+    exchange_rate: 'Nilai Tukar', conversion: 'Konversi', time: 'Waktu',
+    train_type: 'Jenis Kereta', origin_station: 'Stasiun Asal', dest_station: 'Stasiun Tujuan',
+    departure: 'Keberangkatan', arrival: 'Kedatangan', duration: 'Durasi',
+    distance: 'Jarak', walking_time: 'Waktu Jalan', station: 'Stasiun',
+    available_bikes: 'Sepeda Tersedia', available_spaces: 'Tempat Tersedia',
+    bike_type: 'Tipe', service_status: 'Status Layanan', operating: 'Beroperasi', suspended: 'Ditangguhkan',
+    location: 'Lokasi', coordinates: 'Koordinat', origin: 'Asal', destination: 'Tujuan',
+    estimated_time: 'Waktu Estimasi', view_in_maps: 'Lihat di Google Maps',
+    line: 'Jalur', address: 'Alamat', road: 'Jalan', area: 'Area'
+  },
+  vi: {
+    temperature: 'Nhiệt độ', condition: 'Tình trạng', humidity: 'Độ ẩm', wind_speed: 'Tốc độ gió',
+    weather: 'Thời tiết', city: 'Thành phố', description: 'Mô tả',
+    feels_like: 'Cảm giác', pressure: 'Áp suất', sunrise: 'Mặt trời mọc', sunset: 'Mặt trời lặn',
+    heart_rate: 'Nhịp tim', step_count: 'Số bước', oxygen_level: 'Oxy', respiratory_rate: 'Hô hấp',
+    sleep_analysis: 'Giấc ngủ', record_time: 'Thời gian ghi', average: 'Trung bình',
+    no_news: 'Không có tin', no_data: 'Không có dữ liệu', unknown: 'Không rõ',
+    exchange_rate: 'Tỷ giá', conversion: 'Chuyển đổi', time: 'Thời gian',
+    train_type: 'Loại tàu', origin_station: 'Ga đi', dest_station: 'Ga đến',
+    departure: 'Khởi hành', arrival: 'Đến', duration: 'Thời gian di chuyển',
+    distance: 'Khoảng cách', walking_time: 'Thời gian đi bộ', station: 'Ga',
+    available_bikes: 'Xe có sẵn', available_spaces: 'Chỗ trống',
+    bike_type: 'Loại', service_status: 'Trạng thái dịch vụ', operating: 'Hoạt động', suspended: 'Tạm ngừng',
+    location: 'Vị trí', coordinates: 'Tọa độ', origin: 'Điểm đi', destination: 'Điểm đến',
+    estimated_time: 'Thời gian ước tính', view_in_maps: 'Xem trên Google Maps',
+    line: 'Tuyến', address: 'Địa chỉ', road: 'Đường', area: 'Khu vực'
+  }
+};
+
+// 當前語言（從用戶訊息自動檢測）
+let currentLanguage = 'zh';
+
 // 抽屜相關元素
 let toolDrawer = null;
 let toolDrawerToggle = null;
@@ -488,6 +597,7 @@ function renderWeatherData(data) {
   const weather = data.weather?.[0] || {};
   const wind = data.wind || {};
   const sys = data.sys || {};
+  const labels = LABELS[currentLanguage] || LABELS.zh;
   
   // 格式化時間
   const formatTime = (timestamp) => {
@@ -498,35 +608,35 @@ function renderWeatherData(data) {
   
   return `
     <div class="data-row">
-      <span class="data-label">🌡️ 溫度</span>
+      <span class="data-label">🌡️ ${labels.temperature}</span>
       <span class="data-value">${main.temp?.toFixed(1) || '--'}°C</span>
     </div>
     <div class="data-row">
-      <span class="data-label">🤔 體感</span>
+      <span class="data-label">🤔 ${labels.feels_like}</span>
       <span class="data-value">${main.feels_like?.toFixed(1) || '--'}°C</span>
     </div>
     <div class="data-row">
-      <span class="data-label">☁️ 狀況</span>
+      <span class="data-label">☁️ ${labels.condition}</span>
       <span class="data-value">${weather.description || '--'}</span>
     </div>
     <div class="data-row">
-      <span class="data-label">💧 濕度</span>
+      <span class="data-label">💧 ${labels.humidity}</span>
       <span class="data-value">${main.humidity || '--'}%</span>
     </div>
     <div class="data-row">
-      <span class="data-label">🌪️ 風速</span>
+      <span class="data-label">🌪️ ${labels.wind_speed}</span>
       <span class="data-value">${wind.speed?.toFixed(1) || '--'} m/s</span>
     </div>
     <div class="data-row">
-      <span class="data-label">📊 氣壓</span>
+      <span class="data-label">📊 ${labels.pressure}</span>
       <span class="data-value">${main.pressure || '--'} hPa</span>
     </div>
     <div class="data-row">
-      <span class="data-label">🌅 日出</span>
+      <span class="data-label">🌅 ${labels.sunrise}</span>
       <span class="data-value">${formatTime(sys.sunrise)}</span>
     </div>
     <div class="data-row">
-      <span class="data-label">🌇 日落</span>
+      <span class="data-label">🌇 ${labels.sunset}</span>
       <span class="data-value">${formatTime(sys.sunset)}</span>
     </div>
   `;
@@ -536,21 +646,15 @@ function renderWeatherData(data) {
  * 渲染健康指標
  */
 function renderHealthMetrics(healthData) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!healthData || healthData.length === 0) {
-    return '<p class="data-row">無健康數據</p>';
+    return `<p class="data-row">${labels.no_data}</p>`;
   }
-
-  const metricNames = {
-    heart_rate: '❤️ 心率',
-    step_count: '👟 步數',
-    oxygen_level: '🫁 血氧',
-    respiratory_rate: '💨 呼吸',
-    sleep_analysis: '😴 睡眠'
-  };
 
   const metricIcons = {
     heart_rate: '❤️',
-    step_count: '👟',
+    step_count: '�',
     oxygen_level: '🫁',
     respiratory_rate: '💨',
     sleep_analysis: '😴'
@@ -571,7 +675,7 @@ function renderHealthMetrics(healthData) {
   // 渲染每種指標
   Object.entries(grouped).forEach(([metric, items], index) => {
     const icon = metricIcons[metric] || '📊';
-    const label = metricNames[metric]?.replace(/^.+\s/, '') || metric;
+    const label = labels[metric] || metric;
     const latestItem = items[0]; // 最新的數據
     const value = latestItem.value;
     const unit = latestItem.unit || '';
@@ -600,13 +704,13 @@ function renderHealthMetrics(healthData) {
         </div>
         ${timeStr ? `
         <div class="data-row" style="opacity: 0.7;">
-          <span class="data-label" style="font-size: 0.85em;">記錄時間</span>
+          <span class="data-label" style="font-size: 0.85em;">${labels.record_time}</span>
           <span class="data-value" style="font-size: 0.85em;">${timeStr}</span>
         </div>
         ` : ''}
         ${items.length > 1 ? `
         <div class="data-row" style="opacity: 0.6;">
-          <span class="data-label" style="font-size: 0.8em;">平均值</span>
+          <span class="data-label" style="font-size: 0.8em;">${labels.average}</span>
           <span class="data-value" style="font-size: 0.8em;">${(items.reduce((sum, i) => sum + i.value, 0) / items.length).toFixed(1)} ${unit}</span>
         </div>
         ` : ''}
@@ -622,32 +726,35 @@ function renderHealthMetrics(healthData) {
  * 渲染新聞列表
  */
 function renderNewsList(articles) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
   let html = '';
   articles.slice(0, 3).forEach(article => {
     html += `
       <div class="data-row" style="flex-direction: column; align-items: flex-start; margin-bottom: 10px;">
-        <span class="data-label" style="font-weight: bold;">${article.title || '無標題'}</span>
+        <span class="data-label" style="font-weight: bold;">${article.title || labels.unknown}</span>
         <span class="data-value" style="font-size: 0.85em; opacity: 0.8;">${article.source?.name || article.source || ''}</span>
       </div>
     `;
   });
 
-  return html || '<p>無新聞</p>';
+  return html || `<p>${labels.no_news}</p>`;
 }
 
 /**
  * 渲染鍵值對（天氣等）
  */
 function renderKeyValuePairs(data) {
+  // 使用當前語言的標籤
+  const labels = LABELS[currentLanguage] || LABELS.zh;
   const keyMap = {
-    city: '城市',
-    temp: '溫度',
-    temperature: '溫度',
-    condition: '狀況',
-    weather: '天氣',
-    humidity: '濕度',
-    wind_speed: '風速',
-    description: '描述'
+    city: labels.city,
+    temp: labels.temperature,
+    temperature: labels.temperature,
+    condition: labels.condition,
+    weather: labels.weather,
+    humidity: labels.humidity,
+    wind_speed: labels.wind_speed,
+    description: labels.description
   };
 
   let html = '';
@@ -680,6 +787,7 @@ function renderKeyValuePairs(data) {
  * 渲染匯率信息
  */
 function renderExchangeRate(data) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
   const currencySymbols = {
     "USD": "$", "TWD": "NT$", "JPY": "¥", "EUR": "€", 
     "GBP": "£", "CNY": "¥", "KRW": "₩", "HKD": "HK$"
@@ -696,7 +804,7 @@ function renderExchangeRate(data) {
   if (data.rate !== undefined) {
     html += `
       <div class="data-row">
-        <span class="data-label">💰 匯率</span>
+        <span class="data-label">💰 ${labels.exchange_rate}</span>
         <span class="data-value">1 ${fromCurrency} = ${data.rate.toFixed(4)} ${toCurrency}</span>
       </div>
     `;
@@ -706,7 +814,7 @@ function renderExchangeRate(data) {
   if (data.amount && data.converted_amount !== undefined) {
     html += `
       <div class="data-row">
-        <span class="data-label">🔄 轉換</span>
+        <span class="data-label">🔄 ${labels.conversion}</span>
         <span class="data-value">${fromSymbol}${data.amount.toFixed(2)} = ${toSymbol}${data.converted_amount.toFixed(2)}</span>
       </div>
     `;
@@ -717,54 +825,56 @@ function renderExchangeRate(data) {
     const time = new Date(data.raw_data.metadata.timestamp).toLocaleString('zh-TW');
     html += `
       <div class="data-row">
-        <span class="data-label">⏰ 時間</span>
+        <span class="data-label">⏰ ${labels.time}</span>
         <span class="data-value">${time}</span>
       </div>
     `;
   }
 
-  return html || '<p>無匯率數據</p>';
+  return html || `<p>${labels.no_data}</p>`;
 }
 
 /**
  * 渲染火車列車資訊
  */
 function renderTrainList(trains) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!trains || trains.length === 0) {
-    return '<p class="data-row">查無列車資訊</p>';
+    return `<p class="data-row">${labels.no_data}</p>`;
   }
 
   let html = '<div class="train-list">';
 
   trains.forEach((train, index) => {
-    const trainType = train.train_type || '未知';
+    const trainType = train.train_type || labels.unknown;
     const trainNo = train.train_no || '---';
     const departTime = train.departure_time ? train.departure_time.substring(0, 5) : '--:--';
     const arriveTime = train.arrival_time ? train.arrival_time.substring(0, 5) : '--:--';
-    const duration = train.duration_min ? `${train.duration_min}分鐘` : '未知';
-    const originStation = train.origin_station || '未知';
-    const destStation = train.destination_station || '未知';
+    const durationText = train.duration_min ? `${train.duration_min}${currentLanguage === 'zh' ? '分鐘' : currentLanguage === 'en' ? ' min' : currentLanguage === 'ko' ? '분' : currentLanguage === 'ja' ? '分' : currentLanguage === 'id' ? ' menit' : ' phút'}` : labels.unknown;
+    const originStation = train.origin_station || labels.unknown;
+    const destStation = train.destination_station || labels.unknown;
 
     html += `
       <div class="train-item" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === trains.length - 1 ? 'border-bottom: none;' : ''}">
         <div class="data-row" style="margin-bottom: 8px;">
-          <span class="data-label" style="font-weight: bold; color: #0066cc;">🚂 ${trainType} ${trainNo}次</span>
+          <span class="data-label" style="font-weight: bold; color: #0066cc;">🚂 ${trainType} ${trainNo}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">📍 起訖站</span>
+          <span class="data-label">📍 ${labels.origin_station} → ${labels.dest_station}</span>
           <span class="data-value">${originStation} → ${destStation}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">⏰ 出發</span>
+          <span class="data-label">⏰ ${labels.departure}</span>
           <span class="data-value">${departTime}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">⏱️ 抵達</span>
+          <span class="data-label">⏱️ ${labels.arrival}</span>
           <span class="data-value">${arriveTime}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">🕐 行駛時間</span>
-          <span class="data-value">${duration}</span>
+          <span class="data-label">🕐 ${labels.duration}</span>
+          <span class="data-value">${durationText}</span>
         </div>
       </div>
     `;
@@ -778,16 +888,19 @@ function renderTrainList(trains) {
  * 渲染火車站點資訊
  */
 function renderTrainStations(stations) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!stations || stations.length === 0) {
-    return '<p class="data-row">查無車站資訊</p>';
+    return `<p class="data-row">${labels.no_data}</p>`;
   }
 
   let html = '<div class="station-list">';
 
   stations.forEach((station, index) => {
-    const stationName = station.station_name || station.name || '未知車站';
-    const distance = station.distance_m ? `${Math.round(station.distance_m)}公尺` : '';
-    const walkTime = station.walking_time_min ? `步行約${station.walking_time_min}分鐘` : '';
+    const stationName = station.station_name || station.name || labels.unknown;
+    const distanceUnit = currentLanguage === 'zh' ? '公尺' : currentLanguage === 'en' ? 'm' : currentLanguage === 'ko' ? '미터' : currentLanguage === 'ja' ? 'メートル' : currentLanguage === 'id' ? 'm' : 'm';
+    const distance = station.distance_m ? `${Math.round(station.distance_m)}${distanceUnit}` : '';
+    const walkTimeText = station.walking_time_min ? `${currentLanguage === 'zh' ? '步行約' : ''}${station.walking_time_min}${currentLanguage === 'zh' ? '分鐘' : currentLanguage === 'en' ? ' min walk' : currentLanguage === 'ko' ? '분 도보' : currentLanguage === 'ja' ? '分 徒歩' : currentLanguage === 'id' ? ' menit jalan' : ' phút đi bộ'}` : '';
 
     html += `
       <div class="station-item" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === stations.length - 1 ? 'border-bottom: none;' : ''}">
@@ -796,14 +909,14 @@ function renderTrainStations(stations) {
         </div>
         ${distance ? `
         <div class="data-row">
-          <span class="data-label">📏 距離</span>
+          <span class="data-label">📏 ${labels.distance}</span>
           <span class="data-value">${distance}</span>
         </div>
         ` : ''}
-        ${walkTime ? `
+        ${walkTimeText ? `
         <div class="data-row">
-          <span class="data-label">🚶 步行時間</span>
-          <span class="data-value">${walkTime}</span>
+          <span class="data-label">🚶 ${labels.walking_time}</span>
+          <span class="data-value">${walkTimeText}</span>
         </div>
         ` : ''}
       </div>
@@ -818,29 +931,34 @@ function renderTrainStations(stations) {
  * 渲染 YouBike 站點資訊
  */
 function renderYouBikeStations(stations) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!stations || stations.length === 0) {
-    return '<p class="data-row">附近無 YouBike 站點</p>';
+    return `<p class="data-row">${labels.no_data}</p>`;
   }
 
   let html = '<div class="youbike-list">';
 
   stations.forEach((station, index) => {
-    const stationName = station.station_name || '未知站點';
+    const stationName = station.station_name || labels.unknown;
     const availableBikes = station.available_bikes ?? 0;
     const availableSpaces = station.available_spaces ?? 0;
     const distance = station.distance_m || 0;
     const walkingTime = station.walking_time_min || 0;
     const bikeType = station.bike_type || 'YouBike';
-    const serviceStatus = station.service_status === 1 ? '營運中' : '暫停服務';
+    const serviceStatus = station.service_status === 1 ? labels.operating : labels.suspended;
+    const walkText = currentLanguage === 'zh' ? `步行約 ${walkingTime} 分鐘` : currentLanguage === 'en' ? `${walkingTime} min walk` : currentLanguage === 'ko' ? `도보 ${walkingTime}분` : currentLanguage === 'ja' ? `徒歩${walkingTime}分` : currentLanguage === 'id' ? `${walkingTime} menit jalan` : `${walkingTime} phút đi bộ`;
+    const bikeUnit = currentLanguage === 'zh' ? '輛' : currentLanguage === 'en' ? '' : currentLanguage === 'ko' ? '대' : currentLanguage === 'ja' ? '台' : currentLanguage === 'id' ? '' : '';
+    const spaceUnit = currentLanguage === 'zh' ? '個' : currentLanguage === 'en' ? '' : currentLanguage === 'ko' ? '개' : currentLanguage === 'ja' ? '個' : currentLanguage === 'id' ? '' : '';
 
     // 可借車輛狀態：0 = 紅色，1-3 = 橘色，>3 = 綠色
-    let bikeStatusColor = '#e74c3c'; // 紅色
+    let bikeStatusColor = '#e74c3c';
     let bikeStatusIcon = '🚫';
     if (availableBikes > 3) {
-      bikeStatusColor = '#27ae60'; // 綠色
+      bikeStatusColor = '#27ae60';
       bikeStatusIcon = '✅';
     } else if (availableBikes > 0) {
-      bikeStatusColor = '#f39c12'; // 橘色
+      bikeStatusColor = '#f39c12';
       bikeStatusIcon = '⚠️';
     }
 
@@ -850,19 +968,19 @@ function renderYouBikeStations(stations) {
           <span class="data-label" style="font-weight: bold; color: #e67e22;">🚲 ${stationName}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">📍 距離</span>
-          <span class="data-value">${distance}m (步行約 ${walkingTime} 分鐘)</span>
+          <span class="data-label">📍 ${labels.distance}</span>
+          <span class="data-value">${distance}m (${walkText})</span>
         </div>
         <div class="data-row">
-          <span class="data-label">🚴 可借車輛</span>
-          <span class="data-value" style="color: ${bikeStatusColor}; font-weight: bold;">${bikeStatusIcon} ${availableBikes} 輛</span>
+          <span class="data-label">🚴 ${labels.available_bikes}</span>
+          <span class="data-value" style="color: ${bikeStatusColor}; font-weight: bold;">${bikeStatusIcon} ${availableBikes} ${bikeUnit}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">🅿️ 可還空位</span>
-          <span class="data-value">${availableSpaces} 個</span>
+          <span class="data-label">🅿️ ${labels.available_spaces}</span>
+          <span class="data-value">${availableSpaces} ${spaceUnit}</span>
         </div>
         <div class="data-row">
-          <span class="data-label">ℹ️ 類型</span>
+          <span class="data-label">ℹ️ ${labels.bike_type}</span>
           <span class="data-value">${bikeType} (${serviceStatus})</span>
         </div>
       </div>
@@ -877,8 +995,10 @@ function renderYouBikeStations(stations) {
  * 渲染公車到站資訊
  */
 function renderBusArrivals(arrivals, routeName) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!arrivals || arrivals.length === 0) {
-    return '<p>目前無到站資訊</p>';
+    return `<p>${labels.no_data}</p>`;
   }
 
   let html = '';
@@ -886,7 +1006,7 @@ function renderBusArrivals(arrivals, routeName) {
   // 按站點分組
   const stopGroups = {};
   arrivals.forEach(arr => {
-    const stopName = arr.stop_name || '未知站點';
+    const stopName = arr.stop_name || labels.unknown;
     if (!stopGroups[stopName]) {
       stopGroups[stopName] = [];
     }
@@ -907,11 +1027,11 @@ function renderBusArrivals(arrivals, routeName) {
     `;
     
     stopArrivals.forEach(arr => {
-      const direction = arr.direction === 0 ? '往 ↑' : '返 ↓';
-      const status = arr.status || '未知';
+      const directionText = arr.direction === 0 ? (currentLanguage === 'zh' ? '往 ↑' : currentLanguage === 'en' ? 'To ↑' : currentLanguage === 'ko' ? '방향 ↑' : currentLanguage === 'ja' ? '行き ↑' : currentLanguage === 'id' ? 'Ke ↑' : 'Đến ↑') : (currentLanguage === 'zh' ? '返 ↓' : currentLanguage === 'en' ? 'Return ↓' : currentLanguage === 'ko' ? '회차 ↓' : currentLanguage === 'ja' ? '戻り ↓' : currentLanguage === 'id' ? 'Kembali ↓' : 'Về ↓');
+      const status = arr.status || labels.unknown;
       html += `
         <div style="display: flex; justify-content: space-between; width: 100%; padding: 2px 0;">
-          <span style="font-size: 0.9em; opacity: 0.8;">${direction}</span>
+          <span style="font-size: 0.9em; opacity: 0.8;">${directionText}</span>
           <span class="data-value" style="font-size: 0.9em;">${status}</span>
         </div>
       `;
@@ -927,7 +1047,8 @@ function renderBusArrivals(arrivals, routeName) {
  * 渲染地理反查資訊（reverse_geocode）
  */
 function renderReverseGeocode(data) {
-  const displayName = data.display_name || '未知地點';
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  const displayName = data.display_name || labels.unknown;
   const city = data.city || '';
   const road = data.road || '';
   const houseNumber = data.house_number || '';
@@ -952,34 +1073,34 @@ function renderReverseGeocode(data) {
 
   return `
     <div class="data-row">
-      <span class="data-label">📍 位置</span>
+      <span class="data-label">📍 ${labels.location}</span>
       <span class="data-value" style="font-weight: bold;">${displayName}</span>
     </div>
     ${city ? `
     <div class="data-row">
-      <span class="data-label">🏙️ 城市</span>
+      <span class="data-label">🏙️ ${labels.city}</span>
       <span class="data-value">${city}</span>
     </div>
     ` : ''}
     ${road ? `
     <div class="data-row">
-      <span class="data-label">🛣️ 道路</span>
+      <span class="data-label">🛣️ ${labels.road}</span>
       <span class="data-value">${road}${houseNumber ? ' ' + houseNumber : ''}</span>
     </div>
     ` : ''}
     ${suburb ? `
     <div class="data-row">
-      <span class="data-label">🏘️ 區域</span>
+      <span class="data-label">🏘️ ${labels.area}</span>
       <span class="data-value">${suburb}</span>
     </div>
     ` : ''}
     <div class="data-row">
-      <span class="data-label">🌐 座標</span>
+      <span class="data-label">🌐 ${labels.coordinates}</span>
       <span class="data-value" style="font-size: 0.85em;">${lat}, ${lon}</span>
     </div>
     <div class="data-row" style="margin-top: 8px;">
       <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
-        🗺️ 在 Google Maps 中查看 →
+        🗺️ ${labels.view_in_maps} →
       </a>
     </div>
   `;
@@ -989,21 +1110,23 @@ function renderReverseGeocode(data) {
  * 渲染附近公車站點
  */
 function renderNearbyStops(stops) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!stops || stops.length === 0) {
-    return '<p>附近沒有公車站</p>';
+    return `<p>${labels.no_data}</p>`;
   }
 
   let html = '';
   stops.slice(0, 5).forEach((stop, index) => {
-    const stopName = stop.stop_name || '未知站點';
+    const stopName = stop.stop_name || labels.unknown;
     const distance = stop.distance_m ? `${Math.round(stop.distance_m)}m` : '';
-    const walkTime = stop.walking_time_min ? `步行 ${stop.walking_time_min} 分` : '';
+    const walkTimeText = stop.walking_time_min ? `${currentLanguage === 'zh' ? '步行 ' : ''}${stop.walking_time_min}${currentLanguage === 'zh' ? ' 分' : currentLanguage === 'en' ? ' min walk' : currentLanguage === 'ko' ? '분 도보' : currentLanguage === 'ja' ? '分 徒歩' : currentLanguage === 'id' ? ' menit jalan' : ' phút đi bộ'}` : '';
     
     html += `
       <div class="data-row" style="margin-bottom: 8px;">
         <div style="flex: 1;">
           <div style="font-weight: 600; margin-bottom: 2px;">🚏 ${stopName}</div>
-          <div style="font-size: 0.85em; opacity: 0.7;">${walkTime} ${distance ? `(${distance})` : ''}</div>
+          <div style="font-size: 0.85em; opacity: 0.7;">${walkTimeText} ${distance ? `(${distance})` : ''}</div>
         </div>
       </div>
     `;
@@ -1016,17 +1139,22 @@ function renderNearbyStops(stops) {
  * 渲染導航路線（directions）
  */
 function renderDirections(data) {
-  const originLabel = data.origin_label || '起點';
-  const destLabel = data.dest_label || '目的地';
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  const originLabel = data.origin_label || labels.origin;
+  const destLabel = data.dest_label || labels.destination;
   const distanceM = data.distance_m;
   const durationS = data.duration_s;
   
   // 格式化距離
   let distanceStr = '--';
   if (distanceM !== undefined) {
-    distanceStr = distanceM >= 1000 
-      ? `${(distanceM / 1000).toFixed(1)} 公里` 
-      : `${Math.round(distanceM)} 公尺`;
+    if (distanceM >= 1000) {
+      const kmUnit = currentLanguage === 'zh' ? '公里' : currentLanguage === 'en' ? ' km' : currentLanguage === 'ko' ? '킬로미터' : currentLanguage === 'ja' ? 'キロ' : currentLanguage === 'id' ? ' km' : ' km';
+      distanceStr = `${(distanceM / 1000).toFixed(1)}${kmUnit}`;
+    } else {
+      const mUnit = currentLanguage === 'zh' ? '公尺' : currentLanguage === 'en' ? ' m' : currentLanguage === 'ko' ? '미터' : currentLanguage === 'ja' ? 'メートル' : currentLanguage === 'id' ? ' m' : ' m';
+      distanceStr = `${Math.round(distanceM)}${mUnit}`;
+    }
   }
   
   // 格式化時間
@@ -1036,9 +1164,12 @@ function renderDirections(data) {
     if (minutes >= 60) {
       const hours = Math.floor(minutes / 60);
       const mins = minutes % 60;
-      durationStr = mins > 0 ? `${hours} 小時 ${mins} 分鐘` : `${hours} 小時`;
+      const hourUnit = currentLanguage === 'zh' ? '小時' : currentLanguage === 'en' ? ' hr' : currentLanguage === 'ko' ? '시간' : currentLanguage === 'ja' ? '時間' : currentLanguage === 'id' ? ' jam' : ' giờ';
+      const minUnit = currentLanguage === 'zh' ? '分鐘' : currentLanguage === 'en' ? ' min' : currentLanguage === 'ko' ? '분' : currentLanguage === 'ja' ? '分' : currentLanguage === 'id' ? ' menit' : ' phút';
+      durationStr = mins > 0 ? `${hours}${hourUnit} ${mins}${minUnit}` : `${hours}${hourUnit}`;
     } else {
-      durationStr = `${minutes} 分鐘`;
+      const minUnit = currentLanguage === 'zh' ? '分鐘' : currentLanguage === 'en' ? ' min' : currentLanguage === 'ko' ? '분' : currentLanguage === 'ja' ? '分' : currentLanguage === 'id' ? ' menit' : ' phút';
+      durationStr = `${minutes}${minUnit}`;
     }
   }
   
@@ -1049,7 +1180,7 @@ function renderDirections(data) {
     mapsLink = `
       <div class="data-row" style="margin-top: 8px;">
         <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
-          🗺️ 在 Google Maps 中查看 →
+          🗺️ ${labels.view_in_maps} →
         </a>
       </div>
     `;
@@ -1057,19 +1188,19 @@ function renderDirections(data) {
   
   return `
     <div class="data-row">
-      <span class="data-label">📍 起點</span>
+      <span class="data-label">📍 ${labels.origin}</span>
       <span class="data-value">${originLabel}</span>
     </div>
     <div class="data-row">
-      <span class="data-label">🎯 目的地</span>
+      <span class="data-label">🎯 ${labels.destination}</span>
       <span class="data-value">${destLabel}</span>
     </div>
     <div class="data-row">
-      <span class="data-label">📏 距離</span>
+      <span class="data-label">📏 ${labels.distance}</span>
       <span class="data-value">${distanceStr}</span>
     </div>
     <div class="data-row">
-      <span class="data-label">⏱️ 預估時間</span>
+      <span class="data-label">⏱️ ${labels.estimated_time}</span>
       <span class="data-value">${durationStr}</span>
     </div>
     ${mapsLink}
@@ -1080,8 +1211,10 @@ function renderDirections(data) {
  * 渲染捷運到站資訊（tdx_metro arrivals）
  */
 function renderMetroArrivals(arrivals) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!arrivals || arrivals.length === 0) {
-    return '<p class="data-row">目前無捷運到站資訊</p>';
+    return `<p class="data-row">${labels.no_data}</p>`;
   }
 
   let html = '<div class="metro-arrivals">';
@@ -1089,7 +1222,7 @@ function renderMetroArrivals(arrivals) {
   // 按路線分組
   const lineGroups = {};
   arrivals.forEach(arr => {
-    const lineName = arr.line_name || '未知路線';
+    const lineName = arr.line_name || labels.unknown;
     if (!lineGroups[lineName]) {
       lineGroups[lineName] = [];
     }
@@ -1106,15 +1239,17 @@ function renderMetroArrivals(arrivals) {
     `;
     
     lineArrivals.slice(0, 3).forEach(arr => {
-      const dest = arr.destination || '未知';
+      const dest = arr.destination || labels.unknown;
       const timeSec = arr.arrival_time_sec;
-      const status = arr.train_status || '未知';
+      const status = arr.train_status || labels.unknown;
       
       let timeStr = status;
       if (timeSec > 0) {
         const min = Math.floor(timeSec / 60);
         const sec = timeSec % 60;
-        timeStr = min > 0 ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
+        const minUnit = currentLanguage === 'zh' ? '分' : currentLanguage === 'en' ? ' min' : currentLanguage === 'ko' ? '분' : currentLanguage === 'ja' ? '分' : currentLanguage === 'id' ? ' menit' : ' phút';
+        const secUnit = currentLanguage === 'zh' ? '秒' : currentLanguage === 'en' ? ' sec' : currentLanguage === 'ko' ? '초' : currentLanguage === 'ja' ? '秒' : currentLanguage === 'id' ? ' detik' : ' giây';
+        timeStr = min > 0 ? `${min}${minUnit} ${sec}${secUnit}` : `${sec}${secUnit}`;
       }
       
       html += `
@@ -1136,16 +1271,19 @@ function renderMetroArrivals(arrivals) {
  * 渲染捷運站點資訊（tdx_metro stations）
  */
 function renderMetroStations(stations) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  
   if (!stations || stations.length === 0) {
-    return '<p class="data-row">附近無捷運站</p>';
+    return `<p class="data-row">${labels.no_data}</p>`;
   }
 
   let html = '<div class="metro-stations">';
 
   stations.forEach((station, index) => {
-    const stationName = station.station_name || '未知車站';
-    const distance = station.distance_m ? `${Math.round(station.distance_m)} 公尺` : '';
-    const walkTime = station.walking_time_min ? `步行約 ${station.walking_time_min} 分鐘` : '';
+    const stationName = station.station_name || labels.unknown;
+    const distanceUnit = currentLanguage === 'zh' ? '公尺' : currentLanguage === 'en' ? 'm' : currentLanguage === 'ko' ? '미터' : currentLanguage === 'ja' ? 'メートル' : currentLanguage === 'id' ? 'm' : 'm';
+    const distance = station.distance_m ? `${Math.round(station.distance_m)} ${distanceUnit}` : '';
+    const walkTimeText = station.walking_time_min ? `${currentLanguage === 'zh' ? '步行約 ' : ''}${station.walking_time_min}${currentLanguage === 'zh' ? ' 分鐘' : currentLanguage === 'en' ? ' min walk' : currentLanguage === 'ko' ? '분 도보' : currentLanguage === 'ja' ? '分 徒歩' : currentLanguage === 'id' ? ' menit jalan' : ' phút đi bộ'}` : '';
     const address = station.address || '';
 
     html += `
@@ -1155,19 +1293,19 @@ function renderMetroStations(stations) {
         </div>
         ${distance ? `
         <div class="data-row">
-          <span class="data-label">📏 距離</span>
+          <span class="data-label">📏 ${labels.distance}</span>
           <span class="data-value">${distance}</span>
         </div>
         ` : ''}
-        ${walkTime ? `
+        ${walkTimeText ? `
         <div class="data-row">
-          <span class="data-label">🚶 步行時間</span>
-          <span class="data-value">${walkTime}</span>
+          <span class="data-label">🚶 ${labels.walking_time}</span>
+          <span class="data-value">${walkTimeText}</span>
         </div>
         ` : ''}
         ${address ? `
         <div class="data-row">
-          <span class="data-label">📍 地址</span>
+          <span class="data-label">📍 ${labels.address}</span>
           <span class="data-value" style="font-size: 0.85em;">${address}</span>
         </div>
         ` : ''}
@@ -1183,7 +1321,8 @@ function renderMetroStations(stations) {
  * 渲染正向地理編碼（forward_geocode）
  */
 function renderForwardGeocode(data) {
-  const displayName = data.display_name || '未知地點';
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  const displayName = data.display_name || labels.unknown;
   const lat = data.lat?.toFixed(6) || '';
   const lon = data.lon?.toFixed(6) || '';
   const city = data.city || '';
@@ -1195,34 +1334,34 @@ function renderForwardGeocode(data) {
 
   return `
     <div class="data-row">
-      <span class="data-label">📍 地點</span>
+      <span class="data-label">📍 ${labels.location}</span>
       <span class="data-value" style="font-weight: bold;">${displayName}</span>
     </div>
     ${city ? `
     <div class="data-row">
-      <span class="data-label">🏙️ 城市</span>
+      <span class="data-label">🏙️ ${labels.city}</span>
       <span class="data-value">${city}</span>
     </div>
     ` : ''}
     ${road ? `
     <div class="data-row">
-      <span class="data-label">🛣️ 道路</span>
+      <span class="data-label">🛣️ ${labels.road}</span>
       <span class="data-value">${road}</span>
     </div>
     ` : ''}
     ${suburb ? `
     <div class="data-row">
-      <span class="data-label">🏘️ 區域</span>
+      <span class="data-label">🏘️ ${labels.area}</span>
       <span class="data-value">${suburb}</span>
     </div>
     ` : ''}
     <div class="data-row">
-      <span class="data-label">🌐 座標</span>
+      <span class="data-label">🌐 ${labels.coordinates}</span>
       <span class="data-value" style="font-size: 0.85em;">${lat}, ${lon}</span>
     </div>
     <div class="data-row" style="margin-top: 8px;">
       <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
-        🗺️ 在 Google Maps 中查看 →
+        🗺️ ${labels.view_in_maps} →
       </a>
     </div>
   `;

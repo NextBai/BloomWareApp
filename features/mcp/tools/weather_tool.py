@@ -30,7 +30,7 @@ class WeatherTool(MCPTool):
     """天氣查詢 MCP 工具"""
 
     NAME = "weather_query"
-    DESCRIPTION = "查詢指定城市的即時天氣資訊（溫度、濕度、天氣狀況等）"
+    DESCRIPTION = "Query real-time weather information (temperature, humidity, conditions, etc.) for a specified city"
     CATEGORY = "生活資訊"
     TAGS = ["weather", "天氣", "氣象"]
     KEYWORDS = ["天氣", "氣溫", "下雨", "晴天", "陰天", "weather", "溫度", "濕度", "會不會下雨", "熱不熱", "冷不冷"]

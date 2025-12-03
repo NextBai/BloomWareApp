@@ -76,7 +76,7 @@ async function checkLoginStatus() {
 /**
  * 初始化應用（登入後）
  */
-function initializeApp(token) {
+async function initializeApp(token) {
   console.log('🚀 初始化應用...');
 
   // 初始化各個模組的事件監聽器
@@ -92,10 +92,67 @@ function initializeApp(token) {
   // 同步 MCP 工具 metadata
   syncToolMetadata();
 
+  // 請求必要權限（麥克風 + 地理位置）
+  await requestRequiredPermissions();
+
   // 初始化 WebSocket
   initializeWebSocket(token);
 
   console.log('✅ 應用初始化完成');
+}
+
+/**
+ * 請求必要權限（麥克風 + 地理位置）
+ */
+async function requestRequiredPermissions() {
+  console.log('🔐 請求必要權限...');
+  
+  // 1. 請求麥克風權限
+  try {
+    console.log('🎤 請求麥克風權限...');
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      audio: { channelCount: 1, sampleRate: 48000 } 
+    });
+    // 立即停止串流（只是為了觸發權限請求）
+    stream.getTracks().forEach(track => track.stop());
+    console.log('✅ 麥克風權限已授予');
+  } catch (error) {
+    console.warn('⚠️ 麥克風權限被拒絕:', error);
+    if (typeof showErrorNotification === 'function') {
+      showErrorNotification('需要麥克風權限才能使用語音功能，請在瀏覽器設定中允許');
+    } else {
+      alert('需要麥克風權限才能使用語音功能，請在瀏覽器設定中允許');
+    }
+  }
+
+  // 2. 請求地理位置權限
+  if (navigator.geolocation) {
+    try {
+      console.log('📍 請求地理位置權限...');
+      await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            console.log('✅ 地理位置權限已授予');
+            resolve(position);
+          },
+          (error) => {
+            console.warn('⚠️ 地理位置權限被拒絕:', error);
+            reject(error);
+          },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
+        );
+      });
+    } catch (error) {
+      console.warn('⚠️ 地理位置權限被拒絕，部分功能（如查詢附近公車）將無法使用');
+      if (typeof showErrorNotification === 'function') {
+        showErrorNotification('建議允許地理位置權限以使用完整功能（如查詢附近公車、天氣等）');
+      }
+    }
+  } else {
+    console.warn('⚠️ 此瀏覽器不支援地理位置功能');
+  }
+
+  console.log('✅ 權限請求完成');
 }
 
 // ========== 頁面初始化 ==========

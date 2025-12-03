@@ -218,8 +218,8 @@ class MCPAgentBridge:
         # 將 MCP Server 的工具註冊到 tool_registry
         self._sync_tools_to_registry()
 
-        # 2025 最佳實踐：啟動時預熱熱門查詢快取
-        await self._preheat_cache()
+        # 快取預熱已移除：啟動時連續調用 7 次 GPT API 增加延遲和成本
+        # 實際使用中快取會自然累積，無需預熱
 
     def _sync_tools_to_registry(self) -> int:
         """
@@ -632,17 +632,24 @@ class MCPAgentBridge:
         注意：不再描述每個工具，工具定義由 tools 參數傳遞
         只處理特殊規則和情緒判斷
         """
-        return """你是一個智能助手，根據用戶需求選擇合適的工具。
+        return """You are an intelligent assistant that selects appropriate tools based on user needs.
 
-規則：
-1. 如果用戶需求可以用工具解決，選擇最適合的工具
-2. 如果是一般聊天或問候，不要選擇任何工具
-3. 工具參數盡量從用戶消息中提取，無法確定的使用合理預設值
+Rules:
+1. If the user's request can be solved with a tool, select the most appropriate tool
+2. Only skip tool selection for pure greetings (hi, hello) or meta questions (what can you do)
+3. Extract tool parameters from user message, use reasonable defaults if uncertain
+4. User may speak in ANY language (Chinese, English, Korean, Japanese, Indonesian, Vietnamese, etc.) - always try to match their intent to available tools
+
+【IMPORTANT】Weather/News/Exchange queries in ANY language should trigger tools:
+- "How is the weather today?" → weather_query
+- "오늘 날씨 어때?" → weather_query  
+- "今天天氣如何?" → weather_query
+- "What's the USD to JPY rate?" → exchange_query
+- "最新新聞" / "latest news" → news_query
 
 【重要】語言使用規範：
 - 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）
-- 回覆用戶時：必須使用繁體中文
-- 範例：用戶說「台北天氣」→ 參數 {"city": "Taipei"}，回覆「台北目前...」
+- 範例：用戶說「台北天氣」或 "Taipei weather" → 參數 {"city": "Taipei"}
 
 參數語言轉換規則：
 - 城市名稱：台北→Taipei, 新北→NewTaipei, 桃園→Taoyuan, 台中→Taichung, 台南→Tainan, 高雄→Kaohsiung, 新竹→Hsinchu
@@ -1244,35 +1251,4 @@ YouBike 查詢（重要！參數提取規則）：
         # 保持與舊 FeatureRouter 相同的邏輯
         return response
 
-    async def _preheat_cache(self):
-        """
-        快取預熱（2025 最佳實踐）
 
-        啟動時預先載入熱門查詢的意圖檢測結果，減少冷啟動延遲
-        預期提升首次查詢命中率 40-60%
-        """
-        logger.info("🔥 開始快取預熱...")
-
-        # 定義熱門查詢（根據使用統計調整）
-        hot_queries = [
-            "台北天氣",
-            "天氣如何",
-            "美元匯率",
-            "今日新聞",
-            "科技新聞",
-            "我的心率",
-            "今天步數",
-        ]
-
-        preheated_count = 0
-        for query in hot_queries:
-            try:
-                # 預先執行意圖檢測，寫入快取
-                await self.detect_intent(query)
-                preheated_count += 1
-                logger.debug(f"✓ 預熱快取: '{query}'")
-            except Exception as e:
-                logger.warning(f"⚠️ 預熱快取失敗 '{query}': {e}")
-
-        logger.info(f"🔥 快取預熱完成，成功預載 {preheated_count}/{len(hot_queries)} 條熱門查詢")
-        logger.info(f"💾 當前快取大小: {len(self._intent_cache)} 條")

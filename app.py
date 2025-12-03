@@ -757,19 +757,24 @@ async def websocket_endpoint_with_jwt(
                                 """VAD 偵測到語音段結束"""
                                 logger.debug(f"🎤 VAD Committed: {item_id}")
 
+                            # 從前端獲取語言設定（支援：zh, en, id, ja, vi，或 auto 自動檢測）
+                            language = message_data.get("language", "auto")
+                            logger.info(f"🌐 語言設定: {language}")
+
                             # 連線到 OpenAI Realtime API
                             success = await realtime_stt.connect(
                                 on_transcript_delta=on_transcript_delta,
                                 on_transcript_done=on_transcript_done,
                                 on_vad_committed=on_vad_committed,
                                 model="gpt-4o-mini-transcribe",
-                                language="zh"
+                                language=language
                             )
 
                             if success:
-                                # 儲存 Realtime STT 實例到 client info
+                                # 儲存 Realtime STT 實例和語言設定到 client info
                                 client_info = manager.get_client_info(user_id) or {}
                                 client_info["realtime_stt"] = realtime_stt
+                                client_info["language"] = language  # 儲存語言設定
                                 manager.set_client_info(user_id, client_info)
 
                                 await websocket.send_json({
@@ -814,6 +819,13 @@ async def websocket_endpoint_with_jwt(
                                 audio_bytes = base64.b64decode(b64)
                                 await realtime_stt.send_audio_chunk(audio_bytes)
                                 logger.debug(f"🎤 轉發音頻到 OpenAI: {len(audio_bytes)} bytes")
+                                
+                                # 同時儲存到本地緩衝（用於音頻情緒辨識）
+                                audio_buffer = client_info.get("audio_buffer", b"")
+                                audio_buffer += audio_bytes
+                                client_info["audio_buffer"] = audio_buffer
+                                manager.set_client_info(user_id, client_info)
+                                
                             except Exception as e:
                                 logger.error(f"❌ 轉發音頻失敗: {e}")
 
@@ -1028,6 +1040,7 @@ async def websocket_endpoint_with_jwt(
                             client_info = manager.get_client_info(user_id) or {}
                             realtime_stt = client_info.get("realtime_stt")
                             transcription = client_info.get("realtime_transcript", "")
+                            audio_buffer = client_info.get("audio_buffer", b"")
 
                             if realtime_stt:
                                 logger.info(f"🔌 關閉即時轉錄連線，用戶 {user_id}")
@@ -1050,6 +1063,38 @@ async def websocket_endpoint_with_jwt(
                             # 如果有轉錄文字，送給 AI Agent 處理
                             if transcription:
                                 logger.info(f"🤖 處理即時轉錄結果: {transcription}")
+
+                                # 音頻情緒辨識（新增）
+                                audio_emotion = None
+                                if audio_buffer:
+                                    try:
+                                        from services.audio_emotion_service import audio_emotion_service
+                                        logger.info(f"🎭 開始音頻情緒辨識，音頻大小: {len(audio_buffer)} bytes")
+                                        audio_emotion = await audio_emotion_service.predict_from_bytes(audio_buffer)
+                                        
+                                        if audio_emotion.get("success"):
+                                            emotion_label = audio_emotion.get("emotion")
+                                            confidence = audio_emotion.get("confidence", 0.0)
+                                            logger.info(f"✅ 音頻情緒: {emotion_label} (置信度: {confidence:.4f})")
+                                            
+                                            # 發送音頻情緒給前端
+                                            await websocket.send_json({
+                                                "type": "audio_emotion_detected",
+                                                "emotion": emotion_label,
+                                                "confidence": confidence,
+                                                "all_emotions": audio_emotion.get("all_emotions", {}),
+                                                "source": "audio"
+                                            })
+                                        else:
+                                            logger.warning(f"⚠️ 音頻情緒辨識失敗: {audio_emotion.get('error')}")
+                                            audio_emotion = None
+                                    except Exception as e:
+                                        logger.error(f"❌ 音頻情緒辨識異常: {e}")
+                                        audio_emotion = None
+                                    finally:
+                                        # 清理音頻緩衝
+                                        client_info.pop("audio_buffer", None)
+                                        manager.set_client_info(user_id, client_info)
 
                                 # 通知前端開始思考
                                 await websocket.send_json({"type": "typing", "message": "thinking"})
@@ -1078,28 +1123,42 @@ async def websocket_endpoint_with_jwt(
                                     # 保存用戶訊息
                                     await save_message_to_db(user_id, chat_id, "user", transcription)
 
+                                    # 取得語言設定
+                                    language = client_info.get("language", "auto")
+
                                     # 處理對話（透過 handle_message，自動處理 pipeline）
                                     response = await handle_message(
                                         transcription,
                                         user_id,
                                         chat_id,
-                                        []  # messages 參數（會自動從數據庫載入）
+                                        [],  # messages 參數（會自動從數據庫載入）
+                                        audio_emotion=audio_emotion,  # 傳遞音頻情緒
+                                        language=language  # 傳遞語言設定（新增）
                                     )
 
                                     # 發送回應
+                                    # 從 PipelineResult 提取情緒
+                                    emotion = None
+                                    care_mode = False
                                     if isinstance(response, PipelineResult):
                                         message_text = response.text
+                                        if response.meta:
+                                            emotion = response.meta.get('emotion')
+                                            care_mode = response.meta.get('care_mode', False)
 
                                         await websocket.send_json({
                                             "type": "bot_message",
                                             "message": message_text,
                                             "timestamp": time.time(),
                                             "tool_name": None,
-                                            "tool_data": None
+                                            "tool_data": None,
+                                            "emotion": emotion,
+                                            "care_mode": care_mode
                                         })
                                     elif isinstance(response, dict):
                                         tool_name = response.get('tool_name')
                                         tool_data = response.get('tool_data')
+                                        emotion = response.get('emotion')
                                         message_text = response.get('message', response.get('content', ''))
 
                                         await websocket.send_json({
@@ -1107,14 +1166,16 @@ async def websocket_endpoint_with_jwt(
                                             "message": message_text,
                                             "timestamp": time.time(),
                                             "tool_name": tool_name,
-                                            "tool_data": tool_data
+                                            "tool_data": tool_data,
+                                            "emotion": emotion
                                         })
                                     else:
                                         # 字串回應
                                         await websocket.send_json({
                                             "type": "bot_message",
                                             "message": str(response),
-                                            "timestamp": time.time()
+                                            "timestamp": time.time(),
+                                            "emotion": None
                                         })
 
                                 await _process_realtime_chat()
@@ -1128,170 +1189,6 @@ async def websocket_endpoint_with_jwt(
                                 "message": f"關閉即時轉錄失敗: {str(e)}"
                             })
 
-                    elif mode == "chat":
-                        # === 新的對話模式：並行執行 STT + 情緒辨識 ===
-                        try:
-                            import asyncio as _async_lib
-                            from services.stt_service import transcribe_audio
-                            from services.voice_login import VoiceAuthService
-
-                            # 獲取音頻數據（從 _buffers 中）
-                            audio_data = None
-                            emotion_result = None
-
-                            if hasattr(app.state, "voice_auth") and app.state.voice_auth:
-                                voice_service = app.state.voice_auth
-
-                                # 獲取音頻數據（從 _buffers 取得完整音頻）
-                                if user_id in voice_service._buffers:
-                                    audio_data = bytes(voice_service._buffers[user_id])
-                                    sample_rate = voice_service._sr_overrides.get(user_id, 16000)
-
-                                    # 並行執行 STT 和情緒辨識
-                                    stt_task = transcribe_audio(audio_data, language="zh")
-                                    emotion_task = _async_lib.to_thread(
-                                        voice_service._infer_emotion_from_bytes,
-                                        audio_data,
-                                        sample_rate
-                                    )
-
-                                    stt_result, emotion_result = await _async_lib.gather(
-                                        stt_task, emotion_task, return_exceptions=True
-                                    )
-
-                                    # 清理 session
-                                    voice_service.clear_session(user_id)
-
-                                    # 檢查結果
-                                    if isinstance(stt_result, Exception):
-                                        logger.error(f"❌ STT 失敗: {stt_result}")
-                                        await websocket.send_json({
-                                            "type": "error",
-                                            "message": f"語音轉文字失敗: {str(stt_result)}"
-                                        })
-                                        continue
-
-                                    if not stt_result.get("success"):
-                                        await websocket.send_json({
-                                            "type": "error",
-                                            "message": stt_result.get("error", "STT 失敗")
-                                        })
-                                        continue
-
-                                    # 提取轉錄文字和情緒標籤
-                                    transcription = stt_result.get("text", "")
-                                    emotion_label = emotion_result.get("label", "neutral") if emotion_result and not isinstance(emotion_result, Exception) else "neutral"
-
-                                    logger.info(f"🎙️ STT: {transcription}")
-                                    logger.info(f"😊 情緒: {emotion_label}")
-
-                                    # 發送 STT 最終結果給前端（讓用戶看到轉錄文字）
-                                    await websocket.send_json({
-                                        "type": "stt_final",
-                                        "text": transcription,
-                                        "emotion": emotion_label
-                                    })
-
-                                    # 將轉錄文字和情緒標籤一起發送給 Agent
-                                    # 構造包含情緒資訊的訊息
-                                    enhanced_message = {
-                                        "text": transcription,
-                                        "emotion": emotion_label
-                                    }
-
-                                    # 通知前端開始思考
-                                    await websocket.send_json({"type": "typing", "message": "thinking"})
-
-                                    # 異步處理對話邏輯（複用現有的 chat 流程）
-                                    async def _process_voice_chat():
-                                        chat_id = message_data.get("chat_id")
-
-                                        # 如果沒有 chat_id，創建新對話
-                                        if not chat_id:
-                                            try:
-                                                user_chats_result = await get_user_chats(user_id)
-                                                if user_chats_result["success"] and user_chats_result["chats"]:
-                                                    latest_chat = user_chats_result["chats"][0]
-                                                    chat_id = latest_chat["chat_id"]
-                                                else:
-                                                    chat_title = f"語音對話 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                                    chat_result = await create_chat(user_id, chat_title)
-                                                    if chat_result["success"]:
-                                                        chat_id = chat_result["chat"]["chat_id"]
-                                            except Exception as e:
-                                                logger.error(f"創建對話失敗: {e}")
-                                                await websocket.send_json({"type": "error", "message": "無法創建對話"})
-                                                return
-
-                                        # 保存用戶訊息（包含情緒標籤在訊息內容中）
-                                        # 注意: 目前 save_message_to_db 不支持 metadata 參數
-                                        # 情緒資訊已透過 enhanced_transcription 包含在訊息中
-                                        await save_message_to_db(user_id, chat_id, "user", transcription)
-
-                                        # 將情緒資訊嵌入用戶訊息 (讓 AI 知道用戶的情緒狀態)
-                                        enhanced_transcription = transcription
-                                        if emotion_label and emotion_label != "neutral":
-                                            # 在訊息前添加情緒標籤提示
-                                            emotion_hints = {
-                                                "happy": "開心",
-                                                "sad": "悲傷",
-                                                "angry": "憤怒",
-                                                "fear": "恐懼",
-                                                "surprise": "驚訝"
-                                            }
-                                            emotion_cn = emotion_hints.get(emotion_label, emotion_label)
-                                            enhanced_transcription = f"[用戶情緒: {emotion_cn}] {transcription}"
-
-                                        # 處理對話（透過 handle_message，自動處理 pipeline）
-                                        response = await handle_message(
-                                            enhanced_transcription,
-                                            user_id,
-                                            chat_id,
-                                            []  # messages 參數（會自動從數據庫載入）
-                                        )
-
-                                        # 發送回應
-                                        if isinstance(response, PipelineResult):
-                                            message_text = response.text
-                                            
-                                            await websocket.send_json({
-                                                "type": "bot_message",
-                                                "message": message_text,
-                                                "timestamp": time.time(),
-                                                "tool_name": None,
-                                                "tool_data": None
-                                            })
-                                            
-                                            # 保存 Agent 回應（已在 handle_message 中保存）
-                                        elif isinstance(response, dict):
-                                            tool_name = response.get('tool_name')
-                                            tool_data = response.get('tool_data')
-                                            message_text = response.get('message', response.get('content', ''))
-
-                                            await websocket.send_json({
-                                                "type": "bot_message",
-                                                "message": message_text,
-                                                "timestamp": time.time(),
-                                                "tool_name": tool_name,
-                                                "tool_data": tool_data
-                                            })
-                                            
-                                            # 保存 Agent 回應（已在 handle_message 中保存）
-                                        else:
-                                            # 字串回應
-                                            await websocket.send_json({
-                                                "type": "bot_message",
-                                                "message": str(response),
-                                                "timestamp": time.time()
-                                            })
-                                    await _process_voice_chat()
-
-                        except Exception as e:
-                            logger.error(f"語音對話流程失敗: {e}")
-                            await websocket.send_json({
-                                "type": "error",
-                                "message": f"語音對話處理失敗: {str(e)}"
-                            })
                                             
             except json.JSONDecodeError:
                 await manager.send_message("消息格式錯誤，無法解析", user_id, "error")
@@ -1310,8 +1207,8 @@ async def websocket_endpoint_with_jwt(
 # -----------------------------
 # 消息處理與AI
 # -----------------------------
-async def handle_message(user_message, user_id, chat_id, messages, request_id: str = None):
-    logger.info(f"📥 handle_message: 收到訊息='{user_message}', user_id={user_id}")
+async def handle_message(user_message, user_id, chat_id, messages, request_id: str = None, audio_emotion: dict = None, language: str = None):
+    logger.info(f"📥 handle_message: 收到訊息='{user_message}', user_id={user_id}, audio_emotion={audio_emotion}, language={language}")
     
     # 指令優先，避免進入管線造成不必要延遲
     if user_message and user_message.startswith("/"):
@@ -1342,7 +1239,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         logger.info(f"🔧 Pipeline: 功能處理結果='{result}'")
         return result
 
-    async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None, emotion_label=None):
+    async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None, emotion_label=None, language=None):
         env_context = {}
         env_service = getattr(app.state, 'env_service', None)
         if env_service:
@@ -1360,6 +1257,9 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         except Exception as e:
             logger.debug(f"無法取得用戶名稱，使用預設值: {e}")
 
+        # 使用傳入的 language 參數（優先）或閉包捕獲的外部變數
+        lang = language if language is not None else globals().get('language', 'zh')
+
         # 兼容：如果傳入字串，視為 user_message；如果傳入 list，視為 messages
         if isinstance(messages_in, str):
             return await ai_service.generate_response_for_user(
@@ -1373,6 +1273,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
                 user_name=user_name,
                 emotion_label=emotion_label,
                 env_context=env_context,
+                language=lang,
             )
         else:
             return await ai_service.generate_response_for_user(
@@ -1386,6 +1287,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
                 user_name=user_name,
                 emotion_label=emotion_label,
                 env_context=env_context,
+                language=lang,
             )
 
     model = settings.OPENAI_MODEL
@@ -1400,8 +1302,8 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         feature_timeout=30.0,  # 功能處理超時 (15 → 30，新聞摘要生成需要更長時間)
         ai_timeout=20.0,  # AI回應超時 (30 → 20)
     )
-    logger.info(f"⚙️ 準備調用 ChatPipeline.process，user_message='{user_message}'")
-    res: PipelineResult = await pipeline.process(user_message, user_id=user_id, chat_id=chat_id, request_id=request_id)
+    logger.info(f"⚙️ 準備調用 ChatPipeline.process，user_message='{user_message}', audio_emotion={audio_emotion}, language={language}")
+    res: PipelineResult = await pipeline.process(user_message, user_id=user_id, chat_id=chat_id, request_id=request_id, audio_emotion=audio_emotion, language=language)
     logger.info(f"⚙️ ChatPipeline.process 完成，結果='{res.text}', is_fallback={res.is_fallback}, reason={res.reason}")
     
     # 檢查是否有工具元數據

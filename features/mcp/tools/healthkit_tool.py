@@ -20,7 +20,7 @@ class HealthKitTool(MCPTool):
     """HealthKit 健康數據查詢工具 - 從數據庫讀取"""
     
     NAME = "healthkit_query"
-    DESCRIPTION = "查詢用戶的健康數據，包括心率、步數、血氧、呼吸頻率等（數據由iOS設備自動同步到Firestore）"
+    DESCRIPTION = "Query user's health data including heart rate, steps, oxygen level, respiratory rate, etc. (data synced from iOS devices to Firestore)"
     CATEGORY = "健康數據"
     TAGS = ["health", "fitness", "database", "firestore"]
     KEYWORDS = ["健康", "心率", "步數", "血氧", "睡眠", "health", "運動", "卡路里", "呼吸"]

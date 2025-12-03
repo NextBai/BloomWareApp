@@ -31,7 +31,7 @@ class NewsTool(MCPTool):
     """新聞查詢 MCP 工具 - 使用 NewsData.io（更好的台灣與繁中新聞支援）"""
 
     NAME = "news_query"
-    DESCRIPTION = "查詢最新新聞（可指定類別、語言、數量）"
+    DESCRIPTION = "Query latest news articles (can specify category, language, and quantity)"
     CATEGORY = "生活資訊"
     TAGS = ["news", "新聞", "資訊"]
     KEYWORDS = ["新聞", "消息", "報導", "news", "頭條", "時事"]

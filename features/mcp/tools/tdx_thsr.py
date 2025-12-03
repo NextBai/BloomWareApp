@@ -18,7 +18,7 @@ class TDXTHSRTool(MCPTool):
     """TDX 台灣高鐵時刻表查詢"""
     
     NAME = "tdx_thsr"
-    DESCRIPTION = "查詢台灣高鐵時刻表、票價、最近車站（南港-左營）"
+    DESCRIPTION = "Query Taiwan High Speed Rail (THSR) schedules, fares, and nearest stations (Nangang to Zuoying)"
     CATEGORY = "軌道運輸"
     TAGS = ["tdx", "高鐵", "THSR", "時刻表", "票價"]
     KEYWORDS = ["高鐵", "THSR", "HSR", "高速鐵路", "時刻", "票價"]

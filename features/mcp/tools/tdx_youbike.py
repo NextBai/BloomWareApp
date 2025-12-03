@@ -17,7 +17,7 @@ class TDXBikeTool(MCPTool):
     """TDX YouBike 即時查詢"""
     
     NAME = "tdx_youbike"
-    DESCRIPTION = "查詢附近 YouBike 站點、即時車輛數、空位數（支援 YouBike 1.0/2.0）"
+    DESCRIPTION = "Query nearby YouBike stations with real-time available bikes and parking spaces (supports YouBike 1.0/2.0)"
     CATEGORY = "微型運具"
     TAGS = ["tdx", "youbike", "ubike", "共享單車", "微笑單車"]
     KEYWORDS = [

@@ -17,7 +17,7 @@ class TDXMetroTool(MCPTool):
     """TDX 捷運即時到站查詢"""
     
     NAME = "tdx_metro"
-    DESCRIPTION = "查詢捷運即時到站、最近車站（台北/高雄/桃園/台中捷運）"
+    DESCRIPTION = "Query metro/MRT real-time arrivals and nearest stations (Taipei/Kaohsiung/Taoyuan/Taichung metro systems)"
     CATEGORY = "軌道運輸"
     TAGS = ["tdx", "捷運", "MRT", "即時到站"]
     KEYWORDS = ["捷運", "MRT", "地鐵", "metro", "到站"]
