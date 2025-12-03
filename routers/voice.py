@@ -24,8 +24,10 @@ class SpeakerLabelBindRequest(BaseModel):
 class TTSRequest(BaseModel):
     """TTS 請求"""
     text: str
-    voice: str = "nova"
+    voice: str = "coral"
     speed: float = 1.0
+    emotion: Optional[str] = None  # 情緒標籤（neutral, happy, sad, angry, fear, surprise）
+    care_mode: bool = False  # 是否為關懷模式
 
 
 @router.post("/bind-speaker")
@@ -88,6 +90,8 @@ async def text_to_speech(
             text=request.text,
             voice=request.voice,
             speed=request.speed,
+            emotion=request.emotion,
+            care_mode=request.care_mode,
         )
 
         if not result.get("success"):

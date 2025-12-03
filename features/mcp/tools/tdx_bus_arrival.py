@@ -24,7 +24,7 @@ class TDXBusArrivalTool(MCPTool):
     """TDX 公車即時到站查詢"""
     
     NAME = "tdx_bus_arrival"
-    DESCRIPTION = "查詢公車即時到站時間。適用於：1) 已知路線號碼（如307、紅30）的到站查詢；2) 查詢附近公車站。不適用於路線規劃（如「從A到B的公車」應用directions）。"
+    DESCRIPTION = "Query real-time bus arrival times. Use for: 1) Known route numbers (e.g., 307, Red 30); 2) Nearby bus stops. Not for route planning (use 'directions' instead)."
     CATEGORY = "道路運輸"
     TAGS = ["tdx", "公車", "即時到站", "公共運輸"]
     KEYWORDS = ["公車", "巴士", "bus", "到站", "即時", "幾分鐘", "公車站", "等公車", "路線號碼"]

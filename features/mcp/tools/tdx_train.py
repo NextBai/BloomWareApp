@@ -18,7 +18,7 @@ class TDXTrainTool(MCPTool):
     """TDX 台鐵時刻表查詢"""
     
     NAME = "tdx_train"
-    DESCRIPTION = "查詢台鐵列車時刻表。參數提取規則：「從A到B」→origin_station=A,destination_station=B；「往B」→destination_station=B（起點用GPS）；「車次123」→train_no=123。"
+    DESCRIPTION = "Query Taiwan Railway (TRA) train schedules. Parameter extraction: 'from A to B' → origin_station=A, destination_station=B; 'to B' → destination_station=B (origin from GPS); 'train 123' → train_no=123."
     CATEGORY = "軌道運輸"
     TAGS = ["tdx", "台鐵", "TRA", "火車", "時刻表"]
     KEYWORDS = ["台鐵", "臺鐵", "火車", "TRA", "列車", "時刻", "自強號", "莒光號", "區間車"]

@@ -331,12 +331,15 @@ class WebSocketManager {
       this.audioSource.connect(this.audioProcessor);
       this.audioProcessor.connect(this.audioContext.destination);
 
-      // 發送開始錄音信號
+      // 發送開始錄音信號（使用自動語言檢測）
       this.send({
         type: 'audio_start',
         sample_rate: 16000,
-        mode: 'realtime_chat'  // 即時轉錄模式（使用 OpenAI Realtime API）
+        mode: 'realtime_chat',  // 即時轉錄模式（使用 OpenAI Realtime API）
+        language: 'auto'  // 自動檢測語言（支援：zh/en/id/ja/vi）
       });
+      
+      console.log('🌐 使用自動語言檢測');
 
       this.isRecording = true;
 

@@ -1,13 +1,15 @@
 """
 OpenAI Realtime API - 即時語音轉文字服務
 使用 WebSocket 進行低延遲串流轉錄
+
+支援語言：中文(zh)、英文(en)、印尼文(id)、日文(ja)、越南文(vi)
 """
 
 import os
 import json
 import asyncio
 import logging
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, Literal
 import websockets
 from dotenv import load_dotenv
 
@@ -22,6 +24,16 @@ if not OPENAI_API_KEY:
 # OpenAI Realtime API WebSocket URL
 REALTIME_API_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
 
+# 支援的語言列表
+SupportedLanguage = Literal["zh", "en", "id", "ja", "vi"]
+SUPPORTED_LANGUAGES = {
+    "zh": "中文",
+    "en": "English",
+    "id": "Bahasa Indonesia",
+    "ja": "日本語",
+    "vi": "Tiếng Việt"
+}
+
 
 class RealtimeSTTService:
     """OpenAI Realtime API 即時語音轉文字服務"""
@@ -31,6 +43,58 @@ class RealtimeSTTService:
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
         self._receive_task: Optional[asyncio.Task] = None
+        self.current_language: str = "zh"
+
+    def _build_language_prompt(self) -> str:
+        """
+        建立語言提示，引導 Whisper 優先識別支援的 5 種語言
+        
+        Whisper 的 prompt 參數可以包含：
+        - 多語言範例文字
+        - 引導模型識別特定語言
+        
+        Returns:
+            語言提示字串
+        """
+        # 使用多語言範例引導 Whisper（每種語言的常見詞彙）
+        prompt_samples = [
+            "你好",  # 中文
+            "Hello",  # 英文
+            "Halo",  # 印尼文
+            "こんにちは",  # 日文
+            "Xin chào"  # 越南文
+        ]
+        
+        return ", ".join(prompt_samples)
+    
+    def _validate_language(self, language: str) -> Optional[str]:
+        """
+        驗證並正規化語言代碼
+
+        Args:
+            language: 語言代碼（或 'auto' 表示自動檢測）
+
+        Returns:
+            正規化後的語言代碼，或 None（自動檢測）
+        """
+        lang = language.lower().strip()
+        
+        # 自動檢測模式
+        if lang in ('auto', 'detect', ''):
+            logger.info("🌐 啟用自動語言檢測")
+            return None
+        
+        if lang in SUPPORTED_LANGUAGES:
+            return lang
+        
+        # 嘗試從完整語言名稱匹配
+        for code, name in SUPPORTED_LANGUAGES.items():
+            if name.lower() == lang.lower():
+                return code
+        
+        # 不支援的語言，使用自動檢測
+        logger.warning(f"⚠️ 不支援的語言 '{language}'，改用自動檢測")
+        return None
 
     async def connect(
         self,
@@ -48,7 +112,7 @@ class RealtimeSTTService:
             on_transcript_done: 接收完整轉錄結果的回調函數
             on_vad_committed: VAD 偵測到語音結束的回調函數
             model: 使用的模型（gpt-4o-transcribe 或 gpt-4o-mini-transcribe）
-            language: 語言代碼
+            language: 語言代碼（zh/en/id/ja/vi）
 
         Returns:
             bool: 連線是否成功
@@ -56,6 +120,16 @@ class RealtimeSTTService:
         if not self.api_key:
             logger.error("❌ OpenAI API Key 未設置")
             return False
+
+        # 驗證語言
+        validated_language = self._validate_language(language)
+        self.current_language = validated_language or "auto"
+        
+        if validated_language:
+            language_name = SUPPORTED_LANGUAGES.get(validated_language, validated_language)
+            logger.info(f"🌐 語言設定: {language_name} ({validated_language})")
+        else:
+            logger.info("🌐 語言設定: 自動檢測（支援 zh/en/id/ja/vi）")
 
         try:
             logger.info(f"🔌 連接到 OpenAI Realtime API: {REALTIME_API_URL}")
@@ -72,27 +146,37 @@ class RealtimeSTTService:
             self.is_connected = True
             logger.info("✅ 已連接到 OpenAI Realtime API")
 
-            # 發送 session 配置（按照 Microsoft/Azure 官方範例）
+            # 建立語言提示（引導 Whisper 優先識別支援的 5 種語言）
+            language_prompt = self._build_language_prompt()
+            
+            # 發送 session 配置（正確格式：需要 session 物件包裹）
             session_config = {
                 "type": "transcription_session.update",
-                "session": {  # ← 關鍵：所有配置要包在 session 物件裡
+                "session": {
                     "input_audio_format": "pcm16",
                     "input_audio_transcription": {
                         "model": model,
-                        "prompt": "",
-                        "language": language
+                        "prompt": language_prompt  # 使用語言提示引導識別
+                        # 不指定 language，讓 Whisper 自動檢測（但透過 prompt 引導）
                     },
                     "turn_detection": {
                         "type": "server_vad",
                         "threshold": 0.5,
                         "prefix_padding_ms": 300,
                         "silence_duration_ms": 500
+                    },
+                    "input_audio_noise_reduction": {
+                        "type": "far_field"
                     }
                 }
             }
+            
+            # 如果指定了語言，則加入配置
+            if validated_language:
+                session_config["session"]["input_audio_transcription"]["language"] = validated_language
 
             await self.ws.send(json.dumps(session_config))
-            logger.info("📤 已發送 session 配置")
+            logger.info("📤 已發送 session 配置（含語言引導提示）")
 
             # 啟動接收事件的背景任務
             self._receive_task = asyncio.create_task(

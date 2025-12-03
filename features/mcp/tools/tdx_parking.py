@@ -17,7 +17,7 @@ class TDXParkingTool(MCPTool):
     """TDX 停車場與充電站查詢"""
     
     NAME = "tdx_parking"
-    DESCRIPTION = "查詢附近停車場、即時剩餘車位、收費標準、充電站資訊"
+    DESCRIPTION = "Query nearby parking lots with real-time available spaces, pricing, and EV charging station information"
     CATEGORY = "停車與充電"
     TAGS = ["tdx", "停車", "充電站", "電動車"]
     KEYWORDS = ["停車", "停車場", "充電", "充電站", "車位", "電動車"]

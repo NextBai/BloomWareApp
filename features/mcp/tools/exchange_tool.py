@@ -28,7 +28,7 @@ class ExchangeTool(MCPTool):
     """匯率查詢 MCP 工具"""
 
     NAME = "exchange_query"
-    DESCRIPTION = "查詢即時匯率（支援主要貨幣兌換）"
+    DESCRIPTION = "Query real-time exchange rates between major currencies"
     CATEGORY = "生活資訊"
     TAGS = ["exchange", "匯率", "貨幣"]
     KEYWORDS = ["匯率", "美元", "台幣", "exchange", "USD", "TWD", "貨幣", "換算"]

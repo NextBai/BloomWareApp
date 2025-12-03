@@ -17,7 +17,7 @@ logger = logging.getLogger("mcp.tools.geocoding")
 
 class ForwardGeocodeTool(MCPTool):
     NAME = "forward_geocode"
-    DESCRIPTION = "將地點名稱（如「銘傳大學」「桃園火車站」）轉換為經緯度座標"
+    DESCRIPTION = "Convert place names (e.g., 'Ming Chuan University', 'Taoyuan Train Station') to coordinates (latitude/longitude)"
     CATEGORY = "地理定位"
     TAGS = ["geocode", "forward", "地點", "座標"]
     KEYWORDS = ["地點", "位置", "座標", "在哪裡", "地址查詢"]

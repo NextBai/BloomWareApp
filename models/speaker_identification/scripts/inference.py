@@ -5,7 +5,7 @@ import numpy as np
 import pickle
 import wave
 import pyaudio
-from speechbrain.pretrained import EncoderClassifier
+from speechbrain.inference import EncoderClassifier
 from sklearn.metrics.pairwise import cosine_similarity
 
 # 常數

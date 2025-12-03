@@ -17,7 +17,7 @@ logger = logging.getLogger("mcp.tools.geocode")
 
 class ReverseGeocodeTool(MCPTool):
     NAME = "reverse_geocode"
-    DESCRIPTION = "以經緯度反查城市/行政區（優先使用快取）"
+    DESCRIPTION = "Convert coordinates (latitude/longitude) to city/district names (uses cache when available)"
     CATEGORY = "地理定位"
     TAGS = ["geocode", "reverse", "city"]
     KEYWORDS = ["座標", "經緯度", "反查", "地址", "我在哪"]
