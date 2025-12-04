@@ -505,10 +505,14 @@ async def generate_response_async(
             "max_completion_tokens": max_tokens if max_tokens else 2000,  # 關懷模式可自訂 tokens
         }
 
-        # 加入 reasoning_effort 控制（GPT-5 系列）
-        if reasoning_effort:
+        # 加入 reasoning_effort 控制（僅 o1 系列和 gpt-5 系列支援）
+        # gpt-4o-mini 等模型不支援此參數，需要過濾
+        reasoning_models = model.startswith("o1") or model.startswith("gpt-5")
+        if reasoning_effort and reasoning_models:
             request_kwargs["reasoning_effort"] = reasoning_effort
             logger.info(f"🧠 設定 reasoning_effort: {reasoning_effort}")
+        elif reasoning_effort and not reasoning_models:
+            logger.debug(f"⚠️ 模型 {model} 不支援 reasoning_effort，已忽略")
 
         # 優先使用 Structured Outputs（2025年最佳實踐）
         if use_structured_outputs and response_schema:

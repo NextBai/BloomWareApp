@@ -124,10 +124,14 @@ class ChatPipeline:
             collect_texts(translated_data)
 
             if not texts_to_translate:
+                logger.info(f"🌐 無需翻譯的文字，直接返回原始資料")
                 return tool_data
 
             # 批量翻譯（讓 GPT 自動判斷目標語言）
             import services.ai_service as ai_service
+
+            logger.info(f"🌐 收集到 {len(texts_to_translate)} 個需要翻譯的文字")
+            logger.debug(f"🌐 待翻譯文字: {texts_to_translate[:3]}...")  # 只顯示前3個
 
             combined_text = "\n---\n".join(texts_to_translate)
             messages = [
@@ -138,12 +142,14 @@ class ChatPipeline:
                 {"role": "user", "content": combined_text}
             ]
 
+            logger.info(f"🌐 呼叫 GPT 翻譯，模型: gpt-4o-mini")
             translated = await ai_service.generate_response_async(
                 messages=messages,
-                model="gpt-5-nano",
-                reasoning_effort="minimal",
+                model="gpt-4o-mini",  # 升級到 gpt-4o-mini 以提升翻譯品質
+                reasoning_effort=None,  # gpt-4o-mini 不支援此參數
                 max_tokens=800,
             )
+            logger.info(f"🌐 GPT 翻譯完成，結果長度: {len(translated) if translated else 0}")
 
             if translated:
                 translated_parts = translated.strip().split("---")
@@ -219,7 +225,11 @@ class ChatPipeline:
 
         # 提取情緒（雙軌制：音頻情緒優先，文字情緒輔助）
         text_emotion = intent_data.get("emotion", "neutral") if intent_data else "neutral"
-        
+
+        # DEBUG: 顯示 audio_emotion 的完整內容
+        logger.info(f"🐛 [DEBUG] audio_emotion = {audio_emotion}")
+        logger.info(f"🐛 [DEBUG] text_emotion = {text_emotion}")
+
         # 情緒融合邏輯
         if audio_emotion and audio_emotion.get("success"):
             audio_emotion_label = audio_emotion.get("emotion", "neutral")
@@ -319,8 +329,16 @@ class ChatPipeline:
                         return PipelineResult(text="抱歉，功能處理沒有產出結果。", is_fallback=True, reason="feature-empty")
 
                     # 簡化翻譯：非中文用戶 → 翻譯工具卡片
-                    if not self._is_chinese_message(user_message) and tool_data:
+                    is_chinese = self._is_chinese_message(user_message)
+                    logger.info(f"🌐 語言檢測: user_message='{user_message}', is_chinese={is_chinese}")
+                    if not is_chinese and tool_data:
+                        logger.info(f"🌐 開始翻譯工具卡片: {len(str(tool_data))} chars")
                         tool_data = await self._translate_tool_data(tool_data, user_message)
+                        logger.info(f"🌐 翻譯完成: {len(str(tool_data))} chars")
+                    elif is_chinese:
+                        logger.info(f"🌐 用戶使用中文，不翻譯工具卡片")
+                    elif not tool_data:
+                        logger.info(f"🌐 無工具資料，跳過翻譯")
 
                     # 返回帶有工具元數據的結果（包含情緒）
                     meta_dict = {}
