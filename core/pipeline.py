@@ -47,158 +47,110 @@ class ChatPipeline:
         self._feature_timeout = feature_timeout
         self._ai_timeout = ai_timeout
         self._model = model
-        
-        # 語言名稱映射
-        self._language_names = {
-            "zh": "繁體中文",
-            "en": "English",
-            "ja": "日本語",
-            "ko": "한국어",
-            "id": "Bahasa Indonesia",
-            "vi": "Tiếng Việt",
-        }
 
-    def _detect_language(self, text: str) -> str:
+    def _is_chinese_message(self, text: str) -> bool:
         """
-        簡單的語言檢測（基於字符範圍）
-        
+        簡化語言判斷：檢測訊息是否為中文
+
         Args:
-            text: 輸入文字
-        
+            text: 用戶訊息
+
         Returns:
-            語言代碼（zh, en, ja, ko, id, vi）
+            True 如果訊息主要是中文，False 如果是其他語言
         """
         if not text:
-            return "zh"
-        
-        # 統計各語言字符數量
-        korean_count = 0
-        japanese_count = 0
-        chinese_count = 0
-        latin_count = 0
-        vietnamese_count = 0
-        
-        vietnamese_chars = set("àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
-        
-        for char in text:
-            code = ord(char)
-            # 韓文
-            if 0xAC00 <= code <= 0xD7AF or 0x1100 <= code <= 0x11FF:
-                korean_count += 1
-            # 日文假名
-            elif 0x3040 <= code <= 0x309F or 0x30A0 <= code <= 0x30FF:
-                japanese_count += 1
-            # 中文
-            elif 0x4E00 <= code <= 0x9FFF:
-                chinese_count += 1
-            # 拉丁字母
-            elif 0x0041 <= code <= 0x007A:
-                latin_count += 1
-            # 越南文特殊字符
-            if char.lower() in vietnamese_chars:
-                vietnamese_count += 1
-        
-        # 判斷主要語言
-        if korean_count > 0:
-            return "ko"
-        if japanese_count > chinese_count and japanese_count > 0:
-            return "ja"
-        if vietnamese_count > 0:
-            return "vi"
-        if chinese_count > latin_count and chinese_count > 0:
-            return "zh"
-        if latin_count > 0:
-            # 可能是英文或印尼文，預設英文
-            return "en"
-        
-        return "zh"
+            return True  # 預設為中文
 
-    async def _translate_tool_data(self, tool_data: Dict[str, Any], target_language: str) -> Dict[str, Any]:
+        # 計算中文字符比例
+        chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        total_chars = len(text.replace(' ', '').replace('\n', ''))
+
+        if total_chars == 0:
+            return True
+
+        # 如果中文字符超過 30%，視為中文訊息
+        return chinese_chars > total_chars * 0.3
+
+    async def _translate_tool_data(self, tool_data: Dict[str, Any], user_message: str) -> Dict[str, Any]:
         """
-        翻譯工具卡片中的文字欄位
-        
+        簡化版工具卡片翻譯：讓 GPT 自動判斷目標語言
+
         Args:
             tool_data: 工具資料字典
-            target_language: 目標語言代碼
-        
+            user_message: 用戶原始訊息（用於推斷目標語言）
+
         Returns:
             翻譯後的工具資料
         """
-        if not tool_data or target_language == "zh":
+        if not tool_data:
             return tool_data
-        
+
         try:
             import copy
             translated_data = copy.deepcopy(tool_data)
-            
-            # 需要翻譯的欄位名稱（天氣、新聞等工具的顯示欄位）
+
+            # 需要翻譯的欄位（天氣、新聞等工具的顯示欄位）
             translatable_keys = {
-                "description", "main", "name", "title", "summary", 
+                "description", "main", "name", "title", "summary",
                 "content", "message", "text", "label", "status"
             }
-            
-            # 收集需要翻譯的文字欄位
+
+            # 收集需要翻譯的文字
             texts_to_translate = []
-            text_paths = []  # 記錄路徑以便回填
-            
+            text_paths = []
+
             def collect_texts(obj, path="", parent_key=""):
                 """遞迴收集需要翻譯的文字"""
                 if isinstance(obj, dict):
                     for key, value in obj.items():
                         new_path = f"{path}.{key}" if path else key
-                        # 跳過純技術欄位
-                        if key in ("id", "url", "link", "lat", "lon", "timestamp", "code", "icon", "base", "cod"):
+                        # 跳過技術欄位
+                        if key in ("id", "url", "link", "lat", "lon", "timestamp", "code", "icon"):
                             continue
                         collect_texts(value, new_path, key)
                 elif isinstance(obj, list):
                     for i, item in enumerate(obj):
                         collect_texts(item, f"{path}[{i}]", parent_key)
                 elif isinstance(obj, str) and len(obj) > 1:
-                    # 翻譯條件：
-                    # 1. 欄位名稱在可翻譯列表中
-                    # 2. 或字串包含中文
-                    # 3. 或字串是純英文描述（非數字、非代碼）
+                    # 需要翻譯的條件
                     should_translate = (
                         parent_key.lower() in translatable_keys or
-                        any('\u4e00' <= c <= '\u9fff' for c in obj) or
-                        (obj.isalpha() or ' ' in obj) and len(obj) > 2
+                        any('\u4e00' <= c <= '\u9fff' for c in obj)  # 包含中文
                     )
                     if should_translate:
                         texts_to_translate.append(obj)
                         text_paths.append(path)
-            
+
             collect_texts(translated_data)
-            
+
             if not texts_to_translate:
                 return tool_data
-            
-            # 批量翻譯
+
+            # 批量翻譯（讓 GPT 自動判斷目標語言）
             import services.ai_service as ai_service
-            lang_name = self._language_names.get(target_language, target_language)
-            
+
             combined_text = "\n---\n".join(texts_to_translate)
             messages = [
                 {
                     "role": "system",
-                    "content": f"將以下內容翻譯成 {lang_name}，保持格式和表情符號。每段用 '---' 分隔，輸出也用 '---' 分隔。只輸出翻譯結果。"
+                    "content": f"將以下內容翻譯成與用戶訊息「{user_message}」相同的語言。保持格式和表情符號。每段用 '---' 分隔，輸出也用 '---' 分隔。只輸出翻譯結果，不要加解釋。"
                 },
                 {"role": "user", "content": combined_text}
             ]
-            
+
             translated = await ai_service.generate_response_async(
                 messages=messages,
                 model="gpt-5-nano",
                 reasoning_effort="minimal",
-                max_tokens=800,  # 工具卡片翻譯：實際輸出限制 800 tokens
+                max_tokens=800,
             )
-            
+
             if translated:
                 translated_parts = translated.strip().split("---")
                 translated_parts = [p.strip() for p in translated_parts if p.strip()]
-                
+
                 # 回填翻譯結果
                 def set_value(obj, path, value):
-                    """根據路徑設置值"""
                     parts = path.replace("]", "").replace("[", ".").split(".")
                     for part in parts[:-1]:
                         if part.isdigit():
@@ -210,67 +162,20 @@ class ChatPipeline:
                         obj[int(last)] = value
                     else:
                         obj[last] = value
-                
+
                 for i, path in enumerate(text_paths):
                     if i < len(translated_parts):
                         try:
                             set_value(translated_data, path, translated_parts[i])
                         except Exception:
                             pass
-            
+
             logger.info(f"🌐 工具卡片已翻譯: {len(texts_to_translate)} 個欄位")
             return translated_data
-            
-        except Exception as e:
-            logger.warning(f"⚠️ 工具卡片翻譯失敗: {e}")
-            return tool_data
 
-    async def _translate_tool_response(self, text: str, target_language: str) -> str:
-        """
-        翻譯工具回應到目標語言
-        
-        Args:
-            text: 原始文字（中文）
-            target_language: 目標語言代碼（en, ja, ko, id, vi）
-        
-        Returns:
-            翻譯後的文字
-        """
-        if not text or target_language == "zh":
-            return text
-        
-        try:
-            import services.ai_service as ai_service
-            
-            lang_name = self._language_names.get(target_language, target_language)
-            
-            messages = [
-                {
-                    "role": "system",
-                    "content": f"你是一個翻譯助手。將以下內容翻譯成 {lang_name}，保持格式、表情符號和數字不變。只輸出翻譯結果，不要加任何解釋。"
-                },
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ]
-            
-            translated = await ai_service.generate_response_async(
-                messages=messages,
-                model="gpt-5-nano",
-                reasoning_effort="minimal",
-                max_tokens=500,  # 工具回應翻譯：實際輸出限制 500 tokens
-            )
-            
-            if translated and translated.strip():
-                logger.info(f"🌐 工具回應已翻譯: {target_language}")
-                return translated.strip()
-            
-            return text
-            
         except Exception as e:
-            logger.warning(f"⚠️ 翻譯失敗，使用原文: {e}")
-            return text
+            logger.warning(f"⚠️ 工具卡片翻譯失敗，使用原始數據: {e}")
+            return tool_data
 
     async def _with_timeout(self, coro: Awaitable[Any], timeout: float, reason: str) -> Any:
         try:
@@ -302,10 +207,7 @@ class ChatPipeline:
         if not user_message or not user_message.strip():
             return PipelineResult(text="我沒有收到您的消息，請重新輸入。", is_fallback=True, reason="empty")
 
-        # 自動檢測語言（如果沒有傳入）
-        if not language:
-            language = self._detect_language(user_message)
-            logger.info(f"🌐 自動檢測語言: {language}")
+        # language 參數保留以向後兼容，但不使用（GPT 自動判斷語言）
 
         # 0) 先進行意圖偵測以提取情緒（需要在關懷模式檢查前執行）
         detect_res = await self._with_timeout(
@@ -415,14 +317,11 @@ class ChatPipeline:
                     tool_data = feat_res.get('tool_data')
                     if not text:
                         return PipelineResult(text="抱歉，功能處理沒有產出結果。", is_fallback=True, reason="feature-empty")
-                    
-                    # 如果語言不是中文，翻譯工具回應和工具卡片
-                    if language and language != "zh":
-                        text = await self._translate_tool_response(text, language)
-                        # 翻譯工具卡片中的文字欄位
-                        if tool_data:
-                            tool_data = await self._translate_tool_data(tool_data, language)
-                    
+
+                    # 簡化翻譯：非中文用戶 → 翻譯工具卡片
+                    if not self._is_chinese_message(user_message) and tool_data:
+                        tool_data = await self._translate_tool_data(tool_data, user_message)
+
                     # 返回帶有工具元數據的結果（包含情緒）
                     meta_dict = {}
                     if tool_name:
@@ -441,11 +340,9 @@ class ChatPipeline:
                     text = str(feat_res or "").strip()
                     if not text:
                         return PipelineResult(text="抱歉，功能處理沒有產出結果。", is_fallback=True, reason="feature-empty")
-                    
-                    # 如果語言不是中文，翻譯工具回應
-                    if language and language != "zh":
-                        text = await self._translate_tool_response(text, language)
-                    
+
+                    # 不再翻譯工具回應，讓 GPT 自己處理並用對應語言描述
+
                     return PipelineResult(
                         text=text,
                         is_fallback=False,
