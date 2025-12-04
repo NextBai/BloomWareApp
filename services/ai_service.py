@@ -17,35 +17,22 @@ from core.ai_client import get_openai_client
 # 超時設定（秒）
 OPENAI_TIMEOUT = settings.OPENAI_TIMEOUT
 
-# 語言指令模板
-LANGUAGE_INSTRUCTIONS = {
-    "zh": "請使用繁體中文回覆",
-    "en": "Please respond in English",
-    "id": "Silakan balas dalam Bahasa Indonesia",
-    "ja": "日本語で返信してください",
-    "vi": "Vui lòng trả lời bằng tiếng Việt",
-    "auto": "請使用與用戶相同的語言回覆"
-}
-
-# 情緒關懷模式 System Prompt（新增）
+# 情緒關懷模式 System Prompt
 CARE_MODE_SYSTEM_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」，由銘傳大學人工智慧應用學系槓上開發團隊打造。你不是 GPT，也不要自稱 GPT；你的任務是在情緒低落時傾聽、陪伴。
 
 【回應原則】
-1. 第一句必須貼近用戶訊息中的核心事件或感受，必要時引用對方用詞，讓對方感受到被理解。
-2. 第二句提供溫柔的陪伴或追問，邀請對方分享需要或下一步；若用戶提出明確請求（如想聽笑話），可在保持關懷語氣下予以回應或確認。
-3. 句式要自然口語並隨內容調整字詞，避免反覆使用同一套罐頭話術。
+1. 第一句必須貼近用戶訊息中的核心事件或感受，必要時引用對方用詞，讓對方感受到被理解
+2. 第二句提供溫柔的陪伴或追問，邀請對方分享需要或下一步；若用戶提出明確請求（如想聽笑話），可在保持關懷語氣下予以回應或確認
+3. 句式要自然口語並隨內容調整字詞，避免反覆使用同一套罐頭話術
 
 【長度限制】
-- 回覆最多 2 句話、總字數不超過 60 字。
+- 回覆最多 2 句話、總字數不超過 60 字
 
 【嚴格禁止】
-- 提供指示性建議、醫療/心理診斷或引導用戶求助的教科書式說法。
-- 連續重複完全相同的句型，例如一再出現「我在這裡陪你」而沒有結合具體情境。
+- 提供指示性建議、醫療/心理診斷或引導用戶求助的教科書式說法
+- 連續重複完全相同的句型，例如一再出現「我在這裡陪你」而沒有結合具體情境
 
-【範例】
-用戶：「我好難過」 → 你：「聽見你說自己好難過，心裡一定很不好受。想聊聊剛剛發生了什麼嗎？」
-用戶：「我很生氣」 → 你：「這件事讓你超級生氣，情緒一定卡著。要不要跟我說說最困擾你的地方？」
-用戶：「講笑話給我聽」 → 你：「你想聽點輕鬆的，我當然可以陪你。想先聽小笑話還是先聊聊怎麼了？」"""
+【重要】請用與用戶相同的語言回應，匹配他們的語言風格和情感語調。"""
 
 # 取得 OpenAI 客戶端（使用統一管理）
 def _get_client():
@@ -81,7 +68,7 @@ def _build_base_system_prompt(
     use_care_mode: bool,
     care_emotion: Optional[str],
     user_name: Optional[str],
-    language: Optional[str] = None,
+    language: Optional[str] = None,  # 保留參數以兼容現有調用，但不使用
 ) -> str:
     if use_care_mode:
         base_prompt = CARE_MODE_SYSTEM_PROMPT.strip()
@@ -93,10 +80,8 @@ def _build_base_system_prompt(
             "你不是 GPT，也不要自稱 GPT。"
             "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。"
         )
-
-    # 加入語言指令（明確指定輸出語言）
-    language_instruction = LANGUAGE_INSTRUCTIONS.get(language or "auto", LANGUAGE_INSTRUCTIONS["auto"])
-    base_prompt = f"{base_prompt}\n\n【重要】{language_instruction}，保持簡潔清晰的表達。"
+        # 簡化語言指令 - 讓 GPT 自動判斷用戶語言
+        base_prompt = f"{base_prompt}\n\n【重要】請用與用戶相同的語言回應，保持簡潔清晰的表達。"
 
     if user_name:
         base_prompt = f"用戶名稱：{user_name}\n\n{base_prompt}"
@@ -750,36 +735,13 @@ async def _generate_response_with_chat_db(
     try:
         if messages:
             if not any(msg.get("role") == "system" for msg in messages):
-                # 根據是否為關懷模式選擇 System Prompt（新增）
-                if use_care_mode:
-                    emotion_text = f"（用戶情緒：{care_emotion}）" if care_emotion else ""
-                    system_prompt = f"{CARE_MODE_SYSTEM_PROMPT}\n\n{emotion_text}"
-                    logger.info(f"💙 使用關懷模式 System Prompt，情緒：{care_emotion}")
-                else:
-                    # 根據語言參數調整回應語言
-                    language_instruction = {
-                        "zh": "繁體中文",
-                        "en": "English",
-                        "ko": "한국어 (Korean)",
-                        "ja": "日本語 (Japanese)",
-                        "id": "Bahasa Indonesia",
-                        "vi": "Tiếng Việt (Vietnamese)"
-                    }.get(language, "繁體中文")
-                    
-                    system_prompt = (
-                        "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
-                        "你不是 GPT，也不要自稱 GPT。"
-                        "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。\n\n"
-                        f"【重要】語言使用規範：\n"
-                        f"- 回覆用戶時：必須使用 {language_instruction}，保持簡潔清晰的表達\n"
-                        "- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）\n"
-                        "- 範例：用戶問「台北天氣」→ 調用工具時參數用 {\"city\": \"Taipei\"}，回覆時用對應語言描述"
-                    )
-
-                # 在系統提示前加上用戶名稱
-                if user_name:
-                    system_prompt = f"用戶名稱：{user_name}\n\n{system_prompt}"
-
+                # 使用統一的 System Prompt 構建函數
+                system_prompt = _build_base_system_prompt(
+                    use_care_mode=use_care_mode,
+                    care_emotion=care_emotion,
+                    user_name=user_name,
+                    language=language  # 參數保留但不使用，GPT 自動判斷語言
+                )
                 messages.insert(0, {"role": "system", "content": system_prompt})
             ai_response = await generate_response_async(
                 messages,
@@ -970,36 +932,13 @@ async def _generate_response_with_global_history(
     try:
         if messages:
             if not any(msg.get("role") == "system" for msg in messages):
-                # 根據是否為關懷模式選擇 System Prompt（新增）
-                if use_care_mode:
-                    emotion_text = f"（用戶情緒：{care_emotion}）" if care_emotion else ""
-                    system_prompt = f"{CARE_MODE_SYSTEM_PROMPT}\n\n{emotion_text}"
-                    logger.info(f"💙 使用關懷模式 System Prompt（全局歷史），情緒：{care_emotion}")
-                else:
-                    # 根據語言參數調整回應語言
-                    language_instruction = {
-                        "zh": "繁體中文",
-                        "en": "English",
-                        "ko": "한국어 (Korean)",
-                        "ja": "日本語 (Japanese)",
-                        "id": "Bahasa Indonesia",
-                        "vi": "Tiếng Việt (Vietnamese)"
-                    }.get(language, "繁體中文")
-                    
-                    system_prompt = (
-                        "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
-                        "你不是 GPT，也不要自稱 GPT。"
-                        "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。\n\n"
-                        f"【重要】語言使用規範：\n"
-                        f"- 回覆用戶時：必須使用 {language_instruction}，保持簡潔清晰的表達\n"
-                        "- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）\n"
-                        "- 範例：用戶問「台北天氣」→ 調用工具時參數用 {\"city\": \"Taipei\"}，回覆時用對應語言描述"
-                    )
-
-                # 在系統提示前加上用戶名稱
-                if user_name:
-                    system_prompt = f"用戶名稱：{user_name}\n\n{system_prompt}"
-
+                # 使用統一的 System Prompt 構建函數
+                system_prompt = _build_base_system_prompt(
+                    use_care_mode=use_care_mode,
+                    care_emotion=care_emotion,
+                    user_name=user_name,
+                    language=language  # 參數保留但不使用，GPT 自動判斷語言
+                )
                 messages.insert(0, {"role": "system", "content": system_prompt})
             user_messages = [msg for msg in messages if msg.get("role") == "user"]
             if user_messages and user_id not in conversation_history:
