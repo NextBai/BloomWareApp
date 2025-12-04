@@ -166,7 +166,7 @@ class RealtimeSTTService:
                         "silence_duration_ms": 500
                     },
                     "input_audio_noise_reduction": {
-                        "type": "far_field"
+                        "type": "near_field"
                     }
                 }
             }

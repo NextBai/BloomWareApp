@@ -118,7 +118,7 @@ class ReverseGeocodeTool(MCPTool):
         data = None
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, params=params, timeout=10) as resp:
+                async with session.get(url, params=params, timeout=30) as resp:
                     if resp.status != 200:
                         raise ExecutionError(f"Nominatim 失敗: HTTP {resp.status}")
                     
