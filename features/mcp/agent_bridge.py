@@ -585,10 +585,16 @@ class MCPAgentBridge:
                 
                 logger.info(f"✅ GPT 選擇工具: {normalized_name}")
                 logger.debug(f"工具參數: {_safe_json(arguments)}")
-                
-                # 提取情緒（從 content 或預設）
-                emotion = self._extract_emotion_from_content(response.get("content", ""))
-                
+
+                # 提取情緒（從 content 或直接從用戶訊息分析）
+                content = response.get("content", "")
+                if content:
+                    emotion = self._extract_emotion_from_content(content)
+                else:
+                    # 當 GPT 只回傳 tool_calls 時，直接從用戶訊息分析情緒
+                    logger.debug(f"🔍 GPT content 為空，從用戶訊息分析情緒")
+                    emotion = await self._analyze_emotion_from_message(message)
+
                 intent_result = (True, {
                     "type": "mcp_tool",
                     "tool_name": normalized_name,
@@ -779,7 +785,7 @@ YouBike 查詢（重要！參數提取規則）：
         """從回應內容中提取情緒標籤 [EMOTION:xxx]"""
         if not content:
             return "neutral"
-        
+
         # 優先從標籤提取
         import re
         emotion_match = re.search(r'\[EMOTION:(neutral|happy|sad|angry|fear|surprise)\]', content, re.IGNORECASE)
@@ -787,17 +793,53 @@ YouBike 查詢（重要！參數提取規則）：
             emotion = emotion_match.group(1).lower()
             logger.info(f"😊 從標籤提取情緒: {emotion}")
             return emotion
-        
+
         # 降級：從內容搜尋英文關鍵字
         content_lower = content.lower()
         emotions = ["happy", "sad", "angry", "fear", "surprise"]
-        
+
         for emotion in emotions:
             if emotion in content_lower:
                 logger.debug(f"從內容搜尋到情緒關鍵字: {emotion}")
                 return emotion
-        
+
         return "neutral"
+
+    async def _analyze_emotion_from_message(self, message: str) -> str:
+        """直接從用戶訊息分析情緒（當 GPT content 為空時使用）"""
+        try:
+            import services.ai_service as ai_service
+
+            system_prompt = (
+                "分析用戶訊息的情緒狀態。\n"
+                "情緒類型：neutral（平靜）、happy（開心）、sad（難過）、angry（生氣）、fear（害怕）、surprise（驚訝）\n"
+                "只回傳情緒類型的英文單字，不要有任何其他文字。"
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message}
+            ]
+
+            emotion = await ai_service.generate_response_async(
+                messages=messages,
+                model="gpt-4o-mini",
+                max_tokens=10,
+            )
+
+            emotion = emotion.strip().lower()
+            valid_emotions = ["neutral", "happy", "sad", "angry", "fear", "surprise"]
+
+            if emotion in valid_emotions:
+                logger.info(f"😊 從用戶訊息分析情緒: {emotion}")
+                return emotion
+            else:
+                logger.warning(f"⚠️ 情緒分析結果無效: {emotion}，使用預設 neutral")
+                return "neutral"
+
+        except Exception as e:
+            logger.warning(f"⚠️ 情緒分析失敗: {e}，使用預設 neutral")
+            return "neutral"
 
     # 舊版 _detect_intent_legacy 已移除，改用 _detect_intent_with_function_calling
 
