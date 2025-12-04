@@ -17,20 +17,37 @@ class EmotionCareManager:
 
     # 極端情緒定義（需要進入關懷模式的情緒）
     EXTREME_EMOTIONS = {"sad", "angry", "fear"}
+    
+    # 正面情緒定義（可以解除關懷模式的情緒）
+    POSITIVE_EMOTIONS = {"neutral", "happy", "surprise"}
 
     # 模式存活與冷卻（避免反覆觸發）
-    CARE_TTL_SECONDS = 20 * 60  # 20 分鐘自動失效
-    COOLDOWN_SECONDS = 10 * 60  # 10 分鐘內不重入
+    CARE_TTL_SECONDS = 10 * 60  # 10 分鐘自動失效（從 20 分鐘縮短）
+    COOLDOWN_SECONDS = 5 * 60   # 5 分鐘內不重入（從 10 分鐘縮短）
 
     # 解除關懷模式的關鍵字
     RELEASE_KEYWORDS = [
-        # 繁體
+        # 繁體中文
         "我沒事了", "我好了", "沒事了", "好多了", "好一點了",
         "我好些了", "沒關係了", "我ok了", "我可以了",
-        "不用擔心", "別擔心我",
-        # 簡體
+        "不用擔心", "別擔心我", "謝謝關心", "感謝你",
+        "我很好", "心情好多了", "開心", "快樂", "高興",
+        "沒問題", "放心", "安心了", "舒服多了",
+        # 簡體中文
         "我没事了", "没事了", "好一点了", "没关系了",
-        "不用担心", "别担心我",
+        "不用担心", "别担心我", "谢谢关心", "感谢你",
+        "我很好", "心情好多了", "开心", "快乐", "高兴",
+        "没问题", "放心", "安心了", "舒服多了",
+        # 英文
+        "i'm fine", "i am fine", "i'm ok", "i am ok", "i'm okay", "i am okay",
+        "i feel better", "feeling better", "much better", "all good",
+        "don't worry", "no worries", "thank you", "thanks",
+        # 日文
+        "大丈夫", "元気", "ありがとう", "心配しないで",
+        # 印尼文
+        "saya baik", "tidak apa-apa", "terima kasih",
+        # 越南文
+        "tôi ổn", "không sao", "cảm ơn",
     ]
 
     # 用戶關懷狀態
@@ -107,15 +124,15 @@ class EmotionCareManager:
         if not state or not state.get("in_care_mode", False):
             return False
 
-        # 優先檢查情緒：如果偵測到 neutral，立即解除關懷模式
-        if emotion and emotion.lower() == "neutral":
+        # 優先檢查情緒：如果偵測到正面情緒（neutral, happy, surprise），立即解除關懷模式
+        if emotion and emotion.lower() in cls.POSITIVE_EMOTIONS:
             original_emotion = state.get("emotion", "unknown")
             duration = time.time() - state.get("start_time", 0)
 
             state["in_care_mode"] = False
             state["last_exit_time"] = time.time()
 
-            logger.info(f"✅ 用戶 {user_id}（chat={chat_id or 'default'}）情緒恢復為 neutral（{original_emotion} → neutral），解除關懷模式（持續 {duration:.1f}秒）")
+            logger.info(f"✅ 用戶 {user_id}（chat={chat_id or 'default'}）情緒恢復為 {emotion}（{original_emotion} → {emotion}），解除關懷模式（持續 {duration:.1f}秒）")
             return True
 
         # 檢查是否包含解除關鍵字

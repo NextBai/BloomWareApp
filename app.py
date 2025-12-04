@@ -1064,37 +1064,12 @@ async def websocket_endpoint_with_jwt(
                             if transcription:
                                 logger.info(f"🤖 處理即時轉錄結果: {transcription}")
 
-                                # 音頻情緒辨識（新增）
+                                # 音頻情緒辨識已禁用（改用文字情緒偵測）
                                 audio_emotion = None
+                                # 清理音頻緩衝
                                 if audio_buffer:
-                                    try:
-                                        from services.audio_emotion_service import audio_emotion_service
-                                        logger.info(f"🎭 開始音頻情緒辨識，音頻大小: {len(audio_buffer)} bytes")
-                                        audio_emotion = await audio_emotion_service.predict_from_bytes(audio_buffer)
-                                        
-                                        if audio_emotion.get("success"):
-                                            emotion_label = audio_emotion.get("emotion")
-                                            confidence = audio_emotion.get("confidence", 0.0)
-                                            logger.info(f"✅ 音頻情緒: {emotion_label} (置信度: {confidence:.4f})")
-                                            
-                                            # 發送音頻情緒給前端
-                                            await websocket.send_json({
-                                                "type": "audio_emotion_detected",
-                                                "emotion": emotion_label,
-                                                "confidence": confidence,
-                                                "all_emotions": audio_emotion.get("all_emotions", {}),
-                                                "source": "audio"
-                                            })
-                                        else:
-                                            logger.warning(f"⚠️ 音頻情緒辨識失敗: {audio_emotion.get('error')}")
-                                            audio_emotion = None
-                                    except Exception as e:
-                                        logger.error(f"❌ 音頻情緒辨識異常: {e}")
-                                        audio_emotion = None
-                                    finally:
-                                        # 清理音頻緩衝
-                                        client_info.pop("audio_buffer", None)
-                                        manager.set_client_info(user_id, client_info)
+                                    client_info.pop("audio_buffer", None)
+                                    manager.set_client_info(user_id, client_info)
 
                                 # 通知前端開始思考
                                 await websocket.send_json({"type": "typing", "message": "thinking"})
@@ -1346,17 +1321,22 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
     # 提取情緒與關懷模式資訊（新增）
     emotion = res.meta.get('emotion') if res.meta else None
     care_mode = res.meta.get('care_mode', False) if res.meta else False
+    
+    logger.info(f"🎭 handle_message 情緒: emotion={emotion}, care_mode={care_mode}, meta={res.meta}")
 
     # 立即返回完整結果（包含工具信息與情緒）
+    # 注意：即使 emotion 是 "neutral" 也要返回 dict，確保前端收到情緒資訊
     if tool_name or tool_data or emotion or care_mode:
+        logger.info(f"📤 返回 dict 格式: emotion={emotion}")
         return {
             'message': res.text,
             'tool_name': tool_name,
             'tool_data': tool_data,
-            'emotion': emotion,  # 新增情緒欄位
-            'care_mode': care_mode  # 新增關懷模式標記
+            'emotion': emotion,
+            'care_mode': care_mode
         }
     else:
+        logger.info(f"📤 返回純文字格式（無情緒資訊）")
         return res.text
 
 
