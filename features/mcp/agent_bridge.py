@@ -1150,7 +1150,8 @@ YouBike 查詢（重要！參數提取規則）：
                 "【核心原則】\n"
                 "⭐ 只回答使用者問的問題，不要把所有數據都說出來\n"
                 "⭐ 分析使用者的核心意圖（問溫度？天氣？時間？地點？數量？）\n"
-                "⭐ 從工具數據中只提取相關資訊，無關資訊一律省略\n\n"
+                "⭐ 從工具數據中只提取相關資訊，無關資訊一律省略\n"
+                "⭐ **注意：用什麼語言提問，就用什麼語言回答**（日文問→日文答，英文問→英文答）\n\n"
                 "【回應要求】\n"
                 "1. 使用口語化、親切的語氣（可以用「喔」「呢」「哦」等語氣詞）\n"
                 "2. 不要列表式的羅列數據，而是用對話方式描述\n"
@@ -1181,15 +1182,13 @@ YouBike 查詢（重要！參數提取規則）：
                 {"role": "user", "content": user_prompt}
             ]
 
-            # 格式化回應使用 low reasoning（不需深度推理）
-            optimal_effort = get_optimal_reasoning_effort("format_response")
-
+            # 格式化回應使用 gpt-4o-mini（支援多語言，不需 reasoning_effort）
             response = await ai_service.generate_response_for_user(
                 messages=messages,
                 user_id="format_response",
-                model="gpt-5-nano",
+                model="gpt-4o-mini",  # 升級到 gpt-4o-mini 以支援多語言
                 chat_id=None,
-                reasoning_effort=optimal_effort
+                reasoning_effort=None  # gpt-4o-mini 不支援此參數
             )
 
             return response

@@ -629,6 +629,21 @@ function initializeWebSocket(token) {
         }
         break;
 
+      case 'audio_emotion_detected':
+        // 音頻情緒檢測結果（新增）
+        console.log('🎭 檢測到音頻情緒:', data.emotion, '置信度:', data.confidence, 'source:', data.source);
+
+        // 如果置信度 >= 0.5，應用情緒主題
+        if (data.emotion && data.confidence >= 0.5 && typeof applyEmotion === 'function') {
+          applyEmotion(data.emotion);
+          console.log('✅ 音頻情緒主題已套用:', data.emotion, `(置信度: ${data.confidence.toFixed(2)})`);
+        } else if (data.confidence < 0.5) {
+          console.log('⚠️ 音頻情緒置信度過低，不套用主題:', data.confidence.toFixed(2));
+        } else {
+          console.warn('⚠️ applyEmotion 函數未定義或情緒值無效');
+        }
+        break;
+
       default:
         console.log('🔍 未處理的訊息類型:', data.type);
     }
