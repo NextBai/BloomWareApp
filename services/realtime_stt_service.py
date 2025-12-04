@@ -45,27 +45,22 @@ class RealtimeSTTService:
         self._receive_task: Optional[asyncio.Task] = None
         self.current_language: str = "zh"
 
-    def _build_language_prompt(self) -> str:
+    def _build_language_prompt(self, language: Optional[str] = None) -> Optional[str]:
         """
-        建立語言提示，引導 Whisper 優先識別支援的 5 種語言
+        建立語言提示
         
-        Whisper 的 prompt 參數可以包含：
-        - 多語言範例文字
-        - 引導模型識別特定語言
+        注意：不使用具體詞彙（如「你好」「Hello」），避免 Whisper 在靜音或
+        低音量時產生幻覺，將 prompt 中的文字當作轉錄結果輸出。
+        
+        Args:
+            language: 語言代碼（zh/en/id/ja/vi）或 None（自動檢測）
         
         Returns:
-            語言提示字串
+            語言提示字串，或 None（不使用 prompt）
         """
-        # 使用多語言範例引導 Whisper（每種語言的常見詞彙）
-        prompt_samples = [
-            "你好",  # 中文
-            "Hello",  # 英文
-            "Halo",  # 印尼文
-            "こんにちは",  # 日文
-            "Xin chào"  # 越南文
-        ]
-        
-        return ", ".join(prompt_samples)
+        # 不使用 prompt，完全依賴 language 參數和音頻內容
+        # 這樣可以避免 Whisper 幻覺出 prompt 中的文字
+        return None
     
     def _validate_language(self, language: str) -> Optional[str]:
         """
@@ -146,19 +141,22 @@ class RealtimeSTTService:
             self.is_connected = True
             logger.info("✅ 已連接到 OpenAI Realtime API")
 
-            # 建立語言提示（引導 Whisper 優先識別支援的 5 種語言）
-            language_prompt = self._build_language_prompt()
-            
             # 發送 session 配置（正確格式：需要 session 物件包裹）
+            # 不使用 prompt 參數，避免 Whisper 幻覺
+            transcription_config = {
+                "model": model,
+            }
+            
+            # 如果指定了語言，加入 language 參數
+            if validated_language:
+                transcription_config["language"] = validated_language
+                logger.info(f"🌐 Whisper 語言設定: {validated_language}")
+            
             session_config = {
                 "type": "transcription_session.update",
                 "session": {
                     "input_audio_format": "pcm16",
-                    "input_audio_transcription": {
-                        "model": model,
-                        "prompt": language_prompt  # 使用語言提示引導識別
-                        # 不指定 language，讓 Whisper 自動檢測（但透過 prompt 引導）
-                    },
+                    "input_audio_transcription": transcription_config,
                     "turn_detection": {
                         "type": "server_vad",
                         "threshold": 0.5,
@@ -170,10 +168,6 @@ class RealtimeSTTService:
                     }
                 }
             }
-            
-            # 如果指定了語言，則加入配置
-            if validated_language:
-                session_config["session"]["input_audio_transcription"]["language"] = validated_language
 
             await self.ws.send(json.dumps(session_config))
             logger.info("📤 已發送 session 配置（含語言引導提示）")
