@@ -242,6 +242,7 @@
 
     /* 花蕊中心（精緻珍珠球體設計，位於花瓣下方）*/
     .bloom-core {
+      --core-scale: 1; /* 預設縮放比例，可由 media query 覆蓋 */
       position: absolute;
       top: 50%;
       left: 50%;
@@ -306,16 +307,16 @@
 
     @keyframes coreBreath {
       0%, 100% {
-        transform: translate(-50%, -50%) scale(1) rotate(0deg);
-        box-shadow: 
+        transform: translate(-50%, -50%) scale(calc(var(--core-scale) * 1)) rotate(0deg);
+        box-shadow:
           0 3px 12px rgba(251, 191, 36, 0.3),
           0 1px 4px rgba(251, 191, 36, 0.2),
           inset 0 2px 6px rgba(255, 255, 255, 0.6),
           inset 0 -2px 6px rgba(245, 158, 11, 0.3);
       }
       50% {
-        transform: translate(-50%, -50%) scale(1.05) rotate(2deg);
-        box-shadow: 
+        transform: translate(-50%, -50%) scale(calc(var(--core-scale) * 1.05)) rotate(2deg);
+        box-shadow:
           0 4px 16px rgba(251, 191, 36, 0.4),
           0 2px 6px rgba(251, 191, 36, 0.3),
           inset 0 3px 8px rgba(255, 255, 255, 0.7),
@@ -1490,14 +1491,18 @@
       #tool-cards-container { display: none !important; }
       .tool-drawer-toggle.visible { display: flex; }
       .tool-drawer { display: flex; }
-      
+
       /* 花朵縮小 */
       .voice-waveform-container { width: 280px; height: 280px; }
       .voice-mic-container { width: 180px; height: 180px; }
-      .bloom-core { width: 28px; height: 28px; }
+      .bloom-core {
+        width: 28px;
+        height: 28px;
+        --core-scale: 0.8; /* 28/35 = 0.8 */
+      }
       .bloom-petal:nth-child(-n+8) { width: 50px; height: 80px; }
       .bloom-petal:nth-child(n+9) { width: 38px; height: 65px; }
-      
+
       /* 文字輸出區域 */
       .voice-agent-output { max-width: 90vw; font-size: 14px; padding: 16px 20px; }
     }
@@ -1528,7 +1533,7 @@
       #tool-cards-container { display: none !important; }
       .tool-drawer-toggle.visible { display: flex; }
       .tool-drawer { display: flex; }
-      
+
       /* 花朵響應式放大（根據視窗高度）*/
       .voice-waveform-container {
         width: min(50vh, 500px);
@@ -1541,6 +1546,7 @@
       .bloom-core {
         width: min(5vh, 45px);
         height: min(5vh, 45px);
+        --core-scale: 1.29; /* 45/35 = 1.29 (max scale) */
       }
       .bloom-petal:nth-child(-n+8) {
         width: min(8vh, 80px);
@@ -1550,7 +1556,7 @@
         width: min(6vh, 60px);
         height: min(10vh, 100px);
       }
-      
+
       /* 文字輸出區域適配 */
       .voice-agent-output {
         max-width: 80vw;
@@ -1562,7 +1568,11 @@
     @media (min-width: 1921px) {
       .voice-waveform-container { width: 500px; height: 500px; }
       .voice-mic-container { width: 300px; height: 300px; }
-      .bloom-core { width: 45px; height: 45px; }
+      .bloom-core {
+        width: 45px;
+        height: 45px;
+        --core-scale: 1.29; /* 45/35 = 1.29 */
+      }
       .bloom-petal:nth-child(-n+8) { width: 80px; height: 130px; }
       .bloom-petal:nth-child(n+9) { width: 60px; height: 100px; }
     }
@@ -1578,6 +1588,9 @@
     body.portrait-mode .voice-mic-container {
       width: min(30vh, 300px);
       height: min(30vh, 300px);
+    }
+    body.portrait-mode .bloom-core {
+      --core-scale: 1.29; /* 與直立螢幕模式一致 */
     }
   </style>
 </head>

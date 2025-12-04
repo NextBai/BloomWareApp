@@ -637,7 +637,9 @@ class MCPAgentBridge:
 Rules:
 1. If the user's request can be solved with a tool, select the most appropriate tool
 2. Only skip tool selection for pure greetings (hi, hello) or meta questions (what can you do)
-3. Extract tool parameters from user message, use reasonable defaults if uncertain
+3. Extract tool parameters from user message
+   - If user doesn't specify a location for weather/directions/transit queries, leave city/lat/lon EMPTY (system will auto-fill from user's GPS)
+   - If user specifies a city name, always convert to English (台北→Taipei, 東京→Tokyo)
 4. User may speak in ANY language (Chinese, English, Korean, Japanese, Indonesian, Vietnamese, etc.) - always try to match their intent to available tools
 
 【IMPORTANT】Weather/News/Exchange queries in ANY language should trigger tools:
