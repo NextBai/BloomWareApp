@@ -198,14 +198,19 @@ class IntentDetector:
 - 位置查詢：「我在哪」「where am I」使用 reverse_geocode
 - YouBike 查詢：YouBike/Ubike/微笑單車 使用 tdx_youbike
 
-【情緒判斷】
-根據用戶消息的語氣判斷情緒：
-- neutral: 平靜、中性
-- happy: 開心、興奮
-- sad: 難過、沮喪
-- angry: 生氣、煩躁
-- fear: 恐懼、擔心
-- surprise: 驚訝、意外"""
+【情緒判斷 - 重要】
+根據用戶消息的語氣判斷情緒，並在回應開頭以 [EMOTION:xxx] 格式輸出：
+- [EMOTION:neutral] - 平靜、中性、一般詢問
+- [EMOTION:happy] - 開心、興奮、正面情緒（如：我很快樂、太棒了、好開心）
+- [EMOTION:sad] - 難過、沮喪、失落
+- [EMOTION:angry] - 生氣、煩躁、憤怒
+- [EMOTION:fear] - 恐懼、擔心、焦慮
+- [EMOTION:surprise] - 驚訝、意外
+
+範例：
+- 用戶說「我很快樂」→ 回應開頭必須是 [EMOTION:happy]
+- 用戶說「今天天氣如何」→ 回應開頭必須是 [EMOTION:neutral]
+- 用戶說「我好難過」→ 回應開頭必須是 [EMOTION:sad]"""
     
     def _parse_function_calling_response(
         self,
@@ -255,13 +260,36 @@ class IntentDetector:
         return False, {"emotion": emotion}
     
     def _extract_emotion_from_response(self, response: Dict[str, Any]) -> str:
-        """從回應中提取情緒"""
-        # 嘗試從 content 中提取
+        """從回應中提取情緒
+        
+        優先使用 [EMOTION:xxx] 格式提取，降級使用關鍵字匹配
+        """
+        import re
+        
         content = response.get("content", "")
-        if content:
-            for emotion in self.EMOTIONS:
-                if emotion in content.lower():
-                    return emotion
+        if not content:
+            return "neutral"
+        
+        # 優先：使用正則表達式提取 [EMOTION:xxx] 格式
+        emotion_match = re.search(r'\[EMOTION:(\w+)\]', content, re.IGNORECASE)
+        if emotion_match:
+            extracted = emotion_match.group(1).lower()
+            if extracted in self.EMOTIONS:
+                logger.info(f"🎭 從格式化標籤提取情緒: {extracted}")
+                return extracted
+        
+        # 降級：使用關鍵字匹配（但需要更精確的匹配）
+        content_lower = content.lower()
+        for emotion in self.EMOTIONS:
+            # 使用單詞邊界匹配，避免誤判（如 "not angry" 被判為 angry）
+            pattern = rf'\b{emotion}\b'
+            if re.search(pattern, content_lower):
+                # 檢查是否有否定詞在前面
+                negation_pattern = rf'(not|no|isn\'t|aren\'t|wasn\'t|weren\'t|don\'t|doesn\'t|didn\'t|never|neither)\s+{emotion}'
+                if re.search(negation_pattern, content_lower):
+                    continue  # 跳過被否定的情緒
+                logger.info(f"🎭 從關鍵字提取情緒: {emotion}")
+                return emotion
         
         return "neutral"
     
