@@ -1,23 +1,16 @@
-// ========== 位置追蹤與環境感知 ==========
 
-/**
- * 位置追蹤管理器
- * 負責：
- * 1. 請求瀏覽器定位權限
- * 2. 定期追蹤用戶位置
- * 3. 發送 env_snapshot 到後端
- */
 
 let watchId = null;
 let lastPosition = null;
+let lastSentPosition = null;  // 上次發送的位置
+let lastSendTime = 0;         // 上次發送時間
 let isTracking = false;
 
-/**
- * 啟動位置追蹤
- */
+const MIN_SEND_INTERVAL = 60000;  // 最小發送間隔：60 秒
+const MIN_DISTANCE_CHANGE = 100;  // 最小距離變化：100 米
+
 async function startLocationTracking() {
   if (isTracking) {
-    console.log('📍 位置追蹤已經在運行');
     return;
   }
 
@@ -26,10 +19,8 @@ async function startLocationTracking() {
     return;
   }
 
-  console.log('📍 請求位置權限...');
 
   try {
-    // 首次獲取位置（觸發權限請求）
     const position = await new Promise((resolve, reject) => {
       navigator.geolocation.getCurrentPosition(resolve, reject, {
         enableHighAccuracy: false, // 不需要高精度（省電）
@@ -38,10 +29,8 @@ async function startLocationTracking() {
       });
     });
 
-    console.log('✅ 位置權限已授予');
     handlePositionUpdate(position);
 
-    // 開始持續追蹤（每 30 秒更新一次）
     watchId = navigator.geolocation.watchPosition(
       handlePositionUpdate,
       handlePositionError,
@@ -53,37 +42,50 @@ async function startLocationTracking() {
     );
 
     isTracking = true;
-    console.log('📍 位置追蹤已啟動（每 30 秒更新）');
 
   } catch (error) {
     handlePositionError(error);
   }
 }
 
-/**
- * 停止位置追蹤
- */
 function stopLocationTracking() {
   if (watchId !== null) {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
     isTracking = false;
-    console.log('🛑 位置追蹤已停止');
   }
 }
 
-/**
- * 處理位置更新
- */
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // 地球半徑（米）
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+function shouldSendUpdate(newPosition) {
+  const now = Date.now();
+
+  if (!lastSentPosition) return true;
+
+  const timeSinceLast = now - lastSendTime;
+  if (timeSinceLast < MIN_SEND_INTERVAL) return false;
+
+  const distance = calculateDistance(
+    lastSentPosition.lat, lastSentPosition.lon,
+    newPosition.lat, newPosition.lon
+  );
+
+  return distance >= MIN_DISTANCE_CHANGE;
+}
+
 function handlePositionUpdate(position) {
   const { latitude, longitude, accuracy, heading, speed } = position.coords;
   const timestamp = position.timestamp;
-
-  console.log('📍 位置更新:', {
-    lat: latitude.toFixed(6),
-    lon: longitude.toFixed(6),
-    accuracy: Math.round(accuracy) + 'm'
-  });
 
   lastPosition = {
     lat: latitude,
@@ -94,13 +96,13 @@ function handlePositionUpdate(position) {
     timestamp: timestamp
   };
 
-  // 發送環境快照到後端
-  sendEnvironmentSnapshot(lastPosition);
+  if (shouldSendUpdate(lastPosition)) {
+    sendEnvironmentSnapshot(lastPosition);
+    lastSentPosition = { ...lastPosition };
+    lastSendTime = Date.now();
+  }
 }
 
-/**
- * 處理定位錯誤
- */
 function handlePositionError(error) {
   let errorMessage = '';
 
@@ -122,7 +124,6 @@ function handlePositionError(error) {
       console.warn('⚠️ 定位發生未知錯誤:', error);
   }
 
-  // 即使定位失敗，也發送一個沒有位置的快照（包含時間等資訊）
   sendEnvironmentSnapshot({
     lat: null,
     lon: null,
@@ -131,31 +132,20 @@ function handlePositionError(error) {
   });
 }
 
-/**
- * 發送環境快照到後端
- * 欄位名稱需與後端 EnvironmentContextService 期望的一致
- */
 function sendEnvironmentSnapshot(positionData) {
   if (!wsManager || !wsManager.isConnected()) {
-    console.warn('⚠️ WebSocket 未連線，跳過環境快照發送');
-    return;
+    return; // 靜默跳過
   }
 
-  // 構建環境快照資料（欄位名稱對應後端 context_service.py）
   const snapshot = {
-    // 位置資訊（後端期望的欄位名稱）
     lat: positionData.lat,
     lon: positionData.lon,
-    accuracy_m: positionData.accuracy,      // 後端期望 accuracy_m
-    heading_deg: positionData.heading,      // 後端期望 heading_deg
+    accuracy_m: positionData.accuracy,
+    heading_deg: positionData.heading,
     speed: positionData.speed,
     timestamp: positionData.timestamp || Date.now(),
-
-    // 時區與語系（後端期望的欄位名稱）
-    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,  // 後端期望 tz
-    locale: navigator.language,             // 後端期望 locale
-
-    // 裝置資訊（後端期望 device 物件）
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    locale: navigator.language,
     device: {
       user_agent: navigator.userAgent,
       platform: navigator.platform,
@@ -164,35 +154,20 @@ function sendEnvironmentSnapshot(positionData) {
       viewport_width: window.innerWidth,
       viewport_height: window.innerHeight
     },
-
-    // 錯誤資訊（如果有）
     error: positionData.error || null
   };
 
-  // 發送 WebSocket 訊息
-  wsManager.send({
-    type: 'env_snapshot',
-    ...snapshot
-  });
-
-  console.log('📤 環境快照已發送:', {
-    lat: snapshot.lat?.toFixed(6),
-    lon: snapshot.lon?.toFixed(6),
-    accuracy_m: snapshot.accuracy_m,
-    tz: snapshot.tz
-  });
+  wsManager.send({ type: 'env_snapshot', ...snapshot });
+  if (window.DEBUG_MODE) {
+  }
 }
 
-/**
- * 手動觸發位置更新（用於用戶主動請求）
- */
 async function requestLocationUpdate() {
   if (!navigator.geolocation) {
     console.warn('⚠️ 此瀏覽器不支援定位功能');
     return null;
   }
 
-  console.log('📍 手動請求位置更新...');
 
   try {
     const position = await new Promise((resolve, reject) => {
@@ -212,9 +187,6 @@ async function requestLocationUpdate() {
   }
 }
 
-/**
- * 取得最後已知位置
- */
 function getLastKnownPosition() {
   return lastPosition;
 }

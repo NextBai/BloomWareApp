@@ -1,10 +1,8 @@
-// ========== 工具卡片管理（改良版：支援抽屜面板）==========
 
 const positions = ['pos-top-right', 'pos-top-left', 'pos-bottom-right', 'pos-bottom-left'];
 let usedPositions = [];
 const MAX_CARDS = 4;
 
-// 多語言標籤定義
 const LABELS = {
   zh: {
     temperature: '溫度', condition: '狀況', humidity: '濕度', wind_speed: '風速',
@@ -110,10 +108,8 @@ const LABELS = {
   }
 };
 
-// 當前語言（從用戶訊息自動檢測）
 let currentLanguage = 'zh';
 
-// 抽屜相關元素
 let toolDrawer = null;
 let toolDrawerToggle = null;
 let toolDrawerContent = null;
@@ -121,9 +117,6 @@ let toolDrawerOverlay = null;
 let toolDrawerClose = null;
 let isDrawerOpen = false;
 
-/**
- * 初始化工具抽屜
- */
 function initToolDrawer() {
   toolDrawer = document.getElementById('toolDrawer');
   toolDrawerToggle = document.getElementById('toolDrawerToggle');
@@ -136,35 +129,24 @@ function initToolDrawer() {
     return;
   }
 
-  // 綁定切換按鈕事件
   toolDrawerToggle.addEventListener('click', toggleToolDrawer);
 
-  // 綁定關閉按鈕事件
   if (toolDrawerClose) {
     toolDrawerClose.addEventListener('click', hideToolDrawer);
   }
 
-  // 綁定遮罩層點擊關閉
   if (toolDrawerOverlay) {
     toolDrawerOverlay.addEventListener('click', hideToolDrawer);
   }
 
-  console.log('✅ 工具抽屜已初始化');
 }
 
-/**
- * 顯示工具抽屜切換按鈕（有工具結果時調用）
- */
 function showToolDrawerToggle() {
   if (toolDrawerToggle) {
     toolDrawerToggle.classList.add('visible');
-    console.log('📊 工具抽屜按鈕已顯示');
   }
 }
 
-/**
- * 隱藏工具抽屜切換按鈕
- */
 function hideToolDrawerToggle() {
   if (toolDrawerToggle) {
     toolDrawerToggle.classList.remove('visible');
@@ -172,9 +154,6 @@ function hideToolDrawerToggle() {
   }
 }
 
-/**
- * 切換工具抽屜開關
- */
 function toggleToolDrawer() {
   if (isDrawerOpen) {
     hideToolDrawer();
@@ -183,51 +162,34 @@ function toggleToolDrawer() {
   }
 }
 
-/**
- * 打開工具抽屜
- */
 function showToolDrawer() {
   if (toolDrawer) {
     toolDrawer.classList.add('open');
     toolDrawerToggle?.classList.add('open');
     toolDrawerOverlay?.classList.add('visible');
     isDrawerOpen = true;
-    console.log('📂 工具抽屜已打開');
   }
 }
 
-/**
- * 關閉工具抽屜
- */
 function hideToolDrawer() {
   if (toolDrawer) {
     toolDrawer.classList.remove('open');
     toolDrawerToggle?.classList.remove('open');
     toolDrawerOverlay?.classList.remove('visible');
     isDrawerOpen = false;
-    console.log('📁 工具抽屜已關閉');
   }
 }
 
-/**
- * 隱藏工具卡片（下一個請求或關懷模式時調用）
- */
 function hideToolCards() {
-  // 隱藏抽屜
   hideToolDrawer();
-  // 隱藏切換按鈕
   hideToolDrawerToggle();
-  // 清空抽屜內容
   if (toolDrawerContent) {
     toolDrawerContent.innerHTML = '';
   }
-  // 清空桌面端卡片容器
   clearAllCards();
-  console.log('🗑️ 工具卡片已隱藏');
 }
 
 function getNextPosition() {
-  // 如果卡片數量已達上限，不允許新增
   if (usedPositions.length >= MAX_CARDS) {
     console.warn('⚠️ 卡片數量已達上限（4張），請先清除現有卡片');
     return null;
@@ -245,7 +207,6 @@ function getNextPosition() {
 function addToolCard(type) {
   const position = getNextPosition();
 
-  // 如果沒有可用位置，直接返回
   if (!position) {
     return;
   }
@@ -326,7 +287,6 @@ function clearAllCards() {
   usedPositions = [];
 }
 
-// 模擬工具調用事件監聽（延遲初始化）
 function initToolCardControls() {
   document.getElementById('simulate-weather').addEventListener('click', () => {
     clearAllCards();
@@ -350,11 +310,7 @@ function initToolCardControls() {
   });
 }
 
-// ========== MCP 工具 Metadata 同步 ==========
 
-/**
- * 從後端同步工具 metadata
- */
 async function syncToolMetadata() {
   try {
     const response = await fetch('/api/mcp/tools', {
@@ -366,12 +322,10 @@ async function syncToolMetadata() {
     if (response.ok) {
       const data = await response.json();
       if (data.success && data.tools) {
-        // 將工具 metadata 儲存到全域變數（定義在 config.js）
         toolsMetadata = {};
         data.tools.forEach(tool => {
           toolsMetadata[tool.name] = tool;
         });
-        console.log(`✅ 同步 ${data.count} 個 MCP 工具 metadata`);
       }
     }
   } catch (error) {
@@ -379,12 +333,8 @@ async function syncToolMetadata() {
   }
 }
 
-/**
- * 根據分類/工具名稱自動分配圖示
- */
 function getIconForTool(toolName, category) {
   const iconMap = {
-    // 分類映射
     '健康': '❤️',
     '天氣': '🌤️',
     '新聞': '📰',
@@ -400,7 +350,6 @@ function getIconForTool(toolName, category) {
     '軌道運輸': '🚇',
     '地理定位': '📍',
 
-    // 工具名稱映射
     'healthkit_query': '❤️',
     'weather_query': '🌤️',
     'news_query': '📰',
@@ -415,37 +364,26 @@ function getIconForTool(toolName, category) {
     'directions': '🗺️'
   };
 
-  // 優先使用工具名稱匹配
   if (iconMap[toolName]) {
     return iconMap[toolName];
   }
 
-  // 其次使用分類匹配
   if (category && iconMap[category]) {
     return iconMap[category];
   }
 
-  // 預設圖示
   return '🔧';
 }
 
-/**
- * 動態顯示工具卡片（通用版本，支援所有 MCP 工具）
- * 優先渲染到抽屜面板（手機端），同時保留桌面端卡片
- */
 function displayToolCard(toolName, toolData) {
-  // 清除舊卡片
   clearAllCards();
 
-  // 獲取工具 metadata
   const toolMeta = toolsMetadata[toolName] || {};
   const category = toolMeta.category || '未知';
   const icon = getIconForTool(toolName, category);
 
-  // 渲染卡片內容（處理後的結果，非 raw data）
   const contentHTML = renderCardContent(toolName, toolData);
 
-  // 創建卡片元素
   const card = document.createElement('div');
   card.className = 'voice-tool-card';
   card.dataset.type = toolName;
@@ -458,140 +396,96 @@ function displayToolCard(toolName, toolData) {
     <div class="card-content" style="max-height: 300px; overflow-y: auto; overflow-x: hidden; padding-right: 8px;">${contentHTML}</div>
   `;
 
-  // 渲染到抽屜面板
   if (toolDrawerContent) {
     toolDrawerContent.innerHTML = '';
     toolDrawerContent.appendChild(card.cloneNode(true));
-    // 顯示抽屜切換按鈕
     showToolDrawerToggle();
-    console.log(`📊 工具卡片已渲染到抽屜: ${toolName} (${category})`);
   }
 
-  // 同時渲染到桌面端卡片容器（保留原有邏輯）
   const position = getNextPosition();
   if (position && cardsContainer) {
     card.classList.add(position);
     cardsContainer.appendChild(card);
-    console.log(`🃏 工具卡片已渲染到桌面: ${toolName} (${category})`);
   }
 }
 
-/**
- * 根據工具數據結構自動渲染內容
- */
 function renderCardContent(toolName, toolData) {
-  console.log('🔍 renderCardContent 被調用:', {toolName, toolData});
   
   if (!toolData) {
     console.warn('⚠️ toolData 為空');
     return '<p class="data-row">無數據</p>';
   }
 
-  // 模式 1：health_data 陣列（直接或在 raw_data 中）
   const healthData = toolData.health_data || toolData.raw_data?.health_data;
   if (healthData && Array.isArray(healthData)) {
-    console.log('✅ 匹配到模式 1: health_data');
     return renderHealthMetrics(healthData);
   }
 
-  // 模式 2：articles 陣列（直接或在 raw_data 中）
   const articlesData = toolData.articles || toolData.raw_data?.articles;
   if (articlesData && Array.isArray(articlesData)) {
-    console.log('✅ 匹配到模式 2: articles');
     return renderNewsList(articlesData);
   }
 
-  // 模式 3：天氣數據（直接檢查，無論是否包在 raw_data 中）
   const weatherData = toolData.raw_data || toolData;
   if (weatherData.main && weatherData.weather) {
-    console.log('✅ 匹配到模式 3: 天氣數據');
     return renderWeatherData(weatherData);
   }
 
-  // 模式 4：公車到站資訊
   if (toolData.arrivals && Array.isArray(toolData.arrivals)) {
-    console.log('✅ 匹配到模式 4: 公車到站資訊');
     return renderBusArrivals(toolData.arrivals, toolData.route_name);
   }
 
-  // 模式 5：附近公車站點
   if (toolData.stops && Array.isArray(toolData.stops)) {
-    console.log('✅ 匹配到模式 5: 附近公車站點');
     return renderNearbyStops(toolData.stops);
   }
 
-  // 模式 6：匯率數據（直接或在 raw_data 中）
   const exchangeData = toolData.raw_data || toolData;
   if (exchangeData.rate !== undefined && exchangeData.from_currency !== undefined) {
-    console.log('✅ 匹配到模式 6: 匯率數據');
     return renderExchangeRate(exchangeData);
   }
 
-  // 模式 7：火車列車資訊
   if (toolData.trains && Array.isArray(toolData.trains)) {
-    console.log('✅ 匹配到模式 7: 火車列車資訊');
     return renderTrainList(toolData.trains);
   }
 
-  // 模式 8：YouBike 站點資訊（需要確認是 YouBike 工具）
   if (toolData.stations && Array.isArray(toolData.stations) && 
       (toolName === 'tdx_youbike' || toolData.stations[0]?.available_bikes !== undefined)) {
-    console.log('✅ 匹配到模式 8: YouBike 站點資訊');
     return renderYouBikeStations(toolData.stations);
   }
   
-  // 模式 8.5：火車站點資訊（tdx_train 的 stations）
   if (toolData.stations && Array.isArray(toolData.stations) && toolName === 'tdx_train') {
-    console.log('✅ 匹配到模式 8.5: 火車站點資訊');
     return renderTrainStations(toolData.stations);
   }
 
-  // 模式 9：地理反查資訊（reverse_geocode）
   if (toolData.display_name && toolData.lat && toolData.lon && toolName === 'reverse_geocode') {
-    console.log('✅ 匹配到模式 9: 地理反查資訊');
     return renderReverseGeocode(toolData);
   }
 
-  // 模式 10：導航路線（directions）
   if ((toolData.distance_m !== undefined || toolData.duration_s !== undefined) && 
       (toolName === 'directions' || toolData.polyline !== undefined)) {
-    console.log('✅ 匹配到模式 10: 導航路線');
     return renderDirections(toolData);
   }
 
-  // 模式 11：捷運到站資訊（tdx_metro arrivals）
   if (toolData.arrivals && Array.isArray(toolData.arrivals) && toolName === 'tdx_metro') {
-    console.log('✅ 匹配到模式 11: 捷運到站資訊');
     return renderMetroArrivals(toolData.arrivals);
   }
 
-  // 模式 12：捷運站點資訊（tdx_metro stations）
   if (toolData.stations && Array.isArray(toolData.stations) && toolName === 'tdx_metro') {
-    console.log('✅ 匹配到模式 12: 捷運站點資訊');
     return renderMetroStations(toolData.stations);
   }
 
-  // 模式 13：正向地理編碼（forward_geocode）
   if (toolData.lat && toolData.lon && toolData.display_name && toolName === 'forward_geocode') {
-    console.log('✅ 匹配到模式 13: 正向地理編碼');
     return renderForwardGeocode(toolData);
   }
 
-  // 模式 14：通用 raw_data 物件
   if (toolData.raw_data && typeof toolData.raw_data === 'object') {
-    console.log('✅ 匹配到模式 14: 通用 raw_data');
     return renderKeyValuePairs(toolData.raw_data);
   }
 
-  // Fallback：顯示 JSON
   console.warn('⚠️ 未匹配任何模式，使用 JSON fallback');
-  console.log('📋 toolData 結構:', Object.keys(toolData));
   return renderJSONFallback(toolData);
 }
 
-/**
- * 渲染天氣數據
- */
 function renderWeatherData(data) {
   const main = data.main || {};
   const weather = data.weather?.[0] || {};
@@ -599,7 +493,6 @@ function renderWeatherData(data) {
   const sys = data.sys || {};
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
-  // 格式化時間
   const formatTime = (timestamp) => {
     if (!timestamp) return '--:--';
     const date = new Date(timestamp * 1000);
@@ -642,9 +535,6 @@ function renderWeatherData(data) {
   `;
 }
 
-/**
- * 渲染健康指標
- */
 function renderHealthMetrics(healthData) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -660,7 +550,6 @@ function renderHealthMetrics(healthData) {
     sleep_analysis: '😴'
   };
 
-  // 按指標類型分組
   const grouped = {};
   healthData.forEach(item => {
     const metric = item.metric || item.type;
@@ -672,7 +561,6 @@ function renderHealthMetrics(healthData) {
 
   let html = '<div class="health-metrics">';
 
-  // 渲染每種指標
   Object.entries(grouped).forEach(([metric, items], index) => {
     const icon = metricIcons[metric] || '📊';
     const label = labels[metric] || metric;
@@ -680,7 +568,6 @@ function renderHealthMetrics(healthData) {
     const value = latestItem.value;
     const unit = latestItem.unit || '';
     
-    // 格式化時間
     let timeStr = '';
     if (latestItem.timestamp) {
       try {
@@ -722,9 +609,6 @@ function renderHealthMetrics(healthData) {
   return html;
 }
 
-/**
- * 渲染新聞列表
- */
 function renderNewsList(articles) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   let html = '';
@@ -740,11 +624,7 @@ function renderNewsList(articles) {
   return html || `<p>${labels.no_news}</p>`;
 }
 
-/**
- * 渲染鍵值對（天氣等）
- */
 function renderKeyValuePairs(data) {
-  // 使用當前語言的標籤
   const labels = LABELS[currentLanguage] || LABELS.zh;
   const keyMap = {
     city: labels.city,
@@ -764,7 +644,6 @@ function renderKeyValuePairs(data) {
     const label = keyMap[key] || key;
     let displayValue = value;
 
-    // 特殊處理溫度
     if (key.includes('temp') && typeof value === 'number') {
       displayValue = `${value}°C`;
     }
@@ -780,12 +659,6 @@ function renderKeyValuePairs(data) {
   return html || '<p>無數據</p>';
 }
 
-/**
- * 渲染匯率資訊
- */
-/**
- * 渲染匯率信息
- */
 function renderExchangeRate(data) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   const currencySymbols = {
@@ -800,7 +673,6 @@ function renderExchangeRate(data) {
   
   let html = '';
 
-  // 匯率
   if (data.rate !== undefined) {
     html += `
       <div class="data-row">
@@ -810,7 +682,6 @@ function renderExchangeRate(data) {
     `;
   }
 
-  // 轉換金額
   if (data.amount && data.converted_amount !== undefined) {
     html += `
       <div class="data-row">
@@ -820,7 +691,6 @@ function renderExchangeRate(data) {
     `;
   }
   
-  // 查詢時間
   if (data.raw_data?.metadata?.timestamp) {
     const time = new Date(data.raw_data.metadata.timestamp).toLocaleString('zh-TW');
     html += `
@@ -834,9 +704,6 @@ function renderExchangeRate(data) {
   return html || `<p>${labels.no_data}</p>`;
 }
 
-/**
- * 渲染火車列車資訊
- */
 function renderTrainList(trains) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -884,9 +751,6 @@ function renderTrainList(trains) {
   return html;
 }
 
-/**
- * 渲染火車站點資訊
- */
 function renderTrainStations(stations) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -927,9 +791,6 @@ function renderTrainStations(stations) {
   return html;
 }
 
-/**
- * 渲染 YouBike 站點資訊
- */
 function renderYouBikeStations(stations) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -951,7 +812,6 @@ function renderYouBikeStations(stations) {
     const bikeUnit = currentLanguage === 'zh' ? '輛' : currentLanguage === 'en' ? '' : currentLanguage === 'ko' ? '대' : currentLanguage === 'ja' ? '台' : currentLanguage === 'id' ? '' : '';
     const spaceUnit = currentLanguage === 'zh' ? '個' : currentLanguage === 'en' ? '' : currentLanguage === 'ko' ? '개' : currentLanguage === 'ja' ? '個' : currentLanguage === 'id' ? '' : '';
 
-    // 可借車輛狀態：0 = 紅色，1-3 = 橘色，>3 = 綠色
     let bikeStatusColor = '#e74c3c';
     let bikeStatusIcon = '🚫';
     if (availableBikes > 3) {
@@ -991,9 +851,6 @@ function renderYouBikeStations(stations) {
   return html;
 }
 
-/**
- * 渲染公車到站資訊
- */
 function renderBusArrivals(arrivals, routeName) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -1003,7 +860,6 @@ function renderBusArrivals(arrivals, routeName) {
 
   let html = '';
   
-  // 按站點分組
   const stopGroups = {};
   arrivals.forEach(arr => {
     const stopName = arr.stop_name || labels.unknown;
@@ -1013,7 +869,6 @@ function renderBusArrivals(arrivals, routeName) {
     stopGroups[stopName].push(arr);
   });
 
-  // 渲染每個站點
   Object.entries(stopGroups).slice(0, 3).forEach(([stopName, stopArrivals], index) => {
     const firstArr = stopArrivals[0];
     const distance = firstArr.distance_m ? `${Math.round(firstArr.distance_m)}m` : '';
@@ -1043,9 +898,6 @@ function renderBusArrivals(arrivals, routeName) {
   return html;
 }
 
-/**
- * 渲染地理反查資訊（reverse_geocode）
- */
 function renderReverseGeocode(data) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   const displayName = data.display_name || labels.unknown;
@@ -1058,7 +910,6 @@ function renderReverseGeocode(data) {
   const lat = data.lat?.toFixed(6) || '';
   const lon = data.lon?.toFixed(6) || '';
 
-  // 組合詳細地址
   let detailedAddress = [];
   if (city) detailedAddress.push(city);
   if (admin && admin !== city) detailedAddress.push(admin);
@@ -1068,7 +919,6 @@ function renderReverseGeocode(data) {
 
   const addressText = detailedAddress.length > 0 ? detailedAddress.join(', ') : displayName;
 
-  // 生成 Google Maps 連結
   const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
 
   return `
@@ -1106,9 +956,6 @@ function renderReverseGeocode(data) {
   `;
 }
 
-/**
- * 渲染附近公車站點
- */
 function renderNearbyStops(stops) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -1135,9 +982,6 @@ function renderNearbyStops(stops) {
   return html;
 }
 
-/**
- * 渲染導航路線（directions）
- */
 function renderDirections(data) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   const originLabel = data.origin_label || labels.origin;
@@ -1145,7 +989,6 @@ function renderDirections(data) {
   const distanceM = data.distance_m;
   const durationS = data.duration_s;
   
-  // 格式化距離
   let distanceStr = '--';
   if (distanceM !== undefined) {
     if (distanceM >= 1000) {
@@ -1157,7 +1000,6 @@ function renderDirections(data) {
     }
   }
   
-  // 格式化時間
   let durationStr = '--';
   if (durationS !== undefined) {
     const minutes = Math.round(durationS / 60);
@@ -1173,7 +1015,6 @@ function renderDirections(data) {
     }
   }
   
-  // 生成 Google Maps 連結（如果有座標）
   let mapsLink = '';
   if (data.origin_lat && data.origin_lon && data.dest_lat && data.dest_lon) {
     const mapsUrl = `https://www.google.com/maps/dir/${data.origin_lat},${data.origin_lon}/${data.dest_lat},${data.dest_lon}`;
@@ -1207,9 +1048,6 @@ function renderDirections(data) {
   `;
 }
 
-/**
- * 渲染捷運到站資訊（tdx_metro arrivals）
- */
 function renderMetroArrivals(arrivals) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -1219,7 +1057,6 @@ function renderMetroArrivals(arrivals) {
 
   let html = '<div class="metro-arrivals">';
 
-  // 按路線分組
   const lineGroups = {};
   arrivals.forEach(arr => {
     const lineName = arr.line_name || labels.unknown;
@@ -1229,7 +1066,6 @@ function renderMetroArrivals(arrivals) {
     lineGroups[lineName].push(arr);
   });
 
-  // 渲染每條路線
   Object.entries(lineGroups).forEach(([lineName, lineArrivals], index) => {
     html += `
       <div class="metro-line" style="border-bottom: 1px solid #eee; padding: 12px 0; ${index === Object.keys(lineGroups).length - 1 ? 'border-bottom: none;' : ''}">
@@ -1267,9 +1103,6 @@ function renderMetroArrivals(arrivals) {
   return html;
 }
 
-/**
- * 渲染捷運站點資訊（tdx_metro stations）
- */
 function renderMetroStations(stations) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   
@@ -1317,9 +1150,6 @@ function renderMetroStations(stations) {
   return html;
 }
 
-/**
- * 渲染正向地理編碼（forward_geocode）
- */
 function renderForwardGeocode(data) {
   const labels = LABELS[currentLanguage] || LABELS.zh;
   const displayName = data.display_name || labels.unknown;
@@ -1329,7 +1159,6 @@ function renderForwardGeocode(data) {
   const road = data.road || '';
   const suburb = data.suburb || '';
 
-  // 生成 Google Maps 連結
   const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
 
   return `
@@ -1367,9 +1196,6 @@ function renderForwardGeocode(data) {
   `;
 }
 
-/**
- * Fallback：顯示 JSON
- */
 function renderJSONFallback(data) {
   return `<pre style="font-size: 0.85em; white-space: pre-wrap;">${JSON.stringify(data, null, 2)}</pre>`;
 }

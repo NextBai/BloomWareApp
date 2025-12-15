@@ -171,47 +171,59 @@ class Settings:
         missing_fields = [name for name, value in required_fields if not value]
 
         if missing_fields:
-            print(f"⚠️ 缺少必要環境變數: {', '.join(missing_fields)}")
-            print("請檢查以下選項:")
-            print("1. 環境變數是否正確設定")
-            print("2. .env 檔案是否存在且格式正確")
-            print("3. 生產環境中是否在部署平台設定了環境變數")
+            import logging
+            logger = logging.getLogger("core.config")
+            logger.error(f"⚠️ 缺少必要環境變數: {', '.join(missing_fields)}")
+            logger.error("請檢查以下選項:")
+            logger.error("1. 環境變數是否正確設定")
+            logger.error("2. .env 檔案是否存在且格式正確")
+            logger.error("3. 生產環境中是否在部署平台設定了環境變數")
             return False
 
         # 驗證 Firebase 憑證
         try:
             cls.get_firebase_credentials()
         except ValueError as e:
-            print(f"⚠️ Firebase 憑證驗證失敗: {e}")
-            print("請檢查 FIREBASE_CREDENTIALS_JSON 或 FIREBASE_SERVICE_ACCOUNT_PATH")
+            import logging
+            logger = logging.getLogger("core.config")
+            logger.error(f"⚠️ Firebase 憑證驗證失敗: {e}")
+            logger.error("請檢查 FIREBASE_CREDENTIALS_JSON 或 FIREBASE_SERVICE_ACCOUNT_PATH")
             return False
 
         # 驗證 OpenAI API Key 格式（基本檢查）
         if not cls.OPENAI_API_KEY.startswith("sk-"):
-            print("⚠️ OpenAI API Key 格式可能不正確（應以 'sk-' 開頭）")
+            import logging
+            logger = logging.getLogger("core.config")
+            logger.warning("⚠️ OpenAI API Key 格式可能不正確（應以 'sk-' 開頭）")
 
         # 驗證 JWT Secret 長度（強制檢查）
         if len(cls.JWT_SECRET_KEY) < cls.JWT_SECRET_MIN_LENGTH:
-            print(f"❌ JWT Secret Key 長度必須至少 {cls.JWT_SECRET_MIN_LENGTH} 個字符")
+            import logging
+            logger = logging.getLogger("core.config")
+            logger.error(f"❌ JWT Secret Key 長度必須至少 {cls.JWT_SECRET_MIN_LENGTH} 個字符")
             if cls.IS_PRODUCTION:
                 return False
-            print("⚠️ 開發環境允許繼續，但生產環境將拒絕啟動")
+            logger.warning("⚠️ 開發環境允許繼續，但生產環境將拒絕啟動")
 
         # 生產環境 CORS 檢查
         if cls.IS_PRODUCTION and cls._cors_origins_raw == "*":
-            print("⚠️ 生產環境建議設定具體的 CORS_ORIGINS，而非 '*'")
+            import logging
+            logger = logging.getLogger("core.config")
+            logger.warning("⚠️ 生產環境建議設定具體的 CORS_ORIGINS，而非 '*'")
 
         return True
 
     @classmethod
     def print_summary(cls) -> None:
         """列印當前配置摘要（隱藏敏感資訊）"""
-        print("\n" + "=" * 60)
-        print("📋 Bloom Ware 配置摘要")
-        print("=" * 60)
-        print(f"環境模式: {cls.ENVIRONMENT}")
-        print(f"是否為生產環境: {cls.IS_PRODUCTION}")
-        print(f"Firebase 專案 ID: {cls.FIREBASE_PROJECT_ID}")
+        import logging
+        logger = logging.getLogger("core.config")
+        logger.info("\n" + "=" * 60)
+        logger.info("📋 Bloom Ware 配置摘要")
+        logger.info("=" * 60)
+        logger.info(f"環境模式: {cls.ENVIRONMENT}")
+        logger.info(f"是否為生產環境: {cls.IS_PRODUCTION}")
+        logger.info(f"Firebase 專案 ID: {cls.FIREBASE_PROJECT_ID}")
 
         # 判斷 Firebase 憑證來源
         if cls._firebase_creds_json:
@@ -222,20 +234,20 @@ class Settings:
             firebase_source = "檔案"
         else:
             firebase_source = "未設定 ❌"
-        print(f"Firebase 憑證來源: {firebase_source}")
-        print(f"OpenAI 模型: {cls.OPENAI_MODEL}")
-        print(f"OpenAI Timeout: {cls.OPENAI_TIMEOUT}s")
-        print(f"Google OAuth 回調 URI: {cls.GOOGLE_REDIRECT_URI}")
-        print(f"JWT Token 有效期: {cls.ACCESS_TOKEN_EXPIRE_MINUTES} 分鐘")
-        print(f"伺服器監聽: {cls.HOST}:{cls.PORT}")
-        print(f"使用 GPT 意圖檢測: {cls.USE_GPT_INTENT}")
-        print(f"Weather API Key: {'已設定 ✅' if cls.WEATHER_API_KEY else '未設定 ❌'}")
-        print(f"NewsData API Key: {'已設定 ✅' if cls.NEWSDATA_API_KEY else '未設定 ❌'}")
-        print(f"Exchange API Key: {'已設定 ✅' if cls.EXCHANGE_API_KEY else '未設定 ❌'}")
-        print(f"環境節流距離: {cls.ENV_CONTEXT_DISTANCE_THRESHOLD} m")
-        print(f"環境節流方位差: {cls.ENV_CONTEXT_HEADING_THRESHOLD}°")
-        print(f"環境快取 TTL: {cls.ENV_CONTEXT_TTL_SECONDS} 秒")
-        print("=" * 60 + "\n")
+        logger.info(f"Firebase 憑證來源: {firebase_source}")
+        logger.info(f"OpenAI 模型: {cls.OPENAI_MODEL}")
+        logger.info(f"OpenAI Timeout: {cls.OPENAI_TIMEOUT}s")
+        logger.info(f"Google OAuth 回調 URI: {cls.GOOGLE_REDIRECT_URI}")
+        logger.info(f"JWT Token 有效期: {cls.ACCESS_TOKEN_EXPIRE_MINUTES} 分鐘")
+        logger.info(f"伺服器監聽: {cls.HOST}:{cls.PORT}")
+        logger.info(f"使用 GPT 意圖檢測: {cls.USE_GPT_INTENT}")
+        logger.info(f"Weather API Key: {'已設定 ✅' if cls.WEATHER_API_KEY else '未設定 ❌'}")
+        logger.info(f"NewsData API Key: {'已設定 ✅' if cls.NEWSDATA_API_KEY else '未設定 ❌'}")
+        logger.info(f"Exchange API Key: {'已設定 ✅' if cls.EXCHANGE_API_KEY else '未設定 ❌'}")
+        logger.info(f"環境節流距離: {cls.ENV_CONTEXT_DISTANCE_THRESHOLD} m")
+        logger.info(f"環境節流方位差: {cls.ENV_CONTEXT_HEADING_THRESHOLD}°")
+        logger.info(f"環境快取 TTL: {cls.ENV_CONTEXT_TTL_SECONDS} 秒")
+        logger.info("=" * 60 + "\n")
 
 
 # 建立全域設定實例（單例模式）

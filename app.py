@@ -70,6 +70,7 @@ from features.mcp.agent_bridge import MCPAgentBridge
 # from features.daily_life.time_service import get_current_time_data, format_time_for_messages  # 已整合到 MCPAgentBridge
 from services.voice_login import VoiceAuthService, VoiceLoginConfig
 from services.welcome import compose_welcome
+from services.audio_emotion_service import predict_emotion_from_audio
 from core.pipeline import ChatPipeline, PipelineResult
 from core.memory_system import memory_manager
 # 環境 Context 寫入 API
@@ -584,18 +585,37 @@ async def websocket_endpoint_with_jwt(
                     logger.info(f"處理用戶消息 req_id={request_id} user_id={user_id} chat_id={chat_id}")
 
                     async def _do_process_and_send():
-                        response = await handle_message(user_message, user_id, chat_id, messages_for_handler, request_id=request_id)
-                        if not response or str(response).strip() == "":
-                            logger.warning("AI回應為空，使用後備提示")
-                            response = "抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？"
+                        try:
+                            logger.info(f"🚀 開始處理訊息: user_id={user_id}, chat_id={chat_id}")
+                            response = await handle_message(user_message, user_id, chat_id, messages_for_handler, request_id=request_id)
+                            logger.info(f"📥 handle_message 返回: type={type(response)}, response={response}")
 
-                        # 檢查是否為 dict（包含工具資訊、情緒等）
-                        if isinstance(response, dict):
+                            # 【優化】處理空回應：轉換為帶情緒的 dict 格式
+                            if not response or (isinstance(response, str) and not response.strip()):
+                                logger.warning("AI回應為空，使用後備提示")
+                                response = {
+                                    'message': "抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？",
+                                    'emotion': 'neutral',
+                                    'care_mode': False
+                                }
+
+                            # 【優化】統一轉換為 dict 格式（處理舊版兼容）
+                            if isinstance(response, str):
+                                logger.info(f"⚠️ response 是字串，轉換為 dict")
+                                response = {
+                                    'message': response,
+                                    'emotion': 'neutral',
+                                    'care_mode': False
+                                }
+
+                            # 提取資訊
                             tool_name = response.get('tool_name')
                             tool_data = response.get('tool_data')
                             message_text = response.get('message', response.get('content', ''))
-                            emotion = response.get('emotion')  # 新增：提取情緒
-                            care_mode = response.get('care_mode', False)  # 新增：提取關懷模式
+                            emotion = response.get('emotion', 'neutral')  # 預設 neutral
+                            care_mode = response.get('care_mode', False)
+
+                            logger.info(f"🎭 提取的情緒: emotion={emotion}, care_mode={care_mode}")
 
                             if care_mode:
                                 tool_name = None
@@ -605,17 +625,18 @@ async def websocket_endpoint_with_jwt(
                             if tool_data is not None:
                                 tool_data = serialize_for_json(tool_data)
 
-                            # 先發送情緒資訊（如果有）
-                            if emotion:
-                                await websocket.send_json({
-                                    "type": "emotion_detected",
-                                    "emotion": emotion,
-                                    "care_mode": care_mode
-                                })
-                                logger.info(f"😊 發送情緒給前端: {emotion}, care_mode={care_mode}")
+                            # 【關鍵】總是發送情緒資訊，確保前端即時更新
+                            emotion_payload = {
+                                "type": "emotion_detected",
+                                "emotion": emotion,
+                                "care_mode": care_mode
+                            }
+                            logger.info(f"📤 準備發送 emotion_detected: {emotion_payload}")
+                            await websocket.send_json(emotion_payload)
+                            logger.info(f"✅ emotion_detected 已發送: {emotion}, care_mode={care_mode}")
 
                             # 發送擴充格式的 bot_message
-                            await websocket.send_json({
+                            bot_payload = {
                                 "type": "bot_message",
                                 "message": message_text,
                                 "timestamp": time.time(),
@@ -623,23 +644,25 @@ async def websocket_endpoint_with_jwt(
                                 "tool_data": tool_data,
                                 "care_mode": care_mode,
                                 "emotion": emotion,
-                            })
-                        else:
-                            # 舊格式（純文字）
-                            await manager.send_message(response, user_id, "bot_message")
+                            }
+                            logger.info(f"📤 準備發送 bot_message")
+                            await websocket.send_json(bot_payload)
+                            logger.info(f"✅ bot_message 已發送")
 
-                        if new_chat_info:
-                            await websocket.send_json({
-                                "type": "new_chat_created",
-                                "chat_id": new_chat_info["chat_id"],
-                                "title": new_chat_info["title"]
-                            })
+                            if new_chat_info:
+                                await websocket.send_json({
+                                    "type": "new_chat_created",
+                                    "chat_id": new_chat_info["chat_id"],
+                                    "title": new_chat_info["title"]
+                                })
 
-                        # 保存訊息（只儲存文字內容）
-                        await save_message_to_db(user_id, chat_id, "user", user_message)
-                        # 如果 response 是 dict，只保存 message 欄位
-                        message_to_save = response.get('message', response) if isinstance(response, dict) else response
-                        await save_message_to_db(user_id, chat_id, "assistant", message_to_save)
+                            # 保存訊息（只儲存文字內容）
+                            await save_message_to_db(user_id, chat_id, "user", user_message)
+                            # 如果 response 是 dict，只保存 message 欄位
+                            message_to_save = response.get('message', response) if isinstance(response, dict) else response
+                            await save_message_to_db(user_id, chat_id, "assistant", message_to_save)
+                        except Exception as e:
+                            logger.exception(f"❌ _do_process_and_send 發生異常: {e}")
 
                     import asyncio as _asyncio
                     _asyncio.create_task(_do_process_and_send())
@@ -1064,8 +1087,53 @@ async def websocket_endpoint_with_jwt(
                             if transcription:
                                 logger.info(f"🤖 處理即時轉錄結果: {transcription}")
 
-                                # 音頻情緒辨識已禁用（改用文字情緒偵測）
+                                # === 方案 B：語音情緒辨識（情緒分佈驗證 + 智能回退）===
                                 audio_emotion = None
+                                if audio_buffer and len(audio_buffer) >= 16000 * 2:  # 至少 1 秒
+                                    try:
+                                        logger.info(f"🎭 開始語音情緒辨識，音訊長度: {len(audio_buffer)} bytes")
+                                        emotion_result = await predict_emotion_from_audio(audio_buffer, sample_rate=16000)
+                                        
+                                        if emotion_result.get("success"):
+                                            emotion_label = emotion_result.get("emotion", "neutral")
+                                            confidence = emotion_result.get("confidence", 0.0)
+                                            all_emotions = emotion_result.get("all_emotions", {})
+                                            
+                                            # 計算 top-1 與 top-2 的 margin
+                                            sorted_emotions = sorted(all_emotions.items(), key=lambda x: x[1], reverse=True)
+                                            margin = sorted_emotions[0][1] - sorted_emotions[1][1] if len(sorted_emotions) >= 2 else confidence
+                                            
+                                            # 方案 B 判斷邏輯
+                                            use_audio_emotion = False
+                                            reason = ""
+                                            
+                                            if emotion_label == "neutral":
+                                                # neutral 需要更高置信度，但 margin 可較寬鬆
+                                                if confidence >= 0.55 and margin >= 0.12:
+                                                    use_audio_emotion = True
+                                                    reason = f"neutral 高信心 (conf={confidence:.3f}, margin={margin:.3f})"
+                                                else:
+                                                    reason = f"neutral 信心不足 (conf={confidence:.3f}, margin={margin:.3f}) → 回退文字"
+                                            else:
+                                                # 非 neutral 需要足夠 confidence 與 margin
+                                                if confidence >= 0.48 and margin >= 0.18:
+                                                    use_audio_emotion = True
+                                                    reason = f"{emotion_label} 高信心 (conf={confidence:.3f}, margin={margin:.3f})"
+                                                else:
+                                                    reason = f"{emotion_label} 信心不足 (conf={confidence:.3f}, margin={margin:.3f}) → 回退文字"
+                                            
+                                            if use_audio_emotion:
+                                                audio_emotion = emotion_result
+                                                logger.info(f"✅ 使用語音情緒: {emotion_label}, {reason}")
+                                            else:
+                                                audio_emotion = None
+                                                logger.info(f"📝 {reason}")
+                                        else:
+                                            logger.warning(f"⚠️ 語音情緒辨識失敗: {emotion_result.get('error')}")
+                                    except Exception as e:
+                                        logger.error(f"❌ 語音情緒辨識異常: {e}")
+                                        audio_emotion = None
+                                
                                 # 清理音頻緩衝
                                 if audio_buffer:
                                     client_info.pop("audio_buffer", None)
@@ -1324,20 +1392,17 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
     
     logger.info(f"🎭 handle_message 情緒: emotion={emotion}, care_mode={care_mode}, meta={res.meta}")
 
-    # 立即返回完整結果（包含工具信息與情緒）
-    # 注意：即使 emotion 是 "neutral" 也要返回 dict，確保前端收到情緒資訊
-    if tool_name or tool_data or emotion or care_mode:
-        logger.info(f"📤 返回 dict 格式: emotion={emotion}")
-        return {
-            'message': res.text,
-            'tool_name': tool_name,
-            'tool_data': tool_data,
-            'emotion': emotion,
-            'care_mode': care_mode
-        }
-    else:
-        logger.info(f"📤 返回純文字格式（無情緒資訊）")
-        return res.text
+    # 【優化】總是返回 dict 格式，確保前端一定收到情緒資訊
+    # 即使沒有工具調用，也要包含 emotion（預設 neutral）
+    final_emotion = emotion if emotion else "neutral"
+    logger.info(f"📤 返回 dict 格式: emotion={final_emotion}, care_mode={care_mode}")
+    return {
+        'message': res.text,
+        'tool_name': tool_name,
+        'tool_data': tool_data,
+        'emotion': final_emotion,
+        'care_mode': care_mode
+    }
 
 
 async def save_message_to_db(user_id, chat_id, role, content, background: bool = True):
@@ -2518,21 +2583,21 @@ if __name__ == "__main__":
     # 生產模式：關閉 reload（提升效能與穩定性）
     # 開發時如需熱重載，改為：reload=True
     import sys
-    print("\n" + "="*60)
-    print("🚀 Bloom Ware 後端服務器啟動中...")
-    print("="*60)
-    print(f"📡 監聽所有網路接口: {host}:{port}")
-    print(f"🌐 可用的訪問地址:")
-    print(f"   • 本機: http://127.0.0.1:{port}")
+    logger.info("\n" + "="*60)
+    logger.info("🚀 Bloom Ware 後端服務器啟動中...")
+    logger.info("="*60)
+    logger.info(f"📡 監聽所有網路接口: {host}:{port}")
+    logger.info(f"🌐 可用的訪問地址:")
+    logger.info(f"   • 本機: http://127.0.0.1:{port}")
     try:
         import socket
         hostname = socket.gethostname()
         local_ips = [ip for ip in socket.gethostbyname_ex(hostname)[2] if not ip.startswith("127.")]
         for ip in local_ips:
-            print(f"   • 局域網: http://{ip}:{port}")
+            logger.info(f"   • 局域網: http://{ip}:{port}")
     except:
         pass
-    print("="*60 + "\n")
+    logger.info("="*60 + "\n")
 
-    # 生產模式：reload=False, log_level="warning"（只顯示警告和錯誤）
-    uvicorn.run("app:app", host=host, port=port, reload=False, log_level="warning")
+    # 生產模式：reload=False, log_level="error"（只顯示錯誤），關閉 uvicorn access log
+    uvicorn.run("app:app", host=host, port=port, reload=False, log_level="error", access_log=False)

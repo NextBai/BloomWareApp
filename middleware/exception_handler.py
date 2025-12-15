@@ -81,10 +81,16 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             process_time = (time.time() - start_time) * 1000
 
+            # 只記錄錯誤或慢請求（超過 1000ms）
             if should_log:
-                logger.info(
-                    f"{method} {path} - {response.status_code} - {process_time:.2f}ms"
-                )
+                if response.status_code >= 400:
+                    logger.warning(
+                        f"{method} {path} - {response.status_code} - {process_time:.2f}ms"
+                    )
+                elif process_time > 1000:
+                    logger.warning(
+                        f"{method} {path} - SLOW - {response.status_code} - {process_time:.2f}ms"
+                    )
 
             # 添加處理時間到回應標頭
             response.headers["X-Process-Time"] = f"{process_time:.2f}ms"

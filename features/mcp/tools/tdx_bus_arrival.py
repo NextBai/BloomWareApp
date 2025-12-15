@@ -111,30 +111,30 @@ class TDXBusArrivalTool(MCPTool):
         user_lon = arguments.get("lon")
         city_param = str(arguments.get("city", "")).strip()
         
-        print(f"🚌 [TDX] tdx_bus_arrival 輸入: route={route_name}, lat={user_lat}, lon={user_lon}, city={city_param}, user_id={user_id}")
+        logger.debug(f"🚌 [TDX] tdx_bus_arrival 輸入: route={route_name}, lat={user_lat}, lon={user_lon}, city={city_param}, user_id={user_id}")
         
         # 從資料庫補充位置和城市（僅當 coordinator 沒有注入時）
         if user_id and (user_lat is None or user_lon is None):
             try:
                 env_ctx = await get_user_env_current(user_id)
-                print(f"📍 [TDX] 資料庫環境查詢結果: {env_ctx}")
+                logger.debug(f"📍 [TDX] 資料庫環境查詢結果: {env_ctx}")
                 if env_ctx and env_ctx.get("success"):
                     ctx = env_ctx.get("context", {})
                     # 補充缺失的位置資訊
                     if user_lat is None:
                         user_lat = ctx.get("lat")
-                        print(f"📍 [TDX] 從資料庫補充 lat: {user_lat}")
+                        logger.debug(f"📍 [TDX] 從資料庫補充 lat: {user_lat}")
                     if user_lon is None:
                         user_lon = ctx.get("lon")
-                        print(f"📍 [TDX] 從資料庫補充 lon: {user_lon}")
+                        logger.debug(f"📍 [TDX] 從資料庫補充 lon: {user_lon}")
                     # 優先使用環境中的城市（如果參數沒有指定）
                     if not city_param:
                         city_param = ctx.get("city", "")
-                        print(f"📍 [TDX] 從資料庫補充 city: {city_param}")
+                        logger.debug(f"📍 [TDX] 從資料庫補充 city: {city_param}")
             except Exception as e:
-                print(f"⚠️ [TDX] 資料庫環境查詢失敗: {e}")
+                logger.debug(f"⚠️ [TDX] 資料庫環境查詢失敗: {e}")
         
-        print(f"🚌 [TDX] 補充後: lat={user_lat}, lon={user_lon}, city={city_param}")
+        logger.debug(f"🚌 [TDX] 補充後: lat={user_lat}, lon={user_lon}, city={city_param}")
         
         # 檢查必要條件
         if not route_name and (user_lat is None or user_lon is None):
@@ -147,9 +147,9 @@ class TDXBusArrivalTool(MCPTool):
         
         # 2a. 如果有經緯度，嘗試即時反向地理編碼取得精確城市
         if user_lat is not None and user_lon is not None:
-            print(f"🗺️ [TDX] 嘗試反向地理編碼: ({user_lat}, {user_lon})")
+            logger.debug(f"🗺️ [TDX] 嘗試反向地理編碼: ({user_lat}, {user_lon})")
             geocoded_city = await cls._reverse_geocode_city(user_lat, user_lon)
-            print(f"🗺️ [TDX] 反向地理編碼結果: {geocoded_city}")
+            logger.debug(f"🗺️ [TDX] 反向地理編碼結果: {geocoded_city}")
             if geocoded_city:
                 final_city = geocoded_city
                 city_source = "反向地理編碼"
@@ -158,19 +158,19 @@ class TDXBusArrivalTool(MCPTool):
         if not final_city and city_param:
             final_city = city_param
             city_source = "環境參數"
-            print(f"📍 [TDX] 使用環境參數城市: {city_param}")
+            logger.debug(f"📍 [TDX] 使用環境參數城市: {city_param}")
         
         # 2c. 如果還是沒有，使用經緯度範圍推斷
         if not final_city and user_lat is not None and user_lon is not None:
             guessed_city = cls._guess_city_from_location(user_lat, user_lon)
-            print(f"📐 [TDX] 經緯度推斷結果: {guessed_city}")
+            logger.debug(f"📐 [TDX] 經緯度推斷結果: {guessed_city}")
             if guessed_city:
                 final_city = guessed_city
                 city_source = "經緯度推斷"
         
         # 2d. 轉換為 TDX 城市代碼
         city = cls._resolve_city(final_city or "")
-        print(f"🏙️ [TDX] 最終城市: {city} (來源={city_source}, 原始={final_city})")
+        logger.debug(f"🏙️ [TDX] 最終城市: {city} (來源={city_source}, 原始={final_city})")
         
         # 3. 執行查詢
         if route_name:
@@ -194,27 +194,27 @@ class TDXBusArrivalTool(MCPTool):
         - GET /v2/Bus/EstimatedTimeOfArrival/City/{City}/{RouteName} - 預估到站時間
         - GET /v2/Bus/RealTimeNearStop/City/{City}/{RouteName} - 公車目前在哪站
         """
-        print(f"🚌 [TDX] 查詢公車到站: 路線={route_name}, 城市={city}")
+        logger.debug(f"🚌 [TDX] 查詢公車到站: 路線={route_name}, 城市={city}")
         
         # 1. 查詢預估到站時間
         eta_endpoint = f"Bus/EstimatedTimeOfArrival/City/{city}/{route_name}"
         eta_params = {"$orderby": "StopSequence", "$format": "JSON"}
         
         try:
-            print(f"🌐 [TDX] 呼叫 API: {eta_endpoint}")
+            logger.debug(f"🌐 [TDX] 呼叫 API: {eta_endpoint}")
             arrival_data = await TDXBaseAPI.call_api(eta_endpoint, eta_params, cache_ttl=30)
-            print(f"✅ [TDX] API 回應: {len(arrival_data) if arrival_data else 0} 筆資料")
+            logger.debug(f"✅ [TDX] API 回應: {len(arrival_data) if arrival_data else 0} 筆資料")
             if arrival_data and len(arrival_data) > 0:
-                print(f"📋 [TDX] 第一筆: {arrival_data[0].get('StopName', {}).get('Zh_tw')}")
+                logger.debug(f"📋 [TDX] 第一筆: {arrival_data[0].get('StopName', {}).get('Zh_tw')}")
         except ExecutionError as e:
             error_detail = str(e)
-            print(f"❌ [TDX] API 錯誤: {error_detail}")
+            logger.debug(f"❌ [TDX] API 錯誤: {error_detail}")
             if "404" in error_detail:
                 raise ExecutionError(f"找不到路線「{route_name}」，請確認路線名稱與城市")
             raise ExecutionError(f"查詢路線「{route_name}」失敗: {error_detail}")
         
         if not arrival_data:
-            print(f"⚠️ [TDX] 無資料，拋出錯誤")
+            logger.debug(f"⚠️ [TDX] 無資料，拋出錯誤")
             raise ExecutionError(f"路線「{route_name}」目前無班次資訊")
         
         # 2. 查詢公車即時位置（目前在哪站）
@@ -280,8 +280,8 @@ class TDXBusArrivalTool(MCPTool):
                             if stop_uid and pos.get("PositionLat") and pos.get("PositionLon"):
                                 stop_positions[stop_uid] = (pos["PositionLat"], pos["PositionLon"])
 
-                print(f"📍 [TDX] 從 StopOfRoute 取得 {len(stop_positions)} 個站點座標")
-                print(f"🎯 [TDX] 終點站資訊: {destination_stations}")
+                logger.debug(f"📍 [TDX] 從 StopOfRoute 取得 {len(stop_positions)} 個站點座標")
+                logger.debug(f"🎯 [TDX] 終點站資訊: {destination_stations}")
                 
                 # 為每筆到站資料計算「用戶位置」到「站牌」的距離
                 for arr in arrival_data:
@@ -299,12 +299,12 @@ class TDXBusArrivalTool(MCPTool):
                 if arrival_data_with_dist:
                     arrival_data = sorted(arrival_data_with_dist, key=lambda x: x["distance_m"])
                     nearest = arrival_data[0]
-                    print(f"📍 [TDX] 按距離排序完成，最近站: {nearest.get('StopName', {}).get('Zh_tw')} ({int(nearest['distance_m'])}m)")
+                    logger.debug(f"📍 [TDX] 按距離排序完成，最近站: {nearest.get('StopName', {}).get('Zh_tw')} ({int(nearest['distance_m'])}m)")
                 else:
-                    print(f"⚠️ [TDX] 無法計算距離，stop_positions={len(stop_positions)}, arrival_data={len(arrival_data)}")
+                    logger.debug(f"⚠️ [TDX] 無法計算距離，stop_positions={len(stop_positions)}, arrival_data={len(arrival_data)}")
                     
             except Exception as e:
-                print(f"⚠️ [TDX] 查詢站點座標失敗: {e}")
+                logger.debug(f"⚠️ [TDX] 查詢站點座標失敗: {e}")
                 import traceback
                 traceback.print_exc()
         
@@ -337,7 +337,7 @@ class TDXBusArrivalTool(MCPTool):
                 # 如果公車已離站且站序 > 用戶站序，表示已過站
                 if bus_info["event"] == "已離站" and bus_sequence > user_stop_sequence:
                     bus_passed = True
-                    print(f"🚫 [TDX] 公車已過站: 公車在第 {bus_sequence} 站 > 用戶在第 {user_stop_sequence} 站")
+                    logger.debug(f"🚫 [TDX] 公車已過站: 公車在第 {bus_sequence} 站 > 用戶在第 {user_stop_sequence} 站")
 
             status_text = cls._get_status_text(stop_status, estimate_time, next_bus_time)
 
@@ -365,12 +365,12 @@ class TDXBusArrivalTool(MCPTool):
             if len(arrivals) >= limit:
                 break
         
-        print(f"📊 [TDX] 最終結果: {len(arrivals)} 筆到站資訊")
+        logger.debug(f"📊 [TDX] 最終結果: {len(arrivals)} 筆到站資訊")
         for arr in arrivals:
-            print(f"   - {arr['stop_name']} ({arr['status']})")
+            logger.debug(f"   - {arr['stop_name']} ({arr['status']})")
         
         content = cls._format_arrival_result(arrivals, full_route_name, user_lat is not None)
-        print(f"📝 [TDX] 格式化內容:\n{content}")
+        logger.debug(f"📝 [TDX] 格式化內容:\n{content}")
         
         return cls.create_success_response(
             content=content,

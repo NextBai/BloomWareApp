@@ -354,6 +354,6 @@ async def get_batch_results(batch_id: str) -> Dict[str, Any]:
         results = await get_batch_results(batch_id)
         if results["success"]:
             for item in results["results"]:
-                print(item)
+                logger.debug(item)
     """
     return await batch_processor.wait_for_completion(batch_id)

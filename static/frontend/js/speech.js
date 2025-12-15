@@ -1,7 +1,3 @@
-/**
- * 語音識別模組
- * 處理語音輸入和語音合成
- */
 
 class SpeechRecognition {
     constructor() {
@@ -13,7 +9,6 @@ class SpeechRecognition {
         this.onStart = null;
         this.onEnd = null;
         
-        // 語音辨識上下文
         this.context = {
             userLocation: null,
             recentQueries: [],
@@ -24,7 +19,6 @@ class SpeechRecognition {
     }
 
     initRecognition() {
-        // 檢查瀏覽器支援
         if ('webkitSpeechRecognition' in window) {
             this.recognition = new webkitSpeechRecognition();
             this.isSupported = true;
@@ -36,16 +30,13 @@ class SpeechRecognition {
             return;
         }
 
-        // 設定語音識別參數
         this.recognition.continuous = false;
         this.recognition.interimResults = true;
         this.recognition.lang = 'zh-TW';
         this.recognition.maxAlternatives = 3;  // 增加候選結果數量
 
-        // 綁定事件
         this.recognition.onstart = () => {
             this.isListening = true;
-            console.log('🎤 語音識別開始');
             if (this.onStart) this.onStart();
         };
 
@@ -62,9 +53,7 @@ class SpeechRecognition {
                 }
             }
 
-            console.log('🎤 語音識別原始結果:', finalTranscript || interimTranscript);
             
-            // 使用語音增強功能
             let enhancedFinal = finalTranscript;
             let enhancedInterim = interimTranscript;
             
@@ -93,7 +82,6 @@ class SpeechRecognition {
 
         this.recognition.onend = () => {
             this.isListening = false;
-            console.log('🎤 語音識別結束');
             if (this.onEnd) this.onEnd();
         };
     }
@@ -130,31 +118,19 @@ class SpeechRecognition {
         }
     }
     
-    /**
-     * 設定用戶位置上下文
-     */
     setUserLocation(location) {
         this.context.userLocation = location;
-        console.log('📍 設定用戶位置上下文:', location);
     }
     
-    /**
-     * 添加查詢歷史
-     */
     addRecentQuery(query) {
         if (query && typeof query === 'string') {
             this.context.recentQueries.unshift(query);
-            // 只保留最近 10 次查詢
             if (this.context.recentQueries.length > 10) {
                 this.context.recentQueries = this.context.recentQueries.slice(0, 10);
             }
-            console.log('📝 添加查詢歷史:', query);
         }
     }
     
-    /**
-     * 獲取當前上下文
-     */
     getContext() {
         return {
             ...this.context,
@@ -162,20 +138,15 @@ class SpeechRecognition {
         };
     }
     
-    /**
-     * 清除上下文
-     */
     clearContext() {
         this.context = {
             userLocation: null,
             recentQueries: [],
             currentSession: null
         };
-        console.log('🗑️ 已清除語音辨識上下文');
     }
 }
 
-// 語音合成類
 class TextToSpeech {
     constructor() {
         this.synth = window.speechSynthesis;
@@ -190,27 +161,22 @@ class TextToSpeech {
             return false;
         }
 
-        // 停止當前播放
         this.stop();
 
         const utterance = new SpeechSynthesisUtterance(text);
         
-        // 設定參數
         utterance.lang = options.lang || 'zh-TW';
         utterance.rate = options.rate || 1.0;
         utterance.pitch = options.pitch || 1.0;
         utterance.volume = options.volume || 1.0;
 
-        // 綁定事件
         utterance.onstart = () => {
             this.isSpeaking = true;
-            console.log('🔊 語音合成開始');
         };
 
         utterance.onend = () => {
             this.isSpeaking = false;
             this.currentUtterance = null;
-            console.log('🔊 語音合成結束');
         };
 
         utterance.onerror = (event) => {
@@ -245,6 +211,5 @@ class TextToSpeech {
     }
 }
 
-// 全域實例
 window.speechRecognition = new SpeechRecognition();
 window.textToSpeech = new TextToSpeech();

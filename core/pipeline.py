@@ -230,21 +230,25 @@ class ChatPipeline:
         logger.info(f"🐛 [DEBUG] audio_emotion = {audio_emotion}")
         logger.info(f"🐛 [DEBUG] text_emotion = {text_emotion}")
 
-        # 情緒融合邏輯
+        # 【優化】情緒融合邏輯 - 降低音頻置信度門檻到 0.35
+        emotion_confidence = 0.5  # 預設置信度
         if audio_emotion and audio_emotion.get("success"):
             audio_emotion_label = audio_emotion.get("emotion", "neutral")
             audio_confidence = audio_emotion.get("confidence", 0.0)
-            
-            # 優先使用音頻情緒（置信度 >= 0.5）
-            if audio_confidence >= 0.5:
+
+            # 【優化】降低門檻到 0.35，更敏感地偵測情緒
+            if audio_confidence >= 0.35:
                 emotion_value = audio_emotion_label
+                emotion_confidence = audio_confidence
                 logger.info(f"🎭 使用音頻情緒: {emotion_value} (置信度: {audio_confidence:.4f})")
                 logger.info(f"📝 文字情緒: {text_emotion} (輔助)")
             else:
                 emotion_value = text_emotion
+                emotion_confidence = 0.5  # 文字情緒預設置信度
                 logger.info(f"📝 使用文字情緒: {emotion_value} (音頻置信度過低: {audio_confidence:.4f})")
         else:
             emotion_value = text_emotion
+            emotion_confidence = 0.5  # 文字情緒預設置信度
             logger.info(f"📝 使用文字情緒: {emotion_value} (無音頻情緒)")
 
         # 1) 檢查是否在關懷模式
@@ -278,9 +282,11 @@ class ChatPipeline:
                     return PipelineResult(text="我在這裡陪你，隨時可以聊聊。", is_fallback=True, reason="ai-care-empty")
                 return PipelineResult(text=text, is_fallback=False, meta={"care_mode": True, "emotion": care_emotion})
 
-        # 2) 檢查是否需要進入關懷模式
-        if user_id and EmotionCareManager.check_and_enter_care_mode(user_id, emotion_value, chat_id):
-            logger.warning(f"⚠️ 偵測到極端情緒 [{emotion_value}]，進入關懷模式")
+        # 2) 檢查是否需要進入關懷模式（傳遞置信度，用於連續性判斷）
+        if user_id and EmotionCareManager.check_and_enter_care_mode(
+            user_id, emotion_value, chat_id, confidence=emotion_confidence
+        ):
+            logger.warning(f"⚠️ 偵測到極端情緒 [{emotion_value}]（置信度: {emotion_confidence:.2f}），進入關懷模式")
             # 立即使用關懷模式 AI 回應
             ai_res = await self._with_timeout(
                 self._ai_generator(
@@ -341,17 +347,19 @@ class ChatPipeline:
                         logger.info(f"🌐 無工具資料，跳過翻譯")
 
                     # 返回帶有工具元數據的結果（包含情緒）
-                    meta_dict = {}
+                    meta_dict = {
+                        'emotion': emotion_value,
+                        'care_mode': False  # 工具調用不是關懷模式
+                    }
                     if tool_name:
                         meta_dict['tool_name'] = tool_name
                     if tool_data:
                         meta_dict['tool_data'] = tool_data
-                    meta_dict['emotion'] = emotion_value
 
                     return PipelineResult(
                         text=text,
                         is_fallback=False,
-                        meta=meta_dict if meta_dict else None
+                        meta=meta_dict
                     )
                 else:
                     # 正常字串
@@ -364,7 +372,7 @@ class ChatPipeline:
                     return PipelineResult(
                         text=text,
                         is_fallback=False,
-                        meta={"emotion": emotion_value},
+                        meta={"emotion": emotion_value, "care_mode": False},
                     )
 
         # 4) 無功能 → 一般聊天（限時）
@@ -388,8 +396,10 @@ class ChatPipeline:
         if not text:
             return PipelineResult(text="抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？", is_fallback=True, reason="ai-empty")
 
-        # 一般聊天也包含情緒資訊（新增）
-        meta_dict = {}
-        meta_dict['emotion'] = emotion_value
+        # 一般聊天也包含情緒資訊
+        meta_dict = {
+            'emotion': emotion_value,
+            'care_mode': False  # 一般聊天不是關懷模式
+        }
 
-        return PipelineResult(text=text, is_fallback=False, meta=meta_dict if meta_dict else None)
+        return PipelineResult(text=text, is_fallback=False, meta=meta_dict)
