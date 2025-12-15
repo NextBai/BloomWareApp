@@ -61,17 +61,19 @@ class HubertForSpeechClassification(HubertPreTrainedModel):
 
 def _load_model():
     """延遲載入模型，避免在模組匯入時就下載"""
+    import logging
+    logger = logging.getLogger("emotion_recognition")
     global _model, _processor, _config
     if _model is None:
-        print("正在延遲載入情緒辨識模型...")
+        logger.debug("正在延遲載入情緒辨識模型...")
         try:
             _config = AutoConfig.from_pretrained(model_name_or_path)
             _processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name_or_path)
             _model = HubertForSpeechClassification.from_pretrained(model_name_or_path, config=_config)
             _model.eval()
-            print("情緒辨識模型載入完成！")
+            logger.debug("情緒辨識模型載入完成！")
         except Exception as e:
-            print(f"情緒辨識模型載入失敗: {e}")
+            logger.error(f"情緒辨識模型載入失敗: {e}")
             _model = None
             _processor = None
             _config = None

@@ -367,9 +367,9 @@ async def test_tts_playback(
     """
     result = await tts_service.play_locally(text, voice=voice, instruction=instruction)
     if result["success"]:
-        print(f"✅ 播放成功：{text}")
+        logger.debug(f"✅ 播放成功：{text}")
     else:
-        print(f"❌ 播放失敗：{result.get('error')}")
+        logger.debug(f"❌ 播放失敗：{result.get('error')}")
 
 
 if __name__ == "__main__":

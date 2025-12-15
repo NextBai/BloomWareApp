@@ -1,6 +1,4 @@
-// ========== 全域變數與常數 ==========
 
-// DOM 元素參照
 const background = document.getElementById('background');
 const emotionIndicator = document.getElementById('emotion-indicator');
 const transcript = document.getElementById('transcript');
@@ -8,7 +6,6 @@ const micContainer = document.getElementById('mic-container');
 const cardsContainer = document.getElementById('tool-cards-container');
 const agentOutput = document.getElementById('agent-output');
 
-// 情緒表情對照表
 const emotionEmojis = {
   neutral: '😐 中性',
   happy: '😊 開心',
@@ -18,7 +15,6 @@ const emotionEmojis = {
   surprise: '😲 驚訝'
 };
 
-// 背景顏色對照表
 const emotionColors = {
   neutral: 'linear-gradient(135deg, #E6F7F0 0%, #F5F1ED 100%)',
   happy: 'linear-gradient(135deg, #FFF9E6 0%, #FFE6E6 100%)',
@@ -28,11 +24,8 @@ const emotionColors = {
   surprise: 'linear-gradient(135deg, #FFFFE6 0%, #FFF5E6 100%)'
 };
 
-// 打字機效果變數
 let typingInterval = null;
 
-// WebSocket 連接
 let ws = null;
 
-// MCP 工具 metadata 快取
 let toolsMetadata = [];

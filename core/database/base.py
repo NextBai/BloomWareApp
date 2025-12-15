@@ -91,12 +91,12 @@ def connect_to_firestore():
 
     if not firebase_project_id:
         logger.error("Firebase專案ID未正確設置，請在.env文件中設置FIREBASE_PROJECT_ID環境變數")
-        print("\n❌ 錯誤: Firebase專案ID未設置！請在.env文件中設置FIREBASE_PROJECT_ID\n")
+        logger.error("\n❌ 錯誤: Firebase專案ID未設置！請在.env文件中設置FIREBASE_PROJECT_ID\n")
         return False
 
     try:
         logger.info("正在嘗試連接Firebase Firestore...")
-        print("\n🔄 正在連接Firebase Firestore數據庫...\n")
+        logger.info("\n🔄 正在連接Firebase Firestore數據庫...\n")
 
         # 檢查是否已經初始化 Firebase
         try:
@@ -113,7 +113,7 @@ def connect_to_firestore():
                 logger.info(f"Firebase 初始化成功（專案ID：{firebase_project_id}）")
             except ValueError as e:
                 logger.error(f"Firebase 憑證載入失敗: {e}")
-                print(f"\n❌ 錯誤: Firebase 憑證載入失敗！{e}\n")
+                logger.error(f"\n❌ 錯誤: Firebase 憑證載入失敗！{e}\n")
                 return False
         
         # 初始化 Firestore 客戶端
@@ -137,19 +137,18 @@ def connect_to_firestore():
         route_cache_collection = firestore_db.collection('route_cache')
         
         logger.info(f"✅ Firestore連接成功，專案ID：{firebase_project_id}")
-        print(f"\n✅ Firebase Firestore連接成功！專案ID：{firebase_project_id}\n")
+        logger.info(f"\n✅ Firebase Firestore連接成功！專案ID：{firebase_project_id}\n")
         return True
         
     except Exception as e:
         logger.error(f"Firebase Firestore連接失敗：{e}")
-        print(f"\n❌ Firebase Firestore連接失敗：{e}\n")
-        print("🔧 故障排除建議：")
-        print("1. 檢查網絡連接")
-        print("2. 確認Firebase服務帳戶金鑰文件路徑正確")
-        print("3. 驗證Firebase專案ID是否正確")
-        print("4. 確保Firestore Database已在Firebase Console中啟用")
-        print("5. 檢查服務帳戶權限是否包含Firestore權限")
-        print()
+        logger.error(f"\n❌ Firebase Firestore連接失敗：{e}\n")
+        logger.error("🔧 故障排除建議：")
+        logger.error("1. 檢查網絡連接")
+        logger.error("2. 確認Firebase服務帳戶金鑰文件路徑正確")
+        logger.error("3. 驗證Firebase專案ID是否正確")
+        logger.error("4. 確保Firestore Database已在Firebase Console中啟用")
+        logger.error("5. 檢查服務帳戶權限是否包含Firestore權限")
         return False
 def ensure_indexes():
     """Firestore 不需要手動創建索引，由 Google 自動優化"""

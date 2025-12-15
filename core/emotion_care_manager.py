@@ -3,6 +3,11 @@
 當偵測到用戶極端情緒時（sad, angry, fear），自動進入關懷模式
 關懷模式下禁用所有工具調用，專注於情感支持
 用戶說「我沒事了」等關鍵字後才解除
+
+【2025 優化版】
+- 加入連續性檢查：需要連續 N 次偵測到極端情緒才觸發（避免誤判）
+- 支援情緒強度權重：音頻情緒 + 文字情緒雙軌融合
+- 調整 TTL 和冷卻時間，更精準的觸發機制
 """
 
 import logging
@@ -17,13 +22,18 @@ class EmotionCareManager:
 
     # 極端情緒定義（需要進入關懷模式的情緒）
     EXTREME_EMOTIONS = {"sad", "angry", "fear"}
-    
+
     # 正面情緒定義（可以解除關懷模式的情緒）
     POSITIVE_EMOTIONS = {"neutral", "happy", "surprise"}
 
     # 模式存活與冷卻（避免反覆觸發）
-    CARE_TTL_SECONDS = 10 * 60  # 10 分鐘自動失效（從 20 分鐘縮短）
-    COOLDOWN_SECONDS = 5 * 60   # 5 分鐘內不重入（從 10 分鐘縮短）
+    CARE_TTL_SECONDS = 8 * 60   # 8 分鐘自動失效（縮短以更快恢復正常）
+    COOLDOWN_SECONDS = 2 * 60   # 2 分鐘內不重入（縮短以提高響應性）
+
+    # 【新增】連續性觸發設定
+    # 【優化】降低門檻：第一次明確的極端情緒就觸發，避免「太遲鈍」
+    CONSECUTIVE_THRESHOLD = 1   # 需要 1 次極端情緒即可觸發（原本 2 次太嚴格）
+    EMOTION_WINDOW_SECONDS = 90 # 情緒計數窗口：90秒內的情緒才計入
 
     # 解除關懷模式的關鍵字
     RELEASE_KEYWORDS = [
@@ -51,9 +61,31 @@ class EmotionCareManager:
     ]
 
     # 用戶關懷狀態
-    # 結構: {user_id: {chat_key: {"in_care_mode": bool, "emotion": str, "start_time": float}}}
+    # 結構: {user_id: {chat_key: {
+    #   "in_care_mode": bool,
+    #   "emotion": str,
+    #   "start_time": float,
+    #   "last_exit_time": float,
+    #   "emotion_history": [(timestamp, emotion), ...]  # 【新增】情緒歷史
+    # }}}
     _user_states: Dict[str, Dict[str, Dict]] = {}
     _DEFAULT_CHAT_KEY = "__default__"
+
+    @classmethod
+    def _count_recent_extreme_emotions(cls, emotion_history: list) -> int:
+        """計算窗口內的極端情緒次數"""
+        now = time.time()
+        count = 0
+        for ts, emo in emotion_history:
+            if now - ts <= cls.EMOTION_WINDOW_SECONDS and emo in cls.EXTREME_EMOTIONS:
+                count += 1
+        return count
+
+    @classmethod
+    def _clean_old_emotions(cls, emotion_history: list) -> list:
+        """清理過期的情緒記錄"""
+        now = time.time()
+        return [(ts, emo) for ts, emo in emotion_history if now - ts <= cls.EMOTION_WINDOW_SECONDS * 2]
 
     @classmethod
     def _resolve_chat_key(cls, chat_id: Optional[str]) -> str:
@@ -73,26 +105,66 @@ class EmotionCareManager:
         user_states[key] = state
 
     @classmethod
-    def check_and_enter_care_mode(cls, user_id: str, emotion: str, chat_id: Optional[str] = None) -> bool:
+    def check_and_enter_care_mode(
+        cls,
+        user_id: str,
+        emotion: str,
+        chat_id: Optional[str] = None,
+        confidence: float = 1.0,
+        force: bool = False
+    ) -> bool:
         """
         檢查情緒是否為極端情緒，若是則進入關懷模式
+
+        【2025 優化版】加入連續性檢查，避免誤判
 
         參數:
             user_id: 用戶 ID
             emotion: 偵測到的情緒（neutral, happy, sad, angry, fear, surprise）
+            chat_id: 對話 ID（可選）
+            confidence: 情緒置信度（0.0-1.0），高置信度可降低連續性要求
+            force: 強制進入（跳過連續性檢查，用於明確極端情況）
 
         返回:
             bool: 是否進入關懷模式（True=進入，False=不需要）
         """
+        key = cls._resolve_chat_key(chat_id)
+        user_states = cls._user_states.get(user_id) or {}
+        prev_state = user_states.get(key) or {}
+
+        # 取得或初始化情緒歷史
+        emotion_history = prev_state.get("emotion_history", [])
+        emotion_history = cls._clean_old_emotions(emotion_history)
+
+        # 記錄當前情緒（不管是不是極端情緒都記錄）
+        emotion_history.append((time.time(), emotion))
+
+        # 更新狀態（保存情緒歷史）
+        prev_state["emotion_history"] = emotion_history
+        cls._set_state(user_id, chat_id, prev_state)
+
+        # 如果不是極端情緒，直接返回
         if not emotion or emotion not in cls.EXTREME_EMOTIONS:
             return False
 
         # 冷卻期防抖：若剛退出不久，避免馬上重入
-        key = cls._resolve_chat_key(chat_id)
-        user_states = cls._user_states.get(user_id) or {}
-        prev_state = user_states.get(key) or {}
         last_exit = prev_state.get("last_exit_time", 0.0)
         if last_exit and (time.time() - last_exit) < cls.COOLDOWN_SECONDS:
+            logger.debug(f"⏸️ 用戶 {user_id} 在冷卻期內，不進入關懷模式")
+            return False
+
+        # 【連續性檢查】計算窗口內的極端情緒次數
+        extreme_count = cls._count_recent_extreme_emotions(emotion_history)
+
+        # 高置信度（>0.7）可降低門檻為 1 次
+        # 強制模式（force=True）直接進入
+        threshold = 1 if (confidence > 0.7 or force) else cls.CONSECUTIVE_THRESHOLD
+
+        logger.info(f"🎭 情緒檢查: emotion={emotion}, confidence={confidence:.2f}, "
+                   f"extreme_count={extreme_count}/{threshold}, force={force}")
+
+        if extreme_count < threshold:
+            logger.debug(f"⏸️ 用戶 {user_id} 極端情緒次數不足 ({extreme_count}/{threshold})，不進入關懷模式")
             return False
 
         # 進入關懷模式
@@ -101,9 +173,10 @@ class EmotionCareManager:
             "emotion": emotion,
             "start_time": time.time(),
             "last_exit_time": prev_state.get("last_exit_time", 0.0),
+            "emotion_history": emotion_history,
         })
 
-        logger.warning(f"⚠️ 用戶 {user_id}（chat={chat_id or 'default'}）偵測到極端情緒 [{emotion}]，進入關懷模式")
+        logger.warning(f"⚠️ 用戶 {user_id}（chat={chat_id or 'default'}）偵測到連續極端情緒 [{emotion}]（{extreme_count}次），進入關懷模式")
         return True
 
     @classmethod
