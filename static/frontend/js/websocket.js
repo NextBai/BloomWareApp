@@ -418,10 +418,8 @@ function initializeWebSocket(token) {
         break;
 
       case 'bot_message':
-
-        if (data.emotion && typeof applyEmotion === 'function') {
-          applyEmotion(data.emotion);
-        }
+        // 【統一】不在此處套用情緒，只由 emotion_detected 事件控制
+        // 保留情緒資訊在 data 中供調試使用
 
         if (data.care_mode && typeof hideToolCards === 'function') {
           hideToolCards();
@@ -455,10 +453,7 @@ function initializeWebSocket(token) {
         transcript.textContent = data.text;
         transcript.className = 'voice-transcript final';
         window.realtimeTranscript = '';
-
-        if (data.emotion && typeof applyEmotion === 'function') {
-          applyEmotion(data.emotion);
-        }
+        // 【統一】不在此處套用情緒，只由 emotion_detected 事件控制
         break;
 
       case 'realtime_stt_status':
@@ -494,9 +489,8 @@ function initializeWebSocket(token) {
         break;
 
       case 'audio_emotion_detected':
-        if (data.emotion && data.confidence >= 0.35 && typeof applyEmotion === 'function') {
-          applyEmotion(data.emotion);
-        }
+        // 【統一】不在此處套用情緒，只由 emotion_detected 事件控制
+        // 後端會融合音頻和文字情緒後統一發送 emotion_detected
         break;
 
       case 'env_ack':

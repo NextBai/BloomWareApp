@@ -211,7 +211,12 @@ class ChatPipeline:
         language: Optional[str] = None,
     ) -> PipelineResult:
         if not user_message or not user_message.strip():
-            return PipelineResult(text="我沒有收到您的消息，請重新輸入。", is_fallback=True, reason="empty")
+            return PipelineResult(
+                text="我沒有收到您的消息，請重新輸入。",
+                is_fallback=True,
+                reason="empty",
+                meta={"emotion": "neutral", "care_mode": False}
+            )
 
         # language 參數保留以向後兼容，但不使用（GPT 自動判斷語言）
 
@@ -223,33 +228,36 @@ class ChatPipeline:
             return detect_res
         has_feature, intent_data = detect_res
 
-        # 提取情緒（雙軌制：音頻情緒優先，文字情緒輔助）
+        # 【情緒融合】雙軌制：音頻情緒優先，文字情緒輔助
         text_emotion = intent_data.get("emotion", "neutral") if intent_data else "neutral"
+        logger.info(f"🎭 [情緒流向-1] 文字情緒: {text_emotion}")
 
-        # DEBUG: 顯示 audio_emotion 的完整內容
-        logger.info(f"🐛 [DEBUG] audio_emotion = {audio_emotion}")
-        logger.info(f"🐛 [DEBUG] text_emotion = {text_emotion}")
+        # 檢查音頻情緒
+        if audio_emotion:
+            logger.info(f"🎭 [情緒流向-2] 音頻情緒資料: success={audio_emotion.get('success')}, emotion={audio_emotion.get('emotion')}, confidence={audio_emotion.get('confidence')}")
 
-        # 【優化】情緒融合邏輯 - 降低音頻置信度門檻到 0.35
+        # 情緒融合邏輯
         emotion_confidence = 0.5  # 預設置信度
         if audio_emotion and audio_emotion.get("success"):
             audio_emotion_label = audio_emotion.get("emotion", "neutral")
             audio_confidence = audio_emotion.get("confidence", 0.0)
 
-            # 【優化】降低門檻到 0.35，更敏感地偵測情緒
-            if audio_confidence >= 0.35:
+            # 【優化】提高門檻到 0.7，避免誤判（太敏感會導致錯誤情緒）
+            if audio_confidence >= 0.7:
                 emotion_value = audio_emotion_label
                 emotion_confidence = audio_confidence
-                logger.info(f"🎭 使用音頻情緒: {emotion_value} (置信度: {audio_confidence:.4f})")
-                logger.info(f"📝 文字情緒: {text_emotion} (輔助)")
+                logger.info(f"🎭 [情緒流向-3] ✅ 採用音頻情緒: {emotion_value} (置信度: {audio_confidence:.4f})")
             else:
                 emotion_value = text_emotion
                 emotion_confidence = 0.5  # 文字情緒預設置信度
-                logger.info(f"📝 使用文字情緒: {emotion_value} (音頻置信度過低: {audio_confidence:.4f})")
+                logger.info(f"🎭 [情緒流向-3] ⬇️ 音頻置信度過低 ({audio_confidence:.4f})，改用文字情緒: {emotion_value}")
         else:
             emotion_value = text_emotion
             emotion_confidence = 0.5  # 文字情緒預設置信度
-            logger.info(f"📝 使用文字情緒: {emotion_value} (無音頻情緒)")
+            logger.info(f"🎭 [情緒流向-3] 📝 無音頻情緒，使用文字情緒: {emotion_value}")
+
+        # 【關鍵】記錄最終情緒
+        logger.info(f"🎭 [情緒流向-最終] emotion={emotion_value}, confidence={emotion_confidence:.2f}")
 
         # 1) 檢查是否在關懷模式
         if user_id and EmotionCareManager.is_in_care_mode(user_id, chat_id):
@@ -279,7 +287,12 @@ class ChatPipeline:
                     return ai_res
                 text = str(ai_res or "").strip()
                 if not text:
-                    return PipelineResult(text="我在這裡陪你，隨時可以聊聊。", is_fallback=True, reason="ai-care-empty")
+                    return PipelineResult(
+                        text="我在這裡陪你，隨時可以聊聊。",
+                        is_fallback=True,
+                        reason="ai-care-empty",
+                        meta={"care_mode": True, "emotion": care_emotion or "sad"}
+                    )
                 return PipelineResult(text=text, is_fallback=False, meta={"care_mode": True, "emotion": care_emotion})
 
         # 2) 檢查是否需要進入關懷模式（傳遞置信度，用於連續性判斷）
@@ -332,7 +345,12 @@ class ChatPipeline:
                     tool_name = feat_res.get('tool_name')
                     tool_data = feat_res.get('tool_data')
                     if not text:
-                        return PipelineResult(text="抱歉，功能處理沒有產出結果。", is_fallback=True, reason="feature-empty")
+                        return PipelineResult(
+                            text="抱歉，功能處理沒有產出結果。",
+                            is_fallback=True,
+                            reason="feature-empty",
+                            meta={"emotion": emotion_value, "care_mode": False}
+                        )
 
                     # 簡化翻譯：非中文用戶 → 翻譯工具卡片
                     is_chinese = self._is_chinese_message(user_message)
@@ -365,7 +383,12 @@ class ChatPipeline:
                     # 正常字串
                     text = str(feat_res or "").strip()
                     if not text:
-                        return PipelineResult(text="抱歉，功能處理沒有產出結果。", is_fallback=True, reason="feature-empty")
+                        return PipelineResult(
+                            text="抱歉，功能處理沒有產出結果。",
+                            is_fallback=True,
+                            reason="feature-empty",
+                            meta={"emotion": emotion_value, "care_mode": False}
+                        )
 
                     # 不再翻譯工具回應，讓 GPT 自己處理並用對應語言描述
 
@@ -394,7 +417,12 @@ class ChatPipeline:
             return ai_res
         text = str(ai_res or "").strip()
         if not text:
-            return PipelineResult(text="抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？", is_fallback=True, reason="ai-empty")
+            return PipelineResult(
+                text="抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？",
+                is_fallback=True,
+                reason="ai-empty",
+                meta={"emotion": emotion_value, "care_mode": False}
+            )
 
         # 一般聊天也包含情緒資訊
         meta_dict = {
