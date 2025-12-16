@@ -511,6 +511,18 @@ class MCPAgentBridge:
             has_feature, intent_data, cached_time = self._intent_cache[cache_key]
             if time_module.time() - cached_time < self._intent_cache_ttl:
                 logger.debug(f"💾 意圖快取命中: {message[:50]}...")
+
+                # 【關鍵修復】快取命中時，仍需重新偵測情緒（情緒是即時的）
+                # 因為同一句話在不同時間說可能帶有不同的情緒強度
+                try:
+                    fresh_emotion = await self._analyze_emotion_from_message(message)
+                    if fresh_emotion and intent_data:
+                        intent_data = dict(intent_data)  # 複製避免修改原快取
+                        intent_data['emotion'] = fresh_emotion
+                        logger.info(f"🎭 快取命中但重新偵測情緒: {fresh_emotion}")
+                except Exception as e:
+                    logger.warning(f"快取命中時情緒分析失敗: {e}")
+
                 return has_feature, intent_data
             else:
                 del self._intent_cache[cache_key]
