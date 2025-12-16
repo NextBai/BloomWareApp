@@ -27,9 +27,9 @@ from google.cloud.firestore import FieldFilter
 
 # 本專案整合版：單一 app.py 作為後端入口，前端靜態檔（index.html/app.js/style.css）放在根目錄
 
-# 日誌設定 (預設僅顯示 WARNING 以上，如需調整透過 BLOOMWARE_LOG_LEVEL)
-LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
-LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
+# 日誌設定（預設顯示 INFO，可透過 BLOOMWARE_LOG_LEVEL 調整）
+LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.INFO)
 logging.basicConfig(
     level=LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
