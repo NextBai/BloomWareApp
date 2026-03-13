@@ -104,6 +104,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="weather_query",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )
@@ -149,6 +150,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="tdx_bus_arrival",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )
@@ -157,6 +159,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="tdx_youbike",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )
@@ -165,6 +168,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="tdx_metro",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )
@@ -173,6 +177,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="tdx_parking",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )
@@ -181,6 +186,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="tdx_train",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )
@@ -189,6 +195,7 @@ class MCPAgentBridge:
             ToolMetadata(
                 name="tdx_thsr",
                 requires_env={"lat", "lon", "city"},
+                env_fallbacks={"city": ["detailed_address", "label"]},
                 enable_reformat=True,
             )
         )

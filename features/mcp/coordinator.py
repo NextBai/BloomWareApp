@@ -81,6 +81,13 @@ class ToolCoordinator:
                     if merged.get(field) is not None:
                         continue
                     env_value = env_ctx.get(field)
+                    # 主欄位為 None 時，嘗試 fallback 欄位
+                    if env_value is None and metadata.env_fallbacks.get(field):
+                        for fallback_key in metadata.env_fallbacks[field]:
+                            env_value = env_ctx.get(fallback_key)
+                            if env_value is not None:
+                                logger.info(f"📦 [Coordinator] 使用 fallback 注入: {field} ← {fallback_key}={env_value}")
+                                break
                     # 只注入非 None 的值，避免覆蓋工具的預設值或觸發 schema 驗證錯誤
                     if env_value is not None:
                         merged[field] = env_value

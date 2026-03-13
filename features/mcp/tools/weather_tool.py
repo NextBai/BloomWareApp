@@ -82,6 +82,35 @@ class WeatherTool(MCPTool):
         lat_arg = arguments.get("lat")
         lon_arg = arguments.get("lon")
 
+        # 轉換常見的台灣城市中文名稱，提升 OpenWeather 查詢命中率
+        if city:
+            CITY_MAPPING = {
+                "基隆市": "Keelung", "基隆": "Keelung",
+                "台北市": "Taipei", "臺北市": "Taipei", "台北": "Taipei", "臺北": "Taipei",
+                "新北市": "New Taipei", "新北": "New Taipei",
+                "桃園市": "Taoyuan", "桃園": "Taoyuan",
+                "新竹市": "Hsinchu", "新竹縣": "Hsinchu County", "新竹": "Hsinchu",
+                "苗栗市": "Miaoli", "苗栗縣": "Miaoli", "苗栗": "Miaoli",
+                "台中市": "Taichung", "臺中市": "Taichung", "台中": "Taichung", "臺中": "Taichung",
+                "彰化縣": "Changhua", "彰化市": "Changhua", "彰化": "Changhua",
+                "南投縣": "Nantou", "南投市": "Nantou", "南投": "Nantou",
+                "雲林縣": "Yunlin", "雲林": "Yunlin",
+                "嘉義市": "Chiayi", "嘉義縣": "Chiayi", "嘉義": "Chiayi",
+                "台南市": "Tainan", "臺南市": "Tainan", "台南": "Tainan", "臺南": "Tainan",
+                "高雄市": "Kaohsiung", "高雄": "Kaohsiung",
+                "屏東縣": "Pingtung", "屏東市": "Pingtung", "屏東": "Pingtung",
+                "宜蘭縣": "Yilan", "宜蘭市": "Yilan", "宜蘭": "Yilan",
+                "花蓮縣": "Hualien", "花蓮市": "Hualien", "花蓮": "Hualien",
+                "台東縣": "Taitung", "臺東縣": "Taitung", "台東市": "Taitung", "臺東市": "Taitung", "台東": "Taitung", "臺東": "Taitung",
+                "澎湖縣": "Penghu", "澎湖": "Penghu",
+                "金門縣": "Kinmen", "金門": "Kinmen",
+                "連江縣": "Lienchiang", "馬祖": "Lienchiang"
+            }
+            # 如果能對應到，轉為英文；否則保留原始輸入
+            mapped_city = CITY_MAPPING.get(city, city)
+            # 若原始輸入已帶有類似 "District", "City" 結尾，確保它沒被破壞，以上字典應足以應付 fallback 的情境
+            city = mapped_city
+
         if (lat_arg is None or lon_arg is None) and not city:
             raise ValidationError("city", "未提供城市或經緯度")
 
