@@ -209,6 +209,7 @@ class ChatPipeline:
         request_id: Optional[str] = None,
         audio_emotion: Optional[Dict[str, Any]] = None,
         language: Optional[str] = None,
+        emotion_callback = None,
     ) -> PipelineResult:
         if not user_message or not user_message.strip():
             return PipelineResult(
@@ -269,6 +270,13 @@ class ChatPipeline:
                 logger.info(f"💙 用戶 {user_id} 在關懷模式中，跳過工具調用，使用關懷 AI")
                 # 直接用關懷模式 AI 回應（不檢測意圖，不調用工具）
                 care_emotion = EmotionCareManager.get_care_emotion(user_id, chat_id)
+                final_emotion = care_emotion or emotion_value
+                if emotion_callback:
+                    try:
+                        await emotion_callback(final_emotion, True)
+                    except Exception as e:
+                        logger.warning(f"emotion_callback 錯誤: {e}")
+
                 ai_res = await self._with_timeout(
                     self._ai_generator(
                         user_message,
@@ -301,6 +309,13 @@ class ChatPipeline:
         ):
             logger.warning(f"⚠️ 偵測到極端情緒 [{emotion_value}]（置信度: {emotion_confidence:.2f}），進入關懷模式")
             # 立即使用關懷模式 AI 回應
+            
+            if emotion_callback:
+                try:
+                    await emotion_callback(emotion_value, True)
+                except Exception as e:
+                    logger.warning(f"emotion_callback 錯誤: {e}")
+
             ai_res = await self._with_timeout(
                 self._ai_generator(
                     user_message,
@@ -324,6 +339,12 @@ class ChatPipeline:
             # 第一次進入關懷模式時，附加退出提示（新增）
             exit_hint = "\n\n💙 關懷模式已啟動。說「我沒事了」可以退出。"
             return PipelineResult(text=text + exit_hint, is_fallback=False, meta={"care_mode": True, "emotion": emotion_value})
+
+        if emotion_callback:
+            try:
+                await emotion_callback(emotion_value, False)
+            except Exception as e:
+                logger.warning(f"emotion_callback 錯誤: {e}")
 
         # 3) 有功能 → 功能處理(限時)
         if has_feature and intent_data:

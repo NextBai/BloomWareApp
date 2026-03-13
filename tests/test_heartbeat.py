@@ -2,6 +2,10 @@
 測試 websocket/heartbeat.py 心跳機制
 """
 
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pytest
 import time
 from websocket.heartbeat import HeartbeatManager, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT

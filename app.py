@@ -587,7 +587,16 @@ async def websocket_endpoint_with_jwt(
                     async def _do_process_and_send():
                         try:
                             logger.info(f"🚀 開始處理訊息: user_id={user_id}, chat_id={chat_id}")
-                            response = await handle_message(user_message, user_id, chat_id, messages_for_handler, request_id=request_id)
+                            
+                            async def _on_text_emotion(em: str, cm: bool):
+                                logger.info(f"📤 [即時回調] 發送 text emotion_detected: {em}, care_mode={cm}")
+                                await websocket.send_json({
+                                    "type": "emotion_detected",
+                                    "emotion": em,
+                                    "care_mode": cm
+                                })
+
+                            response = await handle_message(user_message, user_id, chat_id, messages_for_handler, request_id=request_id, emotion_callback=_on_text_emotion)
                             logger.info(f"📥 handle_message 返回: type={type(response)}, response={response}")
 
                             # 【優化】處理空回應：轉換為帶情緒的 dict 格式
@@ -1086,6 +1095,9 @@ async def websocket_endpoint_with_jwt(
                             # 如果有轉錄文字，送給 AI Agent 處理
                             if transcription:
                                 logger.info(f"🤖 處理即時轉錄結果: {transcription}")
+                                
+                                # 立即通知前端開始思考，提升即時響應感
+                                await websocket.send_json({"type": "typing", "message": "thinking"})
 
                                 # === 方案 B：語音情緒辨識（情緒分佈驗證 + 智能回退）===
                                 audio_emotion = None
@@ -1139,9 +1151,6 @@ async def websocket_endpoint_with_jwt(
                                     client_info.pop("audio_buffer", None)
                                     manager.set_client_info(user_id, client_info)
 
-                                # 通知前端開始思考
-                                await websocket.send_json({"type": "typing", "message": "thinking"})
-
                                 # 異步處理對話邏輯
                                 async def _process_realtime_chat():
                                     chat_id = message_data.get("chat_id")
@@ -1169,6 +1178,15 @@ async def websocket_endpoint_with_jwt(
                                     # 取得語言設定
                                     language = client_info.get("language", "auto")
 
+                                    # 發送即時情緒的回調函數
+                                    async def _on_emotion_detected(em: str, cm: bool):
+                                        logger.info(f"📤 [即時回調] 發送 emotion_detected: {em}, care_mode={cm}")
+                                        await websocket.send_json({
+                                            "type": "emotion_detected",
+                                            "emotion": em,
+                                            "care_mode": cm
+                                        })
+
                                     # 處理對話（透過 handle_message，自動處理 pipeline）
                                     response = await handle_message(
                                         transcription,
@@ -1176,7 +1194,8 @@ async def websocket_endpoint_with_jwt(
                                         chat_id,
                                         [],  # messages 參數（會自動從數據庫載入）
                                         audio_emotion=audio_emotion,  # 傳遞音頻情緒
-                                        language=language  # 傳遞語言設定（新增）
+                                        language=language,  # 傳遞語言設定（新增）
+                                        emotion_callback=_on_emotion_detected
                                     )
 
                                     # 發送回應
@@ -1250,7 +1269,7 @@ async def websocket_endpoint_with_jwt(
 # -----------------------------
 # 消息處理與AI
 # -----------------------------
-async def handle_message(user_message, user_id, chat_id, messages, request_id: str = None, audio_emotion: dict = None, language: str = None):
+async def handle_message(user_message, user_id, chat_id, messages, request_id: str = None, audio_emotion: dict = None, language: str = None, emotion_callback=None):
     logger.info(f"📥 handle_message: 收到訊息='{user_message}', user_id={user_id}, audio_emotion={audio_emotion}, language={language}")
     
     # 指令優先，避免進入管線造成不必要延遲
@@ -1346,7 +1365,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         ai_timeout=20.0,  # AI回應超時 (30 → 20)
     )
     logger.info(f"⚙️ 準備調用 ChatPipeline.process，user_message='{user_message}', audio_emotion={audio_emotion}, language={language}")
-    res: PipelineResult = await pipeline.process(user_message, user_id=user_id, chat_id=chat_id, request_id=request_id, audio_emotion=audio_emotion, language=language)
+    res: PipelineResult = await pipeline.process(user_message, user_id=user_id, chat_id=chat_id, request_id=request_id, audio_emotion=audio_emotion, language=language, emotion_callback=emotion_callback)
     logger.info(f"⚙️ ChatPipeline.process 完成，結果='{res.text}', is_fallback={res.is_fallback}, reason={res.reason}")
     
     # 檢查是否有工具元數據
