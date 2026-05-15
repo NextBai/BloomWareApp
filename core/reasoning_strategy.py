@@ -43,10 +43,10 @@ class ReasoningStrategy:
             reasoning_effort: minimal/low/medium/high
         """
 
-        # 🔥 規則 1：意圖檢測使用 low reasoning（平衡速度與準確度）
+        # 🔥 規則 1：意圖檢測使用 minimal reasoning（極速模式，減少初始延遲）
         if task_type == "intent_detection":
-            logger.debug("🧠 意圖檢測 → low reasoning（快速但準確）")
-            return "low"
+            logger.debug("🧠 意圖檢測 → minimal reasoning（極速回應）")
+            return "minimal"
 
         # 🔥 規則 2：關懷模式優先速度（用戶情緒不佳時不要讓他等）
         if user_emotion in ["sad", "angry", "fear"]:

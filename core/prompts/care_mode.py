@@ -1,7 +1,15 @@
 """
 情緒關懷模式 Prompt
-精簡化設計，保持關懷品質
+⚠️ DEPRECATED: 此模組的內容已遷移至 services/ai_service.py 中的
+CARE_MODE_BASE_PROMPT / EMOTION_SPECIFIC_PROMPTS / get_care_mode_prompt()。
+本模組僅保留向後兼容的 re-export，供既有測試使用。
 """
+
+import warnings as _warnings
+
+# ── 向後兼容 re-export ──────────────────────────────────────────
+# 生產環境使用 services.ai_service 中的活躍版本。
+# 此處提供簡化版僅為保持 test_prompts.py 不斷鏈。
 
 CARE_MODE_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」。你的任務是傾聽、陪伴。
 
@@ -25,7 +33,9 @@ CARE_MODE_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」。你�
 
 def get_care_prompt(emotion: str = None, user_name: str = None) -> str:
     """
-    生成關懷模式 Prompt
+    生成關懷模式 Prompt（向後兼容）
+
+    ⚠️ DEPRECATED: 生產環境請使用 services.ai_service.get_care_mode_prompt()
 
     Args:
         emotion: 用戶情緒標籤
@@ -34,6 +44,12 @@ def get_care_prompt(emotion: str = None, user_name: str = None) -> str:
     Returns:
         關懷模式 System Prompt
     """
+    _warnings.warn(
+        "core.prompts.care_mode.get_care_prompt() is deprecated. "
+        "Use services.ai_service.get_care_mode_prompt() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     prompt = CARE_MODE_PROMPT
 
     if emotion:

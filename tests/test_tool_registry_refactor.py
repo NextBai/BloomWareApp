@@ -52,6 +52,34 @@ class TestToolSchema:
         params = openai_tool["function"]["parameters"]
         assert params["additionalProperties"] is False
         assert "query" in params["required"]
+        assert "limit" in params["required"]
+
+    def test_strict_schema_applies_nested_object_rules(self):
+        """測試 strict schema 會遞迴處理 nested object"""
+        schema = ToolSchema(
+            metadata=ToolMetadata(name="nested_tool", description="Nested tool"),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "options": {
+                        "type": "object",
+                        "properties": {
+                            "mode": {"type": "string"},
+                            "limit": {"type": "integer", "default": 5},
+                        },
+                        "required": ["mode"],
+                    }
+                },
+                "required": ["options"],
+            },
+        )
+
+        params = schema.to_openai_tool(strict=True)["function"]["parameters"]
+
+        assert params["additionalProperties"] is False
+        assert params["required"] == ["options"]
+        assert params["properties"]["options"]["additionalProperties"] is False
+        assert params["properties"]["options"]["required"] == ["mode", "limit"]
     
     def test_rich_description(self):
         """測試豐富描述生成"""
@@ -97,6 +125,23 @@ class TestToolSchema:
         assert "route" in summary["params"]
         assert "stop" in summary["params"]
 
+    def test_schema_contract_rejects_missing_required_property(self):
+        """測試 schema contract 會拒絕不存在的 required 欄位"""
+        schema = ToolSchema(
+            metadata=ToolMetadata(name="broken", description="Broken"),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                },
+                "required": ["missing"],
+            },
+        )
+
+        issues = schema.validate_schema_contract()
+
+        assert any("missing" in issue for issue in issues)
+
 
 class TestToolSchemaRegistry:
     """測試 ToolSchemaRegistry 類別"""
@@ -115,6 +160,21 @@ class TestToolSchemaRegistry:
         retrieved = registry.get("test")
         assert retrieved is not None
         assert retrieved.metadata.name == "test"
+
+    def test_register_rejects_invalid_contract(self):
+        """測試註冊中心拒絕壞掉的 schema contract"""
+        registry = ToolSchemaRegistry()
+        schema = ToolSchema(
+            metadata=ToolMetadata(name="bad", description="Bad"),
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "required": ["query"],
+            },
+        )
+
+        with pytest.raises(ValueError):
+            registry.register(schema)
     
     def test_disable_enable(self):
         """測試停用和啟用"""

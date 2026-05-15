@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
+from core.config import settings
 
 load_dotenv()
 
@@ -235,7 +236,7 @@ class BatchProcessor:
     async def create_memory_summary_batch(
         self,
         user_memories: Dict[str, List[str]],
-        model: str = "gpt-5-nano"
+        model: Optional[str] = None,
     ) -> str:
         """
         創建記憶摘要批次任務
@@ -247,6 +248,7 @@ class BatchProcessor:
         Returns:
             batch_id
         """
+        model = model or settings.OPENAI_MODEL
         requests = []
 
         for user_id, memories in user_memories.items():
@@ -284,7 +286,7 @@ class BatchProcessor:
     async def create_health_report_batch(
         self,
         user_health_data: Dict[str, Dict[str, Any]],
-        model: str = "gpt-5-nano"
+        model: Optional[str] = None,
     ) -> str:
         """
         創建健康報告批次任務
@@ -296,6 +298,7 @@ class BatchProcessor:
         Returns:
             batch_id
         """
+        model = model or settings.OPENAI_MODEL
         requests = []
 
         for user_id, health_data in user_health_data.items():

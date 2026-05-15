@@ -184,11 +184,28 @@ class VoiceAuthService:
             end = start + bytes_per_window
             windows.append(bytes(buf[start:end]))
 
-        # 品質檢查（SNR）
-        for w in windows:
-            snr_db = self._estimate_snr_db(w)
+        # 品質檢查（SNR）僅作診斷，不再作為 hard gate
+        quality_warnings: List[Dict[str, Any]] = []
+        for idx, w in enumerate(windows):
+            signal_stats = self._analyze_signal_stats(w, sr)
+            snr_db = float(signal_stats["snr_db"])
             if snr_db < self.config.min_snr_db:
-                return {"success": False, "error": "LOW_SNR", "snr_db": snr_db}
+                warning = {
+                    "type": "LOW_SNR",
+                    "window_index": idx,
+                    **signal_stats,
+                }
+                quality_warnings.append(warning)
+                logging.warning(
+                    "VOICE_LOW_SNR warning only: window=%d snr_db=%.2f rms_all=%.6f noise_floor=%.6f voiced_ratio=%.3f duration_sec=%.3f threshold=%.2f",
+                    idx,
+                    signal_stats["snr_db"],
+                    signal_stats["rms_all"],
+                    signal_stats["noise_floor"],
+                    signal_stats["voiced_ratio"],
+                    signal_stats["duration_sec"],
+                    self.config.min_snr_db,
+                )
 
         # 視窗逐一評估
         win_results: List[Dict[str, Any]] = []
@@ -234,10 +251,11 @@ class VoiceAuthService:
                         "windows": win_results,
                         "emotion": emotion,
                         "note": "override_high_confidence",
+                        "quality_warnings": quality_warnings,
                     }
             except Exception:
                 pass
-            return {"success": False, "error": "INCONSISTENT_WINDOWS", "windows": win_results}
+            return {"success": False, "error": "INCONSISTENT_WINDOWS", "windows": win_results, "quality_warnings": quality_warnings}
         probs = [float(r.get("score", 0.0)) for r in win_results]
         margins_ok = all(float(r.get("margin", 0.0)) >= self.config.margin_threshold for r in win_results)
         per_win_ok = all(
@@ -251,6 +269,7 @@ class VoiceAuthService:
                 "error": "THRESHOLD_NOT_MET",
                 "avg_prob": avg_prob,
                 "windows": win_results,
+                "quality_warnings": quality_warnings,
             }
 
         label = labels[0]
@@ -266,6 +285,7 @@ class VoiceAuthService:
             "avg_prob": avg_prob,
             "windows": win_results,
             "emotion": emotion,
+            "quality_warnings": quality_warnings,
         }
 
     # -------------- 私有工具 --------------
@@ -356,28 +376,59 @@ class VoiceAuthService:
             f.write(tmp.getvalue())
         return tmp_path
 
-    def _estimate_snr_db(self, pcm_bytes: bytes) -> float:
-        """粗估 SNR：以整段 RMS 與背景估計。簡化：取信號 RMS 與最小能量窗比。"""
+    def _analyze_signal_stats(self, pcm_bytes: bytes, sr: int) -> Dict[str, float]:
+        """粗估音訊品質：SNR、整段 RMS、噪音底、有效語音比例、時長。"""
         try:
             x = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
             if x.size == 0:
-                return 0.0
+                return {
+                    "snr_db": 0.0,
+                    "rms_all": 0.0,
+                    "noise_floor": 0.0,
+                    "voiced_ratio": 0.0,
+                    "duration_sec": 0.0,
+                }
             x = x / 32768.0
             frame = 1024
             rms_all = np.sqrt(np.mean(x * x) + 1e-12)
             if len(x) < frame:
-                return 20.0 * np.log10(max(rms_all, 1e-6) / 1e-6)
+                noise = 1e-6
+                snr = 20.0 * np.log10(max(rms_all, noise) / noise)
+                return {
+                    "snr_db": float(snr),
+                    "rms_all": float(rms_all),
+                    "noise_floor": float(noise),
+                    "voiced_ratio": 1.0 if rms_all > noise * 2.0 else 0.0,
+                    "duration_sec": float(len(x) / max(sr, 1)),
+                }
             # 取移動窗最小 RMS 視為噪音底
-            mins = []
+            mins: List[float] = []
             for i in range(0, len(x) - frame + 1, frame):
                 seg = x[i : i + frame]
                 mins.append(np.sqrt(np.mean(seg * seg) + 1e-12))
             noise = float(np.percentile(mins, 10)) if mins else (rms_all * 0.5)
             noise = max(noise, 1e-6)
             snr = 20.0 * np.log10(max(rms_all, noise) / noise)
-            return float(snr)
+            voiced_threshold = max(noise * 2.0, 5e-4)
+            voiced_ratio = float(np.mean(np.array(mins) > voiced_threshold)) if mins else 0.0
+            return {
+                "snr_db": float(snr),
+                "rms_all": float(rms_all),
+                "noise_floor": float(noise),
+                "voiced_ratio": voiced_ratio,
+                "duration_sec": float(len(x) / max(sr, 1)),
+            }
         except Exception:
-            return 0.0
+            return {
+                "snr_db": 0.0,
+                "rms_all": 0.0,
+                "noise_floor": 0.0,
+                "voiced_ratio": 0.0,
+                "duration_sec": 0.0,
+            }
+
+    def _estimate_snr_db(self, pcm_bytes: bytes) -> float:
+        return float(self._analyze_signal_stats(pcm_bytes, self.config.sample_rate)["snr_db"])
 
     def _preprocess_bytes(self, pcm_bytes: bytes, sr: int) -> bytes:
         """簡易降噪 + 正規化（去 DC、軟性降噪、峰值歸一化）。"""
@@ -414,6 +465,16 @@ class VoiceAuthService:
         except Exception:
             return pcm_bytes
 
+    # 🎯 情緒標籤映射（與 AudioEmotionService 保持一致，確保前端能正確識別）
+    EMOTION_MAP = {
+        "生氣(angry)": "angry",
+        "恐懼(fear)": "fear",
+        "開心(happy)": "happy",
+        "中性(neutral)": "neutral",
+        "悲傷(sad)": "sad",
+        "驚訝(surprise)": "surprise"
+    }
+
     def _infer_emotion_from_bytes(self, pcm_bytes: bytes, sr: int) -> Optional[Dict[str, Any]]:
         try:
             if not self._emo_predict or not self._emo_id2class:
@@ -421,9 +482,14 @@ class VoiceAuthService:
             wav_path = self._bytes_to_wav(pcm_bytes, sr)
             try:
                 pred_id, confidence, distribution = self._emo_predict(str(wav_path))  # type: ignore[misc]
-                label = self._emo_id2class(int(pred_id))  # type: ignore[misc]
+                raw_label = self._emo_id2class(int(pred_id))  # type: ignore[misc]
+                
+                # 🎯 映射為標準英文標籤
+                label = self.EMOTION_MAP.get(raw_label, "neutral")
+                
                 return {
                     "label": label,
+                    "raw_label": raw_label, # 保留原始標籤供 Welcome Message 使用
                     "confidence": float(confidence),
                     "distribution": distribution,
                 }

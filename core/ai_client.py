@@ -16,6 +16,17 @@ _openai_client = None
 _initialized = False
 
 
+def _normalize_openai_base_url(base_url: Optional[str]) -> Optional[str]:
+    """Normalize custom OpenAI-compatible base URLs for the Python SDK."""
+    if not base_url:
+        return None
+
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return normalized
+    return f"{normalized}/v1"
+
+
 def get_openai_client():
     """
     取得 OpenAI 客戶端（單例模式）
@@ -37,11 +48,16 @@ def get_openai_client():
             _initialized = True
             return None
 
-        _openai_client = OpenAI(
-            api_key=api_key,
-            timeout=float(settings.OPENAI_TIMEOUT),
-            max_retries=3,
-        )
+        client_kwargs = {
+            "api_key": api_key,
+            "timeout": float(settings.OPENAI_TIMEOUT),
+            "max_retries": 3,
+        }
+        normalized_base_url = _normalize_openai_base_url(settings.OPENAI_BASE_URL)
+        if normalized_base_url:
+            client_kwargs["base_url"] = normalized_base_url
+
+        _openai_client = OpenAI(**client_kwargs)
 
         _initialized = True
         logger.info("✅ OpenAI 客戶端初始化成功")

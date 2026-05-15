@@ -6,11 +6,13 @@ MCP + Agent 橋接層
 import json
 import logging
 import asyncio
+import time
 from typing import Dict, Any, Optional, List, Tuple, Callable, Awaitable
 from datetime import datetime
 from .server import FeaturesMCPServer
 import services.ai_service as ai_service
 from services.ai_service import StrictResponseError
+from core.prompts.tool_calling_policy import get_tool_calling_policy
 from core.reasoning_strategy import get_optimal_reasoning_effort
 from core.database import get_user_env_current
 from .coordinator import ToolCoordinator
@@ -105,38 +107,38 @@ class MCPAgentBridge:
                 name="weather_query",
                 requires_env={"lat", "lon", "city"},
                 env_fallbacks={"city": ["detailed_address", "label"]},
-                enable_reformat=True,
+                enable_reformat=False,
             )
         )
         register(
             ToolMetadata(
                 name="reverse_geocode",
                 requires_env={"lat", "lon"},
-                enable_reformat=True,
+                enable_reformat=False,
             )
         )
         register(
             ToolMetadata(
                 name="exchange_query",
-                enable_reformat=True,
+                enable_reformat=False,
             )
         )
         register(
             ToolMetadata(
                 name="news_query",
-                enable_reformat=True,
+                enable_reformat=False,
             )
         )
         register(
             ToolMetadata(
                 name="healthkit_query",
-                enable_reformat=True,
+                enable_reformat=False,
             )
         )
         register(
             ToolMetadata(
                 name="directions",
-                enable_reformat=True,
+                enable_reformat=False,
             )
         )
         register(
@@ -223,68 +225,12 @@ class MCPAgentBridge:
             logger.info(f"異步初始化完成，完整可用 MCP 工具數量: {len(self.mcp_server.tools)}")
 
         # 將 MCP Server 的工具註冊到 tool_registry
-        self._sync_tools_to_registry()
+        from core.tool_registry import register_mcp_tools_to_registry
+        register_mcp_tools_to_registry(self.mcp_server)
 
         # 快取預熱已移除：啟動時連續調用 7 次 GPT API 增加延遲和成本
         # 實際使用中快取會自然累積，無需預熱
 
-    def _sync_tools_to_registry(self) -> int:
-        """
-        將 MCP Server 的工具同步到 tool_registry
-        
-        Returns:
-            註冊的工具數量
-        """
-        from core.tool_registry import tool_registry
-        
-        count = 0
-        for tool_name, tool in self.mcp_server.tools.items():
-            # 取得工具描述
-            description = getattr(tool, 'description', f'{tool_name} 工具')
-            
-            # 取得參數 Schema
-            parameters = {"type": "object", "properties": {}, "required": []}
-            keywords = []
-            examples = []
-            negative_examples = []
-            category = "general"
-            priority = 100
-            
-            if hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
-                tool_class = tool.handler.__self__
-                
-                # 嘗試從 MCPTool 類別提取完整資訊
-                if hasattr(tool_class, 'get_input_schema'):
-                    try:
-                        parameters = tool_class.get_input_schema()
-                    except Exception as e:
-                        logger.warning(f"取得 {tool_name} schema 失敗: {e}")
-                
-                # 提取增強元資料
-                keywords = getattr(tool_class, 'KEYWORDS', [])
-                examples = getattr(tool_class, 'USAGE_TIPS', [])
-                negative_examples = getattr(tool_class, 'NEGATIVE_EXAMPLES', [])
-                category = getattr(tool_class, 'CATEGORY', 'general')
-                priority = getattr(tool_class, 'PRIORITY', 100)
-            
-            # 判斷是否需要位置
-            props = parameters.get("properties", {})
-            requires_location = "lat" in props or "lon" in props
-            
-            tool_registry.register(
-                name=tool_name,
-                description=description,
-                parameters=parameters,
-                handler=getattr(tool, 'handler', None),
-                category=category,
-                requires_location=requires_location,
-                keywords=keywords,
-                examples=examples,
-            )
-            count += 1
-        
-        logger.info(f"🔧 同步 {count} 個工具到 tool_registry")
-        return count
 
     def _normalize_tool_name(self, raw_name: Optional[str]) -> Optional[str]:
         """
@@ -444,6 +390,155 @@ class MCPAgentBridge:
             "tool_data": fallback_payload,
         }
 
+    async def detect_intent(self, message: str, tool_context: str = "", language: Optional[str] = None) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        意圖偵測（符合 2025 年最佳實踐：語言感知與快取優化）
+        """
+        import hashlib
+        # 將 message, tool_context 與 language 組合後計算 md5
+        cache_raw = f"{message}||{tool_context or ''}||{language or ''}"
+        cache_key = hashlib.md5(cache_raw.encode()).hexdigest()
+
+        # 檢查快取
+        if cache_key in self._intent_cache:
+            has_feature, intent_data, cached_time = self._intent_cache[cache_key]
+            if time.time() - cached_time < self._intent_cache_ttl:
+                logger.debug(f"💾 意圖快取命中: {message[:50]}...")
+                try:
+                    fresh_emotion = await self._analyze_emotion_from_message(message)
+                    if fresh_emotion and intent_data:
+                        intent_data = dict(intent_data)
+                        intent_data['emotion'] = fresh_emotion
+                        logger.info(f"🎭 快取命中但重新偵測情緒: {fresh_emotion}")
+                except Exception as e:
+                    logger.warning(f"快取命中時情緒分析失敗: {e}")
+                return has_feature, intent_data
+            else:
+                del self._intent_cache[cache_key]
+
+        logger.info(f"🔍 檢測意圖（Function Calling）: \"{message[:100]}...\"")
+
+        # 檢查特殊命令
+        for command in ["功能列表", "有什麼功能", "能做什麼"]:
+            if command in message:
+                logger.info(f"檢測到特殊命令: {command}")
+                return True, {"type": "special_command", "command": "feature_list"}
+
+        try:
+            from core.tool_registry import tool_registry
+            from core.tool_router import tool_router
+            
+            all_tools = tool_registry.get_openai_tools(strict=False)
+            
+            if not all_tools:
+                logger.warning("⚠️ 沒有可用的工具，降級為聊天")
+                return False, {"emotion": "neutral"}
+            
+            router_context = {
+                "hour": datetime.now().hour,
+                "language": language
+            }
+            tools = tool_router.filter_tools(all_tools, message, router_context)
+            
+            logger.info(f"🔧 載入 {len(all_tools)} 個工具，過濾後 {len(tools)} 個 (語言: {language})")
+            
+            system_prompt = self._build_function_calling_prompt(language)
+            
+            if tool_context:
+                system_prompt += f"\n\n【已執行的工具結果與上下文】\n請根據以下資訊判斷是否足夠回答用戶，若不足則繼續調用工具：\n{tool_context}"
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message}
+            ]
+            
+            from core.reasoning_strategy import get_optimal_reasoning_effort
+            optimal_effort = get_optimal_reasoning_effort("intent_detection")
+            logger.info(f"🧠 意圖檢測推理強度: {optimal_effort}")
+            
+            emotion_task = asyncio.create_task(self._analyze_emotion_from_message(message))
+
+            response = await ai_service.generate_response_with_tools(
+                messages=messages,
+                tools=tools,
+                user_id="intent_detection",
+                model=None,
+                reasoning_effort=optimal_effort,
+                tool_choice="auto",
+            )
+            
+            try:
+                parallel_emotion = await emotion_task
+            except Exception as e:
+                logger.warning(f"並行情緒分析失敗: {e}")
+                parallel_emotion = "neutral"
+            finally:
+                if not emotion_task.done():
+                    emotion_task.cancel()
+            
+            tool_calls = response.get("tool_calls", [])
+            
+            if tool_calls:
+                tool_call = tool_calls[0]
+                function = tool_call.get("function", {})
+                tool_name = function.get("name", "")
+                arguments_str = function.get("arguments", "{}")
+                
+                try:
+                    arguments = json.loads(arguments_str)
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                normalized_name = self._normalize_tool_name(tool_name)
+                if not normalized_name:
+                    logger.warning(f"⚠️ 工具 {tool_name} 無法對應到註冊名稱，降級為聊天")
+                    return False, {"emotion": "neutral"}
+                
+                logger.info(f"✅ GPT 選擇工具: {normalized_name}")
+                logger.debug(f"工具參數: {_safe_json(arguments)}")
+
+                content = response.get("content", "")
+                if content:
+                    emotion = self._extract_emotion_from_content(content)
+                else:
+                    logger.debug(f"🔍 使用並行情緒分析結果: {parallel_emotion}")
+                    emotion = parallel_emotion
+
+                confidence = self._calculate_tool_confidence(normalized_name, arguments)
+
+                intent_result = (True, {
+                    "type": "mcp_tool",
+                    "tool_name": normalized_name,
+                    "arguments": arguments,
+                    "emotion": emotion,
+                    "confidence": confidence,
+                })
+                
+                self._intent_cache[cache_key] = (*intent_result, time.time())
+                return intent_result
+            
+            else:
+                logger.info("💬 GPT 判斷為一般聊天")
+                emotion = self._extract_emotion_from_content(response.get("content", ""))
+                
+                intent_result = (False, {"emotion": emotion})
+                self._intent_cache[cache_key] = (*intent_result, time.time())
+                return intent_result
+                
+        except Exception as e:
+            logger.error(f"❌ Function Calling 意圖檢測失敗: {e}")
+            logger.info("🔄 嘗試使用關鍵詞匹配作為降級方案")
+            try:
+                fallback_result = self._keyword_intent_detection(message)
+                if fallback_result[0]:
+                    logger.info("✅ 關鍵詞匹配成功")
+                    return fallback_result
+            except Exception as fallback_error:
+                logger.error(f"❌ 關鍵詞匹配也失敗: {fallback_error}")
+        
+        logger.info("💬 降級為一般聊天")
+        return False, {"emotion": "neutral"}
+
     def get_current_time_data(self) -> Dict[str, Any]:
         """
         獲取當前時間數據，用於生成個性化歡迎詞
@@ -480,186 +575,21 @@ class MCPAgentBridge:
             "iso_format": now.isoformat()
         }
 
-    async def detect_intent(self, message: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        """
-        檢測用戶消息中的意圖 (保持與舊 FeatureRouter 相同介面)
-        
-        2025 重構版：使用 OpenAI 原生 Function Calling
-        - 不再使用巨大的 system_prompt 描述每個工具
-        - 工具定義由 tools 參數傳遞，GPT 原生選擇
-        - 新增工具只需註冊到 Registry，不需更新任何 prompt
-
-        參數:
-        message (str): 用戶消息
-
-        返回:
-        tuple: (是否檢測到意圖, 意圖數據)
-        """
-        # 使用新的 IntentDetector（基於 OpenAI Function Calling）
-        return await self._detect_intent_with_function_calling(message)
-
-    async def _detect_intent_with_function_calling(self, message: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        """
-        使用 OpenAI 原生 Function Calling 進行意圖檢測
-        
-        核心改進：
-        1. 工具定義自動從 Registry 生成
-        2. GPT 原生選擇工具並生成結構化參數
-        3. 不需要自定義 prompt 描述每個工具
-        """
-        import hashlib
-        import time as time_module
-        
-        # 生成快取鍵
-        cache_key = hashlib.md5(message.encode()).hexdigest()
-
-        # 檢查快取
-        if cache_key in self._intent_cache:
-            has_feature, intent_data, cached_time = self._intent_cache[cache_key]
-            if time_module.time() - cached_time < self._intent_cache_ttl:
-                logger.debug(f"💾 意圖快取命中: {message[:50]}...")
-
-                # 【關鍵修復】快取命中時，仍需重新偵測情緒（情緒是即時的）
-                # 因為同一句話在不同時間說可能帶有不同的情緒強度
-                try:
-                    fresh_emotion = await self._analyze_emotion_from_message(message)
-                    if fresh_emotion and intent_data:
-                        intent_data = dict(intent_data)  # 複製避免修改原快取
-                        intent_data['emotion'] = fresh_emotion
-                        logger.info(f"🎭 快取命中但重新偵測情緒: {fresh_emotion}")
-                except Exception as e:
-                    logger.warning(f"快取命中時情緒分析失敗: {e}")
-
-                return has_feature, intent_data
-            else:
-                del self._intent_cache[cache_key]
-
-        logger.info(f"🔍 檢測意圖（Function Calling）: \"{message[:100]}...\"")
-
-        # 檢查特殊命令
-        for command in ["功能列表", "有什麼功能", "能做什麼"]:
-            if command in message:
-                logger.info(f"檢測到特殊命令: {command}")
-                return True, {"type": "special_command", "command": "feature_list"}
-
-        try:
-            # 從 tool_registry 取得 OpenAI tools 格式
-            from core.tool_registry import tool_registry
-            from core.tool_router import tool_router
-            
-            all_tools = tool_registry.get_openai_tools(strict=False)
-            
-            if not all_tools:
-                logger.warning("⚠️ 沒有可用的工具，降級為聊天")
-                return False, {"emotion": "neutral"}
-            
-            # 使用 ToolRouter 動態過濾和排序工具
-            context = {"hour": datetime.now().hour}
-            tools = tool_router.filter_tools(all_tools, message, context)
-            
-            logger.info(f"🔧 載入 {len(all_tools)} 個工具，過濾後 {len(tools)} 個")
-            
-            # 建構精簡的 system prompt（只處理特殊規則）
-            system_prompt = self._build_function_calling_prompt()
-            
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message}
-            ]
-            
-            # 使用 OpenAI Function Calling
-            from core.reasoning_strategy import get_optimal_reasoning_effort
-            optimal_effort = get_optimal_reasoning_effort("intent_detection")
-            logger.info(f"🧠 意圖檢測推理強度: {optimal_effort}")
-            
-            response = await ai_service.generate_response_with_tools(
-                messages=messages,
-                tools=tools,
-                user_id="intent_detection",
-                model="gpt-4o-mini",  # 使用更強的模型以提升參數提取準確度
-                reasoning_effort=None,  # gpt-4o-mini 不支援 reasoning_effort
-                tool_choice="auto",
-            )
-            
-            # 解析回應
-            tool_calls = response.get("tool_calls", [])
-            
-            if tool_calls:
-                # GPT 選擇了工具
-                tool_call = tool_calls[0]
-                function = tool_call.get("function", {})
-                tool_name = function.get("name", "")
-                arguments_str = function.get("arguments", "{}")
-                
-                try:
-                    arguments = json.loads(arguments_str)
-                except json.JSONDecodeError:
-                    arguments = {}
-                
-                # 正規化工具名稱
-                normalized_name = self._normalize_tool_name(tool_name)
-                if not normalized_name:
-                    logger.warning(f"⚠️ 工具 {tool_name} 無法對應到註冊名稱，降級為聊天")
-                    return False, {"emotion": "neutral"}
-                
-                logger.info(f"✅ GPT 選擇工具: {normalized_name}")
-                logger.debug(f"工具參數: {_safe_json(arguments)}")
-
-                # 提取情緒（從 content 或直接從用戶訊息分析）
-                content = response.get("content", "")
-                if content:
-                    emotion = self._extract_emotion_from_content(content)
-                else:
-                    # 當 GPT 只回傳 tool_calls 時，直接從用戶訊息分析情緒
-                    logger.debug(f"🔍 GPT content 為空，從用戶訊息分析情緒")
-                    emotion = await self._analyze_emotion_from_message(message)
-
-                intent_result = (True, {
-                    "type": "mcp_tool",
-                    "tool_name": normalized_name,
-                    "arguments": arguments,
-                    "emotion": emotion,
-                })
-                
-                # 寫入快取
-                self._intent_cache[cache_key] = (*intent_result, time_module.time())
-                return intent_result
-            
-            else:
-                # GPT 未選擇工具，視為一般聊天
-                logger.info("💬 GPT 判斷為一般聊天")
-                emotion = self._extract_emotion_from_content(response.get("content", ""))
-                
-                intent_result = (False, {"emotion": emotion})
-                self._intent_cache[cache_key] = (*intent_result, time_module.time())
-                return intent_result
-                
-        except Exception as e:
-            logger.error(f"❌ Function Calling 意圖檢測失敗: {e}")
-            # 降級：使用關鍵詞匹配
-            logger.info("🔄 嘗試使用關鍵詞匹配作為降級方案")
-            try:
-                fallback_result = self._keyword_intent_detection(message)
-                if fallback_result[0]:
-                    logger.info("✅ 關鍵詞匹配成功")
-                    return fallback_result
-            except Exception as fallback_error:
-                logger.error(f"❌ 關鍵詞匹配也失敗: {fallback_error}")
-        
-        # 最終降級：視為一般聊天
-        logger.info("💬 降級為一般聊天")
-        return False, {"emotion": "neutral"}
-
-    def _build_function_calling_prompt(self) -> str:
+    def _build_function_calling_prompt(self, language: Optional[str] = None) -> str:
         """
         建構精簡的 Function Calling system prompt
-        
-        注意：不再描述每個工具，工具定義由 tools 參數傳遞
-        只處理特殊規則和情緒判斷
         """
-        return """You are an intelligent assistant that selects appropriate tools based on user needs.
-
-Rules:
+        from core.prompts.tool_calling_policy import get_tool_calling_policy
+        policy = get_tool_calling_policy()
+        
+        # 根據語系決定基礎提示詞語言
+        lang_context = f"目前的用戶語言是：{language or 'zh (繁體中文)'}"
+        
+        return (
+            f"You are an intelligent assistant. {lang_context}\n\n"
+            + policy
+            + "\n\n"
+            + """Rules:
 1. If the user's request can be solved with a tool, select the most appropriate tool
 2. Only skip tool selection for pure greetings (hi, hello) or meta questions (what can you do)
 3. Extract tool parameters from user message
@@ -676,116 +606,18 @@ Rules:
 
 【重要】語言使用規範：
 - 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）
-- 範例：用戶說「台北天氣」或 "Taipei weather" → 參數 {"city": "Taipei"}
+- 範例：用戶說「台北天氣」或 "Taipei weather" 或 "東京の天気" → 參數 {"city": "Taipei"} 或 {"city": "Tokyo"}
 
 參數語言轉換規則：
-- 城市名稱：台北→Taipei, 新北→NewTaipei, 桃園→Taoyuan, 台中→Taichung, 台南→Tainan, 高雄→Kaohsiung, 新竹→Hsinchu
+- 城市名稱：台北→Taipei, 新北→NewTaipei, 桃園→Taoyuan, 台中→Taichung, 台南→Tainan, 高雄→Kaohsiung, 新竹→Hsinchu, 東京→Tokyo, 大阪→Osaka, 京都→Kyoto
 - 國家名稱：台灣→Taiwan, 美國→USA, 日本→Japan, 英國→UK
-- 貨幣代碼：美元→USD, 台幣→TWD, 日圓→JPY, 歐元→EUR, 英鎊→GBP
+- 貨幣代碼：美元→USD, 台幣→TWD, 日圓/円→JPY, 歐元→EUR, 英鎊→GBP
 
-【重要】城市參數提取原則：
-- 只有在用戶明確提到城市名稱時才填 city 參數
-- 「附近」「這裡」「我這邊」等詞 → 不填 city 參數，系統會自動從 GPS 判斷
-- 「台北的XX」「桃園XX」→ 填對應的英文城市名
-- 範例：「附近的 YouBike」→ {}，「桃園的 YouBike」→ {"city": "Taoyuan"}
-
-匯率查詢（重要！參數提取規則）：
-當用戶詢問匯率資訊時，你必須從消息中提取貨幣代碼並填入參數。
-
-參數提取規則：
-1. 句型「[貨幣A]轉[貨幣B]」「[貨幣A]換[貨幣B]」「[貨幣A]兌[貨幣B]」→ {"from_currency": "代碼A", "to_currency": "代碼B"}
-2. 句型「[數字][貨幣A]是多少[貨幣B]」→ {"from_currency": "代碼A", "to_currency": "代碼B", "amount": 數字}
-3. 句型「匯率」「美金」「日幣」→ 提取提到的貨幣
-4. 貨幣代碼必須用 ISO 4217 標準（3個大寫字母）
-
-常見貨幣代碼對照：
-- 美元/美金 → USD
-- 台幣/新台幣 → TWD
-- 日圓/日幣 → JPY
-- 歐元 → EUR
-- 英鎊 → GBP
-- 人民幣 → CNY
-- 港幣 → HKD
-- 韓元 → KRW
-
-實際範例：
-- 「美元轉日幣的匯率」→ {"from_currency": "USD", "to_currency": "JPY"}
-- 「台幣換美金」→ {"from_currency": "TWD", "to_currency": "USD"}
-- 「100美元是多少台幣」→ {"from_currency": "USD", "to_currency": "TWD", "amount": 100}
-- 「歐元兌日圓」→ {"from_currency": "EUR", "to_currency": "JPY"}
-- 「匯率」→ {"from_currency": "USD", "to_currency": "TWD"}（預設）
-
-重要：必須提取貨幣代碼！不要返回空參數！
-
-公車查詢（重要！參數提取規則）：
-當用戶詢問公車資訊時，你必須從消息中提取路線號碼並填入參數。
-
-tdx_bus_arrival 適用場景：
-- 查詢「已知路線號碼」的到站時間
-- 查詢附近公車站點（不需 route_name）
-
-參數提取規則：
-1. 句型「[數字]公車」「[數字]號公車」→ {"route_name": "數字"}
-2. 句型「[顏色][數字]」（如「紅30」）→ {"route_name": "顏色數字"}
-3. 句型「[數字]還要多久」「[數字]什麼時候到」→ {"route_name": "數字"}
-4. 句型「[路線名]公車到站」→ {"route_name": "路線名"}
-5. 「附近公車」「公車站」「有什麼公車」→ {}（系統自動從 GPS 判斷城市）
-6. 城市參數：只在用戶明確提到城市時才填，否則留空讓系統自動判斷
-
-實際範例：
-- 「261公車什麼時候到」→ {"route_name": "261"}（不填 city）
-- 「307還要多久」→ {"route_name": "307"}（不填 city）
-- 「台北261公車」→ {"route_name": "261", "city": "Taipei"}（明確提到台北）
-- 「桃園紅30公車」→ {"route_name": "紅30", "city": "Taoyuan"}（明確提到桃園）
-- 「附近有什麼公車」→ {}（完全空參數，系統自動判斷）
-
-不適用場景（應使用 directions）：
-- 「從A到B的公車」「往XX的公車」→ 這是路線規劃，不是查詢特定路線
-- 「去台北的公車」→ 台北是目的地，不是路線號碼
-
-重要：如果提到路線號碼，必須提取！城市參數必須用英文！
-
-火車查詢（重要！參數提取規則）：
-當用戶詢問火車資訊時，你必須從消息中提取站名並填入參數。
-
-參數提取規則（適用於任何地名）：
-1. 句型「從 [地名A] 往/到 [地名B]」→ {"origin_station": "地名A", "destination_station": "地名B"}
-2. 句型「[地名A] 到/往 [地名B]」→ {"origin_station": "地名A", "destination_station": "地名B"}
-3. 句型「往/去 [地名]」→ {"destination_station": "地名"}
-4. 句型「[車種][數字]次」→ {"train_no": "數字"}
-5. 包含時間 → 提取為 departure_time（HH:MM 格式）
-
-實際範例：
-- 「從彰化往台北的火車」→ {"origin_station": "彰化", "destination_station": "台北"}
-- 「台中到高雄」→ {"origin_station": "台中", "destination_station": "高雄"}
-- 「往新竹的火車」→ {"destination_station": "新竹"}
-- 「自強號123次」→ {"train_no": "123"}
-- 「早上8點台南到台北」→ {"origin_station": "台南", "destination_station": "台北", "departure_time": "08:00"}
-
-重要：絕對不要返回空的 {} 參數！必須從用戶消息中提取站名！
-
-位置查詢：
-- 「我在哪」使用 reverse_geocode，不需要參數
-- 「怎麼去XX」使用 forward_geocode 或 directions
-
-YouBike 查詢（重要！參數提取規則）：
-當用戶詢問 YouBike/Ubike/微笑單車時，你必須調用 tdx_youbike 工具。
-
-參數提取規則：
-1. 「附近的 YouBike」「Ubike 在哪」→ {}（不填 city，系統自動從 GPS 判斷）
-2. 「市政府 YouBike」「台北車站 Ubike」→ {"station_name": "市政府"}（不填 city）
-3. 「XX站還有車嗎」→ {"station_name": "XX站"}（不填 city）
-4. 「台北的 YouBike」「桃園 YouBike」→ 填對應英文城市名
-5. 站名可用中文，城市必須用英文
-
-實際範例：
-- 「附近的 YouBike」→ {}（完全空參數，系統自動判斷城市）
-- 「市政府 YouBike 還有車嗎」→ {"station_name": "市政府"}（不填 city）
-- 「台北車站 Ubike」→ {"station_name": "台北車站"}（不填 city）
-- 「台北的 YouBike」→ {"city": "Taipei"}（明確提到台北）
-- 「桃園 YouBike」→ {"city": "Taoyuan"}（明確提到桃園）
-
-重要：只在用戶明確提到城市時才填 city 參數！站名可保持中文！
+【Answerability Check - Confidence-Driven Agent Loop】
+1. Evaluate provided "tool_context" (if any) against the user's request.
+2. If tool_context contains sufficient information to answer the user with ~100% confidence, do NOT call any more tools.
+3. If information is missing, inconsistent, or outdated, select the appropriate tool to gather more evidence (work_again).
+4. If the user's question is "Can you find X and then Y?", you must first find X, evaluate its result, then in the next turn find Y based on X.
 
 【情緒偵測】（重要！）：
 - 分析用戶的情緒狀態（根據用詞、語氣、標點符號、表情符號）
@@ -799,6 +631,38 @@ YouBike 查詢（重要！參數提取規則）：
   * 用戶說「哇！」→ 回應最後加上 [EMOTION:surprise]
   * 一般對話 → 回應最後加上 [EMOTION:neutral]
 """
+        )
+
+    def _calculate_tool_confidence(self, tool_name: str, arguments: Dict[str, Any]) -> float:
+        """根據工具所需參數動態計算信心度"""
+        if not tool_name:
+            return 0.0
+
+        try:
+            from core.tool_registry import tool_registry
+            tool_def = tool_registry.get_tool(tool_name)
+            
+            # 如果找不到工具定義，或者該工具沒有 parameters
+            if not tool_def or not tool_def.parameters:
+                return 0.95 if arguments else 0.92
+
+            required_params = tool_def.parameters.get("required", [])
+            
+            if not required_params:
+                return 1.0  # 不需要任何參數，直接給最高信心度
+                
+            # 檢查缺少的必填參數數量
+            missing_count = sum(1 for req in required_params if req not in arguments or arguments[req] is None or str(arguments[req]).strip() == "")
+            
+            if missing_count == 0:
+                return 1.0
+                
+            # 每缺少一個必填參數，扣除一定比例的信心度（確保其低於 MIN_TOOL_CONFIDENCE 0.90）
+            return max(0.0, 0.95 - (missing_count * 0.5))
+        except Exception as e:
+            logger.warning(f"⚠️ 計算工具信心度失敗: {e}")
+            return 0.95 if arguments else 0.92
+
 
     def _extract_emotion_from_content(self, content: str) -> str:
         """從回應內容中提取情緒標籤 [EMOTION:xxx]"""
@@ -830,9 +694,18 @@ YouBike 查詢（重要！參數提取規則）：
             import services.ai_service as ai_service
 
             system_prompt = (
-                "分析用戶訊息的情緒狀態。\n"
-                "情緒類型：neutral（平靜）、happy（開心）、sad（難過）、angry（生氣）、fear（害怕）、surprise（驚訝）\n"
-                "只回傳情緒類型的英文單字，不要有任何其他文字。"
+                "## 任務：純粹情緒分類\n"
+                "你是一個專業的情緒分析員。請分析用戶訊息的情緒狀態，並僅從以下列表中選擇一個最符合的標籤：\n"
+                "- neutral（平靜/詢問資訊）\n"
+                "- happy（開心/興奮）\n"
+                "- sad（難過/沮喪）\n"
+                "- angry（生氣/不滿）\n"
+                "- fear（害怕/焦慮）\n"
+                "- surprise（驚訝/震撼）\n\n"
+                "## 規則：\n"
+                "1. **絕對不要回答用戶的問題**（例如用戶問股價，你絕對不能回答數字）。\n"
+                "2. **只能回傳單個英文標籤**，不要有任何解釋或標點符號。\n"
+                "3. 如果訊息是中性的事實詢問，請回傳 neutral。"
             )
 
             messages = [
@@ -842,7 +715,7 @@ YouBike 查詢（重要！參數提取規則）：
 
             emotion = await ai_service.generate_response_async(
                 messages=messages,
-                model="gpt-4o-mini",
+                model=None,
                 max_tokens=10,
             )
 
@@ -991,29 +864,35 @@ YouBike 查詢（重要！參數提取規則）：
             import re
             city_match = re.search(r'([^\s，。！？]+)\s*天氣', message)
             city = city_match.group(1) if city_match else "台北"
+            args = {"city": city}
 
             return True, {
                 "type": "mcp_tool",
                 "tool_name": "weather_query",
-                "arguments": {"city": city}
+                "arguments": args,
+                "confidence": self._calculate_tool_confidence("weather_query", args)
             }
 
         # 新聞檢測
         news_keywords = ["新聞", "消息", "報導", "news"]
         if any(kw in message_lower for kw in news_keywords):
+            args = {"language": "zh-TW", "limit": 5}
             return True, {
                 "type": "mcp_tool",
                 "tool_name": "news_query",
-                "arguments": {"language": "zh-TW", "limit": 5}
+                "arguments": args,
+                "confidence": self._calculate_tool_confidence("news_query", args)
             }
 
         # 匯率檢測
         exchange_keywords = ["匯率", "美元", "台幣", "exchange", "usd", "twd"]
         if any(kw in message_lower for kw in exchange_keywords):
+            args = {"from_currency": "USD", "to_currency": "TWD"}
             return True, {
                 "type": "mcp_tool",
                 "tool_name": "exchange_query",
-                "arguments": {"from_currency": "USD", "to_currency": "TWD"}
+                "arguments": args,
+                "confidence": self._calculate_tool_confidence("exchange_query", args)
             }
 
         return False, None
@@ -1213,6 +1092,9 @@ YouBike 查詢（重要！參數提取規則）：
                 "⭐ 分析使用者的核心意圖（問溫度？天氣？時間？地點？數量？）\n"
                 "⭐ 從工具數據中只提取相關資訊，無關資訊一律省略\n"
                 "⭐ **注意：用什麼語言提問，就用什麼語言回答**（日文問→日文答，英文問→英文答）\n\n"
+                "【反幻覺與安全原則】\n"
+                "🚨 嚴禁推測：如果工具返回的資料缺漏，必須誠實告知用戶，絕對不能自己憑空捏造數字或事實\n"
+                "🚨 不得把工具錯誤包裝成成功結果：如果工具返回錯誤或查無資料，不能說「我查到了」\n\n"
                 "【回應要求】\n"
                 "1. 使用口語化、親切的語氣（可以用「喔」「呢」「哦」等語氣詞）\n"
                 "2. 不要列表式的羅列數據，而是用對話方式描述\n"
@@ -1243,13 +1125,16 @@ YouBike 查詢（重要！參數提取規則）：
                 {"role": "user", "content": user_prompt}
             ]
 
-            # 格式化回應使用 gpt-4o-mini（支援多語言，不需 reasoning_effort）
-            response = await ai_service.generate_response_for_user(
+            # 格式化回應使用環境變數設定的模型
+            model = settings.GPT_INTENT_MODEL or settings.OPENAI_MODEL
+            logger.info(f"🎨 使用配置模型進行格式化: {model}")
+            
+            response = await ai_service.generate_response_with_tools(
                 messages=messages,
-                user_id="format_response",
-                model="gpt-4o-mini",  # 升級到 gpt-4o-mini 以支援多語言
-                chat_id=None,
-                reasoning_effort=None  # gpt-4o-mini 不支援此參數
+                tools=None,
+                user_id="reformatting",
+                model=model,
+                reasoning_effort=None,
             )
 
             return response

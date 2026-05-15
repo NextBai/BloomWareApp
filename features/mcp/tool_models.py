@@ -10,6 +10,7 @@ class ToolMetadata:
     enable_reformat: bool = False
     flow: Optional[str] = None  # 例如 "navigation"
     env_fallbacks: Dict[str, List[str]] = field(default_factory=dict)  # 環境變數 fallback 映射，例如 {"city": ["detailed_address", "label"]}
+    supports_location_query: bool = False
 
 
 @dataclass

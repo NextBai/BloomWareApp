@@ -6,6 +6,7 @@
 重構版本：整合 Pydantic Schema 自動生成
 """
 
+import inspect
 from typing import Dict, List, Any, Optional, Callable, Type
 from dataclasses import dataclass, field
 
@@ -18,6 +19,7 @@ from core.tool_schema import (
     extract_schema_from_mcp_tool,
 )
 
+from features.mcp.tools.base_tool import MCPTool
 logger = get_logger("core.tool_registry")
 
 
@@ -246,35 +248,45 @@ def register_mcp_tools_to_registry(mcp_server) -> int:
     count = 0
 
     for tool_name, tool in mcp_server.tools.items():
-        # 優先嘗試從 MCPTool 類別提取完整 Schema
+        # 1. 嘗試獲取工具類別
+        tool_class = None
         if hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
-            tool_class = tool.handler.__self__
-            if tool_registry.register_mcp_tool(type(tool_class)):
-                count += 1
-                continue
-        
-        # 降級：使用舊方法註冊
-        description = getattr(tool, 'description', f'{tool_name} 工具')
-        parameters = {"type": "object", "properties": {}, "required": []}
-
-        if hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
-            tool_class = tool.handler.__self__
-            if hasattr(tool_class, 'get_input_schema'):
+            tool_class = type(tool.handler.__self__)
+        elif hasattr(tool, 'handler') and hasattr(tool.handler, '__closure__') and tool.handler.__closure__:
+            # 嘗試從閉包中找 (例如 classmethod_wrapper or instance_wrapper)
+            for cell in tool.handler.__closure__:
                 try:
-                    parameters = tool_class.get_input_schema()
-                except Exception as e:
-                    logger.warning(f"取得 {tool_name} schema 失敗: {e}")
-
-        # 提取關鍵字和範例
+                    contents = cell.cell_contents
+                    # 檢查是否為 MCPTool 類別或實例 (使用鴨子類型，避免模組導入路徑不一致問題)
+                    if inspect.isclass(contents) and hasattr(contents, 'get_input_schema') and hasattr(contents, 'NAME'):
+                        tool_class = contents
+                        break
+                    elif not inspect.isclass(contents) and hasattr(contents, 'get_input_schema') and hasattr(contents, 'NAME'):
+                        tool_class = type(contents)
+                        break
+                except:
+                    continue
+        
+        # 2. 如果能找到類別，使用 register_mcp_tool (這會處理 rich description)
+        if tool_class and tool_registry.register_mcp_tool(tool_class):
+            count += 1
+            continue
+        
+        # 3. 降級：手動提取並註冊
+        description = getattr(tool, 'description', f'{tool_name} 工具')
+        parameters = getattr(tool, 'inputSchema', {"type": "object", "properties": {}, "required": []})
+        output_schema = getattr(tool, 'outputSchema', None)
+        
+        # 嘗試從 handler 閉包中找 tool_class (如果有的話)
+        # 或者從 tool.metadata 找
         keywords = []
         examples = []
-        if hasattr(tool, 'handler') and hasattr(tool.handler, '__self__'):
-            tool_class = tool.handler.__self__
-            keywords = getattr(tool_class, 'KEYWORDS', [])
-            examples = getattr(tool_class, 'USAGE_TIPS', [])
-
-        # 判斷分類
-        category = _infer_category(tool_name)
+        if hasattr(tool, 'metadata') and tool.metadata:
+            keywords = tool.metadata.get('keywords', [])
+            examples = tool.metadata.get('usage_tips', []) or tool.metadata.get('examples', [])
+            category = tool.metadata.get('category', 'general')
+        else:
+            category = _infer_category(tool_name)
 
         # 判斷是否需要位置
         requires_location = _requires_location(tool_name, parameters)

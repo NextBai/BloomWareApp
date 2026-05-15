@@ -5,6 +5,7 @@ let lastPosition = null;
 let lastSentPosition = null;  // 上次發送的位置
 let lastSendTime = 0;         // 上次發送時間
 let isTracking = false;
+let isIPFallbackTriggered = false; // 避免 IP 定位服務重複觸發
 
 const MIN_SEND_INTERVAL = 60000;  // 最小發送間隔：60 秒
 const MIN_DISTANCE_CHANGE = 100;  // 最小距離變化：100 米
@@ -114,20 +115,62 @@ function handlePositionError(error) {
     case error.POSITION_UNAVAILABLE:
       errorMessage = '無法取得位置資訊';
       console.warn('⚠️ 位置資訊暫時無法取得');
+      triggerIPFallback();
       break;
     case error.TIMEOUT:
       errorMessage = '定位請求逾時';
       console.warn('⚠️ 定位請求逾時');
+      triggerIPFallback();
       break;
     default:
       errorMessage = '未知錯誤';
       console.warn('⚠️ 定位發生未知錯誤:', error);
   }
 
+  // 避免在嘗試 IP fallabck 成功前就送出 null
+  if (!isIPFallbackTriggered || error.code === error.PERMISSION_DENIED) {
+    sendEnvironmentSnapshot({
+      lat: null,
+      lon: null,
+      error: errorMessage,
+      timestamp: Date.now()
+    });
+  }
+}
+
+async function triggerIPFallback() {
+  if (isIPFallbackTriggered) return;
+  isIPFallbackTriggered = true;
+  
+  try {
+    const res = await fetch('https://ipapi.co/json/');
+    if (!res.ok) throw new Error(`IP Geo API HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.latitude && data.longitude) {
+      console.log(`📍 [GeoIP] IP 定位備援成功 (${data.city}, ${data.country_name})`);
+      const ipPosition = {
+        coords: {
+          latitude: data.latitude,
+          longitude: data.longitude,
+          accuracy: 5000, 
+          heading: null,
+          speed: null
+        },
+        timestamp: Date.now()
+      };
+      // 利用模擬的 Position 物件更新系統
+      handlePositionUpdate(ipPosition);
+      return;
+    }
+  } catch (err) {
+    console.warn('⚠️ [GeoIP] IP 定位備援同樣失敗:', err);
+  }
+
+  // Fallback 失敗時依然丟回最後的 snapshot（帶著錯誤狀態）
   sendEnvironmentSnapshot({
     lat: null,
     lon: null,
-    error: errorMessage,
+    error: '精準定位與 IP 定位均失敗',
     timestamp: Date.now()
   });
 }

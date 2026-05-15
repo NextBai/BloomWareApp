@@ -361,7 +361,8 @@ function getIconForTool(toolName, category) {
     'tdx_metro': '🚇',
     'reverse_geocode': '📍',
     'forward_geocode': '📍',
-    'directions': '🗺️'
+    'directions': '🗺️',
+    'environment_context': '🌍'
   };
 
   if (iconMap[toolName]) {
@@ -373,6 +374,81 @@ function getIconForTool(toolName, category) {
   }
 
   return '🔧';
+}
+
+function displayMultipleToolCards(toolsArray) {
+  clearAllCards();
+  if (!toolsArray || toolsArray.length === 0) return;
+
+  if (toolDrawerContent) {
+    toolDrawerContent.innerHTML = '';
+  }
+
+  toolsArray.forEach((tool, index) => {
+    const toolName = tool.tool_name;
+    const toolData = tool.tool_data;
+    
+    const toolMeta = toolsMetadata[toolName] || {};
+    const category = toolMeta.category || '未知';
+    const icon = getIconForTool(toolName, category);
+    const contentHTML = renderCardContent(toolName, toolData);
+
+    const card = document.createElement('div');
+    card.className = 'voice-tool-card';
+    card.dataset.type = toolName;
+    card.style.marginBottom = '15px';
+    card.style.position = 'relative';
+
+    card.innerHTML = `
+      <div class="card-header">
+        <div class="card-icon">${icon}</div>
+        <h3>${category}</h3>
+        <span style="margin-left:auto; font-size:12px; color:#888;">${index + 1}/${toolsArray.length}</span>
+      </div>
+      <div class="card-content" style="max-height: 300px; overflow-y: auto; overflow-x: hidden; padding-right: 8px;">${contentHTML}</div>
+    `;
+
+    if (toolDrawerContent) {
+      toolDrawerContent.appendChild(card);
+    }
+  });
+
+  if (toolDrawerContent) {
+    showToolDrawerToggle();
+  }
+
+  const lastTool = toolsArray[toolsArray.length - 1];
+  const lastToolName = lastTool.tool_name;
+  const lastToolData = lastTool.tool_data;
+  
+  const toolMeta = toolsMetadata[lastToolName] || {};
+  const category = toolMeta.category || '未知';
+  const icon = getIconForTool(lastToolName, category);
+  const contentHTML = renderCardContent(lastToolName, lastToolData);
+
+  const floatingCard = document.createElement('div');
+  floatingCard.className = 'voice-tool-card';
+  floatingCard.dataset.type = lastToolName;
+
+  let extraHeaderHtml = '';
+  if (toolsArray.length > 1) {
+    extraHeaderHtml = `<button onclick="showToolDrawer()" style="margin-left:auto; background:rgba(0,100,255,0.1); color:#0066cc; border:none; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:bold; cursor:pointer;">查看全部 (${toolsArray.length})</button>`;
+  }
+
+  floatingCard.innerHTML = `
+    <div class="card-header">
+      <div class="card-icon">${icon}</div>
+      <h3>${category}</h3>
+      ${extraHeaderHtml}
+    </div>
+    <div class="card-content" style="max-height: 300px; overflow-y: auto; overflow-x: hidden; padding-right: 8px;">${contentHTML}</div>
+  `;
+
+  const position = getNextPosition();
+  if (position && cardsContainer) {
+    floatingCard.classList.add(position);
+    cardsContainer.appendChild(floatingCard);
+  }
 }
 
 function displayToolCard(toolName, toolData) {
@@ -476,6 +552,10 @@ function renderCardContent(toolName, toolData) {
 
   if (toolData.lat && toolData.lon && toolData.display_name && toolName === 'forward_geocode') {
     return renderForwardGeocode(toolData);
+  }
+
+  if (toolName === 'environment_context' || (toolData.lat && toolData.lon && toolData.label)) {
+    return renderEnvironmentContext(toolData);
   }
 
   if (toolData.raw_data && typeof toolData.raw_data === 'object') {
@@ -1188,6 +1268,54 @@ function renderForwardGeocode(data) {
       <span class="data-label">🌐 ${labels.coordinates}</span>
       <span class="data-value" style="font-size: 0.85em;">${lat}, ${lon}</span>
     </div>
+    <div class="data-row" style="margin-top: 8px;">
+      <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
+        🗺️ ${labels.view_in_maps} →
+      </a>
+    </div>
+  `;
+}
+
+function renderEnvironmentContext(data) {
+  const labels = LABELS[currentLanguage] || LABELS.zh;
+  const label = data.label || labels.unknown;
+  const detailedAddress = data.detailed_address || '';
+  const lat = data.lat?.toFixed(6) || '';
+  const lon = data.lon?.toFixed(6) || '';
+  const accuracy = data.accuracy_m ? `${data.accuracy_m}m` : '';
+  const device = data.device || {};
+  const platform = device.platform || '';
+  const tz = data.tz || '';
+
+  const mapsUrl = `https://www.google.com/maps?q=${lat},${lon}`;
+
+  return `
+    <div class="data-row">
+      <span class="data-label">📍 ${labels.location}</span>
+      <span class="data-value" style="font-weight: bold;">${label}</span>
+    </div>
+    ${detailedAddress && detailedAddress !== label ? `
+    <div class="data-row">
+      <span class="data-label">🏠 ${labels.address}</span>
+      <span class="data-value" style="font-size: 0.85em;">${detailedAddress}</span>
+    </div>
+    ` : ''}
+    <div class="data-row">
+      <span class="data-label">🌐 ${labels.coordinates}</span>
+      <span class="data-value" style="font-size: 0.85em;">${lat}, ${lon} ${accuracy ? `(±${accuracy})` : ''}</span>
+    </div>
+    ${tz ? `
+    <div class="data-row">
+      <span class="data-label">⏰ 時區</span>
+      <span class="data-value">${tz}</span>
+    </div>
+    ` : ''}
+    ${platform ? `
+    <div class="data-row">
+      <span class="data-label">💻 設備</span>
+      <span class="data-value">${platform}</span>
+    </div>
+    ` : ''}
     <div class="data-row" style="margin-top: 8px;">
       <a href="${mapsUrl}" target="_blank" style="color: #0066cc; text-decoration: none; font-size: 0.9em;">
         🗺️ ${labels.view_in_maps} →

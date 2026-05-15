@@ -1,20 +1,54 @@
-let currentState = 'idle';
+window.currentState = 'idle';
+window.thinkingTimeout = null;
+window.stateBufferTimeout = null;
 
+/**
+ * 設置 Agent 狀態，加入緩衝機制防止動畫閃爍
+ */
 function setState(newState, options = {}) {
-  if (currentState === newState) {
+  if (window.currentState === newState && !window.stateBufferTimeout) {
     return;
   }
 
-  const oldState = currentState;
-  currentState = newState;
+  // 如果有待處理的狀態轉換，先清除它
+  if (window.stateBufferTimeout) {
+    clearTimeout(window.stateBufferTimeout);
+    window.stateBufferTimeout = null;
+  }
 
+  // 針對進入 idle 狀態加入微小延遲，避免在快速切換（如 speaking -> idle -> recording）時花瓣動畫跳轉
+  if (newState === 'idle') {
+    window.stateBufferTimeout = setTimeout(() => {
+      window.stateBufferTimeout = null;
+      applyStateChange('idle', options);
+    }, 150);
+  } else {
+    applyStateChange(newState, options);
+  }
+}
+
+/**
+ * 實際執行狀態變更與 UI 更新
+ */
+function applyStateChange(newState, options) {
+  const oldState = window.currentState;
+  window.currentState = newState;
+  console.log(`🔄 狀態切換: ${oldState} -> ${newState}`);
+
+  // 清除之前的思考超時計時器
+  if (window.thinkingTimeout) {
+    clearTimeout(window.thinkingTimeout);
+    window.thinkingTimeout = null;
+  }
+
+  // 更新麥克風容器樣式
   micContainer.classList.remove('recording', 'thinking', 'speaking', 'disconnected');
 
   switch(newState) {
     case 'idle':
-      hideAgentOutput();
+      // idle 狀態不應主動隱藏輸出，讓使用者能看清最後的回覆
       if (typeof stopSpeaking === 'function') {
-        stopSpeaking();
+        stopSpeaking(true, 'state_idle');
       }
       if (options.clearCards !== false) {
         clearAllCards();
@@ -37,8 +71,17 @@ function setState(newState, options = {}) {
       micContainer.classList.add('thinking');
       hideAgentOutput();
       if (typeof stopSpeaking === 'function') {
-        stopSpeaking();
+        stopSpeaking(true, 'state_thinking');
       }
+      
+      // 設定思考超時重置 (45秒)
+      window.thinkingTimeout = setTimeout(() => {
+        if (window.currentState === 'thinking') {
+          console.warn('⚠️ 思考時間過長，自動重置');
+          showErrorNotification('抱歉，處理時間過長，請再試一次。');
+          resetAgent({clearCards: false});
+        }
+      }, 45000);
       break;
 
     case 'speaking':
@@ -52,7 +95,7 @@ function setState(newState, options = {}) {
       micContainer.classList.add('disconnected');
       hideAgentOutput();
       if (typeof stopSpeaking === 'function') {
-        stopSpeaking();
+        stopSpeaking(true, 'state_disconnected');
       }
       clearAllCards();
       break;
@@ -62,25 +105,57 @@ function setState(newState, options = {}) {
   }
 }
 
-function applyEmotion(emotion) {
+window.currentEmotion = 'neutral';
+window.isInCareMode = false;
+
+function applyEmotion(emotion, careMode = null) {
+    if (careMode !== null) {
+        window.isInCareMode = !!careMode;
+    }
   const validEmotions = ['neutral', 'happy', 'sad', 'angry', 'fear', 'surprise'];
+  
+  // 🎯 支援多語言/原始標籤映射，確保 100% 信心
+  const mapping = {
+    '悲傷(sad)': 'sad', '悲傷': 'sad',
+    '開心(happy)': 'happy', '開心': 'happy',
+    '生氣(angry)': 'angry', '生氣': 'angry',
+    '恐懼(fear)': 'fear', '恐懼': 'fear',
+    '驚訝(surprise)': 'surprise', '驚訝': 'surprise',
+    '中性(neutral)': 'neutral', '中性': 'neutral'
+  };
+  
+  if (mapping[emotion]) {
+    emotion = mapping[emotion];
+  }
+
   if (!validEmotions.includes(emotion)) {
     emotion = 'neutral';
   }
 
   background.className = `voice-immersive-background emotion-${emotion} active`;
   emotionIndicator.textContent = `當前情緒: ${emotionEmojis[emotion]}`;
+  
+  // 🎯 保存到全域狀態，供 TTS 使用
+  window.currentEmotion = emotion;
 }
 
 function showErrorNotification(message) {
   console.error('🚨 錯誤:', message);
 
-  setState('speaking', {
-    outputText: `抱歉，發生錯誤：${message}`,
-    enableTTS: false
-  });
+  // 立即重置 Agent 狀態（關閉花朵，停止錄音/語音）
+  resetAgent({ clearCards: false });
 
-  setTimeout(() => setState('idle'), 3000);
+  // 顯示錯誤訊息於輸出區域，但不切換到 speaking 狀態（讓花朵保持 idle）
+  if (typeof typewriterEffect === 'function') {
+    typewriterEffect(`抱歉，發生錯誤：${message}`, 40, false);
+  }
+  
+  // 3秒後自動隱藏錯誤訊息
+  setTimeout(() => {
+    if (currentState === 'idle') {
+      hideAgentOutput();
+    }
+  }, 5000);
 }
 
 
@@ -89,9 +164,33 @@ let isDisconnected = false;
 let isRecording = false;
 let isSpeaking = false;
 
+function resetAgent(options = {}) {
+  isRecording = false;
+  isThinking = false;
+  isSpeaking = false;
+  isDisconnected = false;
+  
+  if (typeof stopSpeaking === 'function') {
+    stopSpeaking(true, 'reset_agent');
+  }
+  
+  if (typeof stopRealAudioAnalysis === 'function') {
+    stopRealAudioAnalysis();
+  }
+  
+  if (wsManager && typeof wsManager.stopRecording === 'function') {
+    wsManager.stopRecording();
+  }
+  
+  if (typeof transcript !== 'undefined' && transcript) {
+    transcript.textContent = '';
+  }
+  
+  setState('idle', options);
+}
+
 function initAgentControls() {
-  micContainer.addEventListener('click', async () => {
-    
+  const handleMicInteraction = async () => {
     if (currentState === 'recording') {
       isRecording = false;
       
@@ -109,13 +208,16 @@ function initAgentControls() {
     
     if (currentState === 'idle' || currentState === 'disconnected' || currentState === 'speaking') {
       if (currentState === 'speaking' && typeof stopSpeaking === 'function') {
-        stopSpeaking();
+        stopSpeaking(true, 'mic_interrupt');
       }
       
       isRecording = true;
       setState('recording', {
         keepOutput: true,  // 保留前次 Agent 回應
-        keepCards: true    // 保留前次工具卡片
+        keepCards: true,   // 保留前次工具卡片
+        detect_timeout: 20.0,   // 考量到 Function Calling 可能較慢
+        feature_timeout: 30.0,  // MCP 工具內部超時
+        ai_timeout: 25.0       // 配合 Streaming
       });
       
       if (typeof startRealAudioAnalysis === 'function') {
@@ -126,22 +228,30 @@ function initAgentControls() {
         const success = await wsManager.startRecording();
         if (!success) {
           console.error('❌ 錄音啟動失敗');
-          setState('idle');
-          isRecording = false;
-          if (typeof stopRealAudioAnalysis === 'function') {
-            stopRealAudioAnalysis();
-          }
+          resetAgent();
         }
       } else {
         console.error('❌ WebSocket 管理器未初始化');
-        setState('idle');
-        isRecording = false;
-        if (typeof stopRealAudioAnalysis === 'function') {
-          stopRealAudioAnalysis();
-        }
+        resetAgent();
       }
     }
-  });
+  };
+
+  // 點擊麥克風中心
+  micContainer.addEventListener('click', handleMicInteraction);
+  
+  // 點擊波形容器（較大區域）也觸發交互，提高可用性
+  const waveformContainer = document.querySelector('.voice-waveform-container');
+  if (waveformContainer) {
+    waveformContainer.style.cursor = 'pointer';
+    waveformContainer.addEventListener('click', (e) => {
+      // 如果點擊的是 micContainer 內部，就不重複觸發（事件冒泡）
+      if (e.target === micContainer || micContainer.contains(e.target)) {
+        return;
+      }
+      handleMicInteraction();
+    });
+  }
 
   document.getElementById('toggle-recording').addEventListener('click', async () => {
     isRecording = !isRecording;

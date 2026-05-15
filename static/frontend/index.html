@@ -1,12 +1,16 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ws: wss: https://accounts.google.com; img-src 'self' data: https: blob:; media-src 'self' blob: data:; frame-src https://accounts.google.com; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://accounts.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ws: wss: https://accounts.google.com; img-src 'self' data: https: blob:; media-src 'self' blob: data:; frame-src https://accounts.google.com; base-uri 'self';">
   <title>Bloom Ware 語音沉浸式 - 光暈花瓣版</title>
   <link rel="icon" href="/login/icon.svg" type="image/svg+xml">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
   <style>
     * {
       box-sizing: border-box;
@@ -21,9 +25,12 @@
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
       /* 2025 最佳實踐：多層 fallback 確保相容性 */
-      height: 100vh; /* fallback 1: 傳統瀏覽器 */
-      height: 100svh; /* fallback 2: 小視窗高度 */
-      height: 100dvh; /* 主要方案: 動態視窗高度（iframe 最佳） */
+      height: 100vh;
+      /* fallback 1: 傳統瀏覽器 */
+      height: 100svh;
+      /* fallback 2: 小視窗高度 */
+      height: 100dvh;
+      /* 主要方案: 動態視窗高度（iframe 最佳） */
       /* 針對 WebKit 瀏覽器的額外修正 */
       height: -webkit-fill-available;
     }
@@ -41,7 +48,8 @@
       backdrop-filter: blur(20px) saturate(180%);
       max-width: 320px;
       box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-      display: none; /* 隱藏模擬面板 */
+      display: none;
+      /* 隱藏模擬面板 */
     }
 
     .control-panel h3 {
@@ -122,24 +130,32 @@
       left: 0;
       right: 0;
       bottom: 0;
-      /* 2025 最佳實踐：漸進式增強 */
       width: 100vw;
-      width: 100dvw; /* 動態寬度（iframe 最佳） */
-      height: 100vh; /* fallback 1 */
-      height: 100svh; /* fallback 2 */
-      height: 100dvh; /* 主要方案 */
-      height: -webkit-fill-available; /* WebKit 修正 */
+      height: 100dvh;
       z-index: 100;
+      overflow: hidden;
+      pointer-events: none;
+      background: #F5F1ED;
+    }
+
+    .voice-center-container {
+      position: fixed;
+      top: 33%;
+      left: 50%;
+      transform: translate(-50%, -50%);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: #F5F1ED;
+      z-index: 50;
+      pointer-events: none;
+      /* 容器本身不攔截，讓內部元素自己決定 */
     }
 
     /* === 動態漸變背景（移除光暈，改用極淺色情緒底色）=== */
     .voice-immersive-background {
-      position: fixed; /* 改為 fixed 確保覆蓋整個視窗 */
+      position: fixed;
+      /* 改為 fixed 確保覆蓋整個視窗 */
       top: 0;
       left: 0;
       right: 0;
@@ -148,8 +164,10 @@
       height: 100%;
       opacity: 0;
       transition: opacity 1.2s cubic-bezier(0.4, 0, 0.2, 1);
-      z-index: -1; /* 改為 -1 確保在最底層 */
-      pointer-events: none; /* 不阻擋其他元素的點擊 */
+      z-index: -1;
+      /* 改為 -1 確保在最底層 */
+      pointer-events: none;
+      /* 不阻擋其他元素的點擊 */
     }
 
     .voice-immersive-background::before {
@@ -162,7 +180,8 @@
       width: 100%;
       height: 100%;
       background: var(--emotion-bg);
-      opacity: 0.5; /* 提高透明度，從 0.15 增加到 0.5 */
+      opacity: 0.5;
+      /* 提高透明度，從 0.15 增加到 0.5 */
     }
 
     .voice-immersive-background.active {
@@ -208,6 +227,11 @@
       flex-direction: column;
       align-items: center;
       gap: 60px;
+      /* 2026 高信心 3D 核心配置 */
+      transform-style: preserve-3d;
+      perspective: 1200px;
+      --petal-z-back: -44px;
+      --petal-z-front: 42px;
     }
 
     /* === 波形與麥克風容器 === */
@@ -218,6 +242,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      transform-style: preserve-3d;
     }
 
     /* Canvas 波形 */
@@ -238,17 +263,20 @@
       justify-content: center;
       cursor: pointer;
       z-index: 20;
+      pointer-events: auto;
+      transform-style: preserve-3d;
     }
 
     /* 花蕊中心（精緻珍珠球體設計，位於花瓣下方）*/
     .bloom-core {
-      --core-scale: 1; /* 預設縮放比例，可由 media query 覆蓋 */
+      --core-scale: 1;
       position: absolute;
       top: 50%;
       left: 50%;
-      transform: translate(-50%, -50%);
-      width: 35px;
-      height: 35px;
+      /* 核心 Z 軸置於 120px，始終位於最頂層 */
+      transform: translate(-50%, -50%) translateZ(120px);
+      width: 32px;
+      height: 32px;
       border-radius: 50%;
       background:
         radial-gradient(circle at 30% 30%,
@@ -257,15 +285,19 @@
           #FDEAA8 35%,
           #FCD34D 60%,
           #F59E0B 85%,
-          #D97706 100%
-        );
+          #D97706 100%);
       box-shadow:
         0 4px 16px rgba(245, 158, 11, 0.4),
         0 2px 8px rgba(251, 191, 36, 0.3),
         inset 0 3px 10px rgba(255, 255, 255, 0.8),
         inset 0 -3px 10px rgba(217, 119, 6, 0.35);
-      animation: coreBreath 4s ease-in-out infinite;
+      animation: speakingCoreBreath 2.4s ease-in-out infinite;
       z-index: 3;
+    }
+
+    .voice-mic-container:is(.thinking, .speaking, .recording, .disconnected) .bloom-core {
+      width: 40px;
+      height: 40px;
     }
 
     /* 花蕊高光（更強烈的玻璃光澤）*/
@@ -282,8 +314,7 @@
           rgba(255, 255, 255, 0.95) 0%,
           rgba(255, 255, 255, 0.6) 25%,
           rgba(255, 255, 255, 0.2) 50%,
-          transparent 70%
-        );
+          transparent 70%);
       filter: blur(1px);
     }
 
@@ -300,22 +331,24 @@
         radial-gradient(circle at 50% 50%,
           rgba(217, 119, 6, 0.4) 0%,
           rgba(217, 119, 6, 0.2) 50%,
-          transparent 100%
-        );
+          transparent 100%);
       filter: blur(2px);
     }
 
     @keyframes coreBreath {
-      0%, 100% {
-        transform: translate(-50%, -50%) scale(calc(var(--core-scale) * 1)) rotate(0deg);
+
+      0%,
+      100% {
+        transform: translate(-50%, -50%) translateZ(120px) scale(calc(var(--core-scale) * 1)) rotate(0deg);
         box-shadow:
           0 3px 12px rgba(251, 191, 36, 0.3),
           0 1px 4px rgba(251, 191, 36, 0.2),
           inset 0 2px 6px rgba(255, 255, 255, 0.6),
           inset 0 -2px 6px rgba(245, 158, 11, 0.3);
       }
+
       50% {
-        transform: translate(-50%, -50%) scale(calc(var(--core-scale) * 1.05)) rotate(2deg);
+        transform: translate(-50%, -50%) translateZ(120px) scale(calc(var(--core-scale) * 1.05)) rotate(2deg);
         box-shadow:
           0 4px 16px rgba(251, 191, 36, 0.4),
           0 2px 6px rgba(251, 191, 36, 0.3),
@@ -335,7 +368,25 @@
       perspective: 1000px;
     }
 
-    /* 單一花瓣（蓮花造型，3D 透視）*/
+    .bloom-petal-group {
+      position: absolute;
+      inset: 0;
+      transform-style: preserve-3d;
+      pointer-events: none;
+    }
+
+    .bloom-petal-group.upper {
+      margin-top: -15px;
+      z-index: 10;
+      transform: translateZ(0);
+    }
+
+    .bloom-petal-group.lower {
+      margin-top: 0;
+      z-index: 30;
+      transform: translateZ(20px);
+    }
+
     .bloom-petal {
       position: absolute;
       width: 65px;
@@ -349,58 +400,81 @@
       z-index: 5;
     }
 
-    /* 外層花瓣（較大，1-8 是外層）*/
-    .bloom-petal:nth-child(-n+8) {
+    .bloom-petal-group.upper .bloom-petal {
       width: 65px;
       height: 105px;
-      z-index: 5;
-    }
-
-    /* 內層花瓣（較小，9-16 是內層，錯開 22.5 度）*/
-    .bloom-petal:nth-child(n+9) {
-      width: 50px;
-      height: 85px;
       z-index: 10;
     }
 
-    /* 內層花瓣顏色微調（略淡，增加層次感）*/
-    .bloom-petal:nth-child(n+9)::before {
-      background: 
-        radial-gradient(ellipse 80% 60% at 50% 30%, 
-          rgba(255, 255, 255, 0.96) 0%,
-          rgba(255, 255, 255, 0.94) 40%,
-          rgba(249, 250, 251, 0.88) 70%,
-          rgba(243, 244, 246, 0.82) 100%
-        ),
-        linear-gradient(180deg, 
-          rgba(255, 255, 255, 0.95) 0%, 
-          rgba(254, 254, 254, 0.92) 30%,
-          rgba(249, 250, 251, 0.88) 70%,
-          rgba(243, 244, 246, 0.85) 100%
-        );
+    .bloom-petal-group.upper .bloom-petal::before {
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 30%,
+          rgba(252, 252, 252, 1) 0%,
+          rgba(250, 250, 250, 0.98) 40%,
+          rgba(245, 246, 248, 0.95) 70%,
+          rgba(238, 240, 243, 0.9) 100%),
+        linear-gradient(180deg,
+          #F8F8F8 0%,
+          #F4F4F4 30%,
+          #ECEEF1 70%,
+          #E4E6E9 100%);
     }
 
-    /* 花瓣形狀（真實蓮花瓣：頂端尖、中間寬、底部收窄）*/
+    .bloom-petal-group.upper .bloom-petal::after {
+      opacity: 0.8;
+      background: linear-gradient(180deg,
+          rgba(0, 0, 0, 0.15) 0%,
+          rgba(0, 0, 0, 0.08) 50%,
+          transparent 100%);
+    }
+
+    .bloom-petal-group.lower .bloom-petal {
+      width: 58px;
+      height: 98px;
+      z-index: 20;
+    }
+
+    .bloom-petal-group.lower .bloom-petal::after {
+      opacity: 0.75;
+      background: linear-gradient(180deg,
+          rgba(0, 0, 0, 0.12) 0%,
+          rgba(0, 0, 0, 0.06) 50%,
+          transparent 100%);
+    }
+
+    .bloom-petal-group.lower .bloom-petal::before {
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 30%,
+          rgba(255, 255, 255, 0.98) 0%,
+          rgba(255, 255, 255, 0.96) 40%,
+          rgba(249, 250, 251, 0.92) 70%,
+          rgba(243, 244, 246, 0.85) 100%),
+        linear-gradient(180deg,
+          rgba(255, 255, 255, 0.95) 0%,
+          rgba(254, 254, 254, 0.92) 30%,
+          rgba(249, 250, 251, 0.88) 70%,
+          rgba(243, 244, 246, 0.85) 100%);
+      clip-path: path('M 29 5 Q 34 0, 39 5 Q 49 20, 54 50 Q 57 75, 49 92 Q 44 98, 29 98 Q 21 98, 16 92 Q 8 75, 11 50 Q 16 20, 26 5');
+    }
+
     .bloom-petal::before {
       content: '';
       position: absolute;
       width: 100%;
       height: 100%;
-      background: 
-        radial-gradient(ellipse 80% 60% at 50% 30%, 
+      background:
+        radial-gradient(ellipse 80% 60% at 50% 30%,
           rgba(255, 255, 255, 1) 0%,
           rgba(255, 255, 255, 0.98) 40%,
           rgba(249, 250, 251, 0.95) 70%,
-          rgba(243, 244, 246, 0.9) 100%
-        ),
-        linear-gradient(180deg, 
-          #FFFFFF 0%, 
+          rgba(243, 244, 246, 0.9) 100%),
+        linear-gradient(180deg,
+          #FFFFFF 0%,
           #FEFEFE 30%,
           #F9FAFB 70%,
-          #F3F4F6 100%
-        );
+          #F3F4F6 100%);
       clip-path: path('M 30 5 Q 35 0, 40 5 Q 50 20, 55 50 Q 58 75, 50 92 Q 45 98, 30 98 Q 22 98, 17 92 Q 9 75, 12 50 Q 17 20, 27 5');
-      box-shadow: 
+      box-shadow:
         0 6px 20px rgba(0, 0, 0, 0.15),
         inset -3px 4px 10px rgba(0, 0, 0, 0.08),
         inset 3px -4px 12px rgba(255, 255, 255, 0.95),
@@ -410,7 +484,6 @@
       filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.08));
     }
 
-    /* 花瓣中心脈絡（細緻葉脈，非綠莖）*/
     .bloom-petal::after {
       content: '';
       position: absolute;
@@ -420,321 +493,282 @@
       width: 1.5px;
       height: 75%;
       background: linear-gradient(180deg,
-        rgba(0, 0, 0, 0.08) 0%,
-        rgba(0, 0, 0, 0.04) 50%,
-        transparent 100%
-      );
+          rgba(0, 0, 0, 0.08) 0%,
+          rgba(0, 0, 0, 0.04) 50%,
+          transparent 100%);
       border-radius: 1px;
       opacity: 0.6;
       filter: blur(0.3px);
     }
 
-    /* 待機狀態：3D 螺旋緊閉效果（含苞待放）*/
     .bloom-petal {
       opacity: 0.9;
     }
 
-    /* 外層花瓣待機：3D 球形包覆（統一視角 70deg）*/
-    .bloom-petal:nth-child(1) {
-      transform: translate(-50%, -50%) rotateZ(0deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(2) {
-      transform: translate(-50%, -50%) rotateZ(45deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(3) {
-      transform: translate(-50%, -50%) rotateZ(90deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(4) {
-      transform: translate(-50%, -50%) rotateZ(135deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(5) {
-      transform: translate(-50%, -50%) rotateZ(180deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(6) {
-      transform: translate(-50%, -50%) rotateZ(225deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(7) {
-      transform: translate(-50%, -50%) rotateZ(270deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
-    .bloom-petal:nth-child(8) {
-      transform: translate(-50%, -50%) rotateZ(315deg) rotateX(70deg) translateY(-5px) scale(0.9);
-    }
+    .bloom-petal-group.upper .bloom-petal:nth-child(1) { --rotate: 0deg; transform: translate(-50%, -50%) rotateZ(0deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 0s; z-index: 11; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(2) { --rotate: 45deg; transform: translate(-50%, -50%) rotateZ(45deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 0.2s; z-index: 9; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(3) { --rotate: 90deg; transform: translate(-50%, -50%) rotateZ(90deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 0.4s; z-index: 7; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(4) { --rotate: 135deg; transform: translate(-50%, -50%) rotateZ(135deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 0.6s; z-index: 5; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(5) { --rotate: 180deg; transform: translate(-50%, -50%) rotateZ(180deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 0.8s; z-index: 3; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(6) { --rotate: 225deg; transform: translate(-50%, -50%) rotateZ(225deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 1s; z-index: 5; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(7) { --rotate: 270deg; transform: translate(-50%, -50%) rotateZ(270deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 1.2s; z-index: 7; }
+    .bloom-petal-group.upper .bloom-petal:nth-child(8) { --rotate: 315deg; transform: translate(-50%, -50%) rotateZ(315deg) rotateX(0deg) translateY(-15px) scale(0.6); animation: petalBloom 1.6s ease-in-out infinite 1.4s; z-index: 9; }
 
-    /* 內層花瓣待機：改為 60deg（比外層更平，符合「包覆」邏輯）且 translateY 更小（更靠近中心）*/
-    .bloom-petal:nth-child(9) {
-      transform: translate(-50%, -50%) rotateZ(22.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(10) {
-      transform: translate(-50%, -50%) rotateZ(67.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(11) {
-      transform: translate(-50%, -50%) rotateZ(112.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(12) {
-      transform: translate(-50%, -50%) rotateZ(157.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(13) {
-      transform: translate(-50%, -50%) rotateZ(202.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(14) {
-      transform: translate(-50%, -50%) rotateZ(247.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(15) {
-      transform: translate(-50%, -50%) rotateZ(292.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
-    .bloom-petal:nth-child(16) {
-      transform: translate(-50%, -50%) rotateZ(337.5deg) rotateX(60deg) translateY(-8px) scale(0.85);
-    }
+    .bloom-petal-group.lower .bloom-petal:nth-child(1) { --rotate-inner: 0deg; transform: translate(-50%, -50%) rotateZ(0deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 0.1s; z-index: 21; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(2) { --rotate-inner: 45deg; transform: translate(-50%, -50%) rotateZ(45deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 0.3s; z-index: 19; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(3) { --rotate-inner: 90deg; transform: translate(-50%, -50%) rotateZ(90deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 0.5s; z-index: 17; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(4) { --rotate-inner: 135deg; transform: translate(-50%, -50%) rotateZ(135deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 0.7s; z-index: 15; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(5) { --rotate-inner: 180deg; transform: translate(-50%, -50%) rotateZ(180deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 0.9s; z-index: 13; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(6) { --rotate-inner: 225deg; transform: translate(-50%, -50%) rotateZ(225deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 1.1s; z-index: 15; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(7) { --rotate-inner: 270deg; transform: translate(-50%, -50%) rotateZ(270deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 1.3s; z-index: 17; }
+    .bloom-petal-group.lower .bloom-petal:nth-child(8) { --rotate-inner: 315deg; transform: translate(-50%, -50%) rotateZ(315deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55); animation: petalBloomInner 1.6s ease-in-out infinite 1.5s; z-index: 19; }
 
-    /* === Agent 思考中：3D 立體綻放（16片蓮花瓣依序張開）=== */
     .voice-mic-container.thinking .bloom-petal {
       opacity: 1;
     }
 
-    /* 外層 8 片大花瓣（rotateX 回到 0deg = 完全平展，繼續緊縮）*/
-    .voice-mic-container.thinking .bloom-petal:nth-child(1) {
-      --rotate: 0deg;
-      transform: translate(-50%, -50%) rotateZ(0deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 0s;
-      z-index: 10; /* 0deg = 正前方 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(2) {
-      --rotate: 45deg;
-      transform: translate(-50%, -50%) rotateZ(45deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 0.2s;
-      z-index: 8; /* 45deg = 略偏右 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(3) {
-      --rotate: 90deg;
-      transform: translate(-50%, -50%) rotateZ(90deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 0.4s;
-      z-index: 6; /* 90deg = 右側面 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(4) {
-      --rotate: 135deg;
-      transform: translate(-50%, -50%) rotateZ(135deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 0.6s;
-      z-index: 4; /* 135deg = 右後方 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(5) {
-      --rotate: 180deg;
-      transform: translate(-50%, -50%) rotateZ(180deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 0.8s;
-      z-index: 2; /* 180deg = 正後方（最深層）*/
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(6) {
-      --rotate: 225deg;
-      transform: translate(-50%, -50%) rotateZ(225deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 1.0s;
-      z-index: 4; /* 225deg = 左後方 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(7) {
-      --rotate: 270deg;
-      transform: translate(-50%, -50%) rotateZ(270deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 1.2s;
-      z-index: 6; /* 270deg = 左側面 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(8) {
-      --rotate: 315deg;
-      transform: translate(-50%, -50%) rotateZ(315deg) rotateX(0deg) translateY(-15px) scale(0.6);
-      animation: petalBloom 1.6s ease-in-out infinite 1.4s;
-      z-index: 8; /* 315deg = 略偏左 */
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(1) {
+      transform: translate(-50%, -50%) rotateZ(0deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
     }
 
-    /* 內層 8 片小花瓣（覆蓋花蕊上方，z-index 略高於對應外層）*/
-    .voice-mic-container.thinking .bloom-petal:nth-child(9) {
-      --rotate-inner: 22.5deg;
-      transform: translate(-50%, -50%) rotateZ(22.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 0.1s;
-      z-index: 11; /* 22.5deg = 前方偏右 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(10) {
-      --rotate-inner: 67.5deg;
-      transform: translate(-50%, -50%) rotateZ(67.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 0.3s;
-      z-index: 9; /* 67.5deg = 右前方 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(11) {
-      --rotate-inner: 112.5deg;
-      transform: translate(-50%, -50%) rotateZ(112.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 0.5s;
-      z-index: 7; /* 112.5deg = 右側偏後 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(12) {
-      --rotate-inner: 157.5deg;
-      transform: translate(-50%, -50%) rotateZ(157.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 0.7s;
-      z-index: 5; /* 157.5deg = 後方偏右 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(13) {
-      --rotate-inner: 202.5deg;
-      transform: translate(-50%, -50%) rotateZ(202.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 0.9s;
-      z-index: 3; /* 202.5deg = 後方偏左 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(14) {
-      --rotate-inner: 247.5deg;
-      transform: translate(-50%, -50%) rotateZ(247.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 1.1s;
-      z-index: 5; /* 247.5deg = 左側偏後 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(15) {
-      --rotate-inner: 292.5deg;
-      transform: translate(-50%, -50%) rotateZ(292.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 1.3s;
-      z-index: 7; /* 292.5deg = 左前方 */
-    }
-    .voice-mic-container.thinking .bloom-petal:nth-child(16) {
-      --rotate-inner: 337.5deg;
-      transform: translate(-50%, -50%) rotateZ(337.5deg) rotateX(15deg) translateY(-5px) scale(0.5);
-      animation: petalBloomInner 1.6s ease-in-out infinite 1.5s;
-      z-index: 9; /* 337.5deg = 前方偏左 */
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(2) {
+      transform: translate(-50%, -50%) rotateZ(45deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
     }
 
-    /* 外層花瓣動畫（加入微妙旋轉）*/
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(3) {
+      transform: translate(-50%, -50%) rotateZ(90deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(4) {
+      transform: translate(-50%, -50%) rotateZ(135deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(5) {
+      transform: translate(-50%, -50%) rotateZ(180deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(6) {
+      transform: translate(-50%, -50%) rotateZ(225deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(7) {
+      transform: translate(-50%, -50%) rotateZ(270deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.upper .bloom-petal:nth-child(8) {
+      transform: translate(-50%, -50%) rotateZ(315deg) rotateX(70deg) translateY(-5px) scale(0.9);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(1) {
+      transform: translate(-50%, -50%) rotateZ(0deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(2) {
+      transform: translate(-50%, -50%) rotateZ(45deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(3) {
+      transform: translate(-50%, -50%) rotateZ(90deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(4) {
+      transform: translate(-50%, -50%) rotateZ(135deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(5) {
+      transform: translate(-50%, -50%) rotateZ(180deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(6) {
+      transform: translate(-50%, -50%) rotateZ(225deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(7) {
+      transform: translate(-50%, -50%) rotateZ(270deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
+    .voice-mic-container.thinking .bloom-petal-group.lower .bloom-petal:nth-child(8) {
+      transform: translate(-50%, -50%) rotateZ(315deg) rotateX(60deg) rotateZ(20deg) translateY(-12px) scale(0.85);
+      animation: none;
+    }
+
     @keyframes petalBloom {
-      0%, 100% {
+
+      0%,
+      100% {
         transform: translate(-50%, -50%) rotateZ(calc(var(--rotate) + 0deg)) translateY(-30px) scale(1);
       }
+
       50% {
         transform: translate(-50%, -50%) rotateZ(calc(var(--rotate) + 1.5deg)) translateY(-33px) scale(1.04);
       }
     }
 
-    /* 內層花瓣動畫（較短的移動距離 + 反向微轉）*/
     @keyframes petalBloomInner {
-      0%, 100% {
-        transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-inner) + 0deg)) translateY(-15px) scale(1);
+
+      0%,
+      100% {
+        transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-inner) + 0deg)) rotateX(15deg) rotateZ(20deg) translateY(-22px) translateZ(10px) scale(1);
       }
+
       50% {
-        transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-inner) - 1deg)) translateY(-18px) scale(1.03);
+        transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-inner) - 1deg)) rotateX(18deg) rotateZ(22deg) translateY(-25px) translateZ(12px) scale(1.03);
       }
     }
 
     .voice-mic-container.thinking .bloom-petal::before {
-      box-shadow: 
+      box-shadow:
         0 6px 24px rgba(0, 0, 0, 0.16),
         inset -2px 3px 8px rgba(0, 0, 0, 0.08),
         inset 2px -3px 10px rgba(255, 255, 255, 0.95);
     }
 
-    /* === 斷線/重連：逆時針綻放紅色警示（16片花瓣）=== */
     .voice-mic-container.disconnected .bloom-petal {
       opacity: 1;
     }
 
-    /* 外層 8 片大花瓣（逆時針） */
-    .voice-mic-container.disconnected .bloom-petal:nth-child(1) {
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(1) {
       --rotate-disc: 0deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 0s;
       z-index: 10;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(2) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(2) {
       --rotate-disc: 45deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 0.2s;
       z-index: 8;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(3) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(3) {
       --rotate-disc: 90deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 0.4s;
       z-index: 6;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(4) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(4) {
       --rotate-disc: 135deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 0.6s;
       z-index: 4;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(5) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(5) {
       --rotate-disc: 180deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 0.8s;
       z-index: 2;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(6) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(6) {
       --rotate-disc: 225deg;
-      animation: petalDisconnect 1.6s ease-in-out infinite 1.0s;
+      animation: petalDisconnect 1.6s ease-in-out infinite 1s;
       z-index: 4;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(7) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(7) {
       --rotate-disc: 270deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 1.2s;
       z-index: 6;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(8) {
+
+    .voice-mic-container.disconnected .bloom-petal-group.upper .bloom-petal:nth-child(8) {
       --rotate-disc: 315deg;
       animation: petalDisconnect 1.6s ease-in-out infinite 1.4s;
       z-index: 8;
     }
 
-    /* 內層 8 片小花瓣（逆時針，錯開 22.5°） */
-    .voice-mic-container.disconnected .bloom-petal:nth-child(9) {
-      --rotate-disc-inner: 22.5deg;
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(1) {
+      --rotate-disc-inner: 67.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 0.1s;
       z-index: 11;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(10) {
-      --rotate-disc-inner: 67.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(2) {
+      --rotate-disc-inner: 112.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 0.3s;
       z-index: 9;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(11) {
-      --rotate-disc-inner: 112.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(3) {
+      --rotate-disc-inner: 157.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 0.5s;
       z-index: 7;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(12) {
-      --rotate-disc-inner: 157.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(4) {
+      --rotate-disc-inner: 202.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 0.7s;
       z-index: 5;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(13) {
-      --rotate-disc-inner: 202.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(5) {
+      --rotate-disc-inner: 247.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 0.9s;
       z-index: 3;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(14) {
-      --rotate-disc-inner: 247.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(6) {
+      --rotate-disc-inner: 292.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 1.1s;
       z-index: 5;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(15) {
-      --rotate-disc-inner: 292.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(7) {
+      --rotate-disc-inner: 337.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 1.3s;
       z-index: 7;
     }
-    .voice-mic-container.disconnected .bloom-petal:nth-child(16) {
-      --rotate-disc-inner: 337.5deg;
+
+    .voice-mic-container.disconnected .bloom-petal-group.lower .bloom-petal:nth-child(8) {
+      --rotate-disc-inner: 382.5deg;
       animation: petalDisconnectInner 1.6s ease-in-out infinite 1.5s;
       z-index: 9;
     }
 
-    /* 外層花瓣斷線動畫（加入逆時針旋轉效果）*/
     @keyframes petalDisconnect {
-      0%, 100% {
+
+      0%,
+      100% {
         transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-disc) + 0deg)) translateY(-30px) scale(1);
       }
+
       50% {
         transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-disc) - 3deg)) translateY(-33px) scale(1.04);
       }
     }
 
-    /* 內層花瓣斷線動畫（加入逆時針旋轉效果）*/
     @keyframes petalDisconnectInner {
-      0%, 100% {
+
+      0%,
+      100% {
         transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-disc-inner) + 0deg)) translateY(-15px) scale(1);
       }
+
       50% {
         transform: translate(-50%, -50%) rotateZ(calc(var(--rotate-disc-inner) - 2deg)) translateY(-18px) scale(1.03);
       }
     }
 
     .voice-mic-container.disconnected .bloom-petal::before {
-      background: linear-gradient(180deg, 
-        #FEE2E2 0%, 
-        #FCA5A5 30%,
-        #F87171 70%,
-        #EF4444 100%
-      );
-      box-shadow: 
+      background: linear-gradient(180deg,
+          #FEE2E2 0%,
+          #FCA5A5 30%,
+          #F87171 70%,
+          #EF4444 100%);
+      box-shadow:
         0 6px 24px rgba(239, 68, 68, 0.5),
         inset -2px 2px 6px rgba(239, 68, 68, 0.35),
         inset 2px -2px 6px rgba(255, 255, 255, 0.5);
@@ -743,118 +777,188 @@
     .voice-mic-container.disconnected .bloom-core {
       background: linear-gradient(180deg, #FEE2E2 0%, #FCA5A5 50%, #EF4444 100%);
       border-color: #EF4444;
-      box-shadow: 
+      box-shadow:
         0 4px 20px rgba(239, 68, 68, 0.4),
         inset 0 1px 2px rgba(255, 255, 255, 0.3);
     }
 
-    /* 滑鼠懸停：輕微放大 */
     .voice-mic-container:hover .bloom-core {
-      transform: scale(1.08);
-      box-shadow: 
+      transform: translate(-50%, -50%) translateZ(120px) scale(1.08);
+      box-shadow:
         0 4px 20px rgba(0, 0, 0, 0.15),
         inset 0 1px 3px rgba(255, 255, 255, 0.6);
     }
 
-    /* 錄音中狀態：核心脈衝（花蕊變紅，花瓣保持閉合但有微動效果）*/
     .voice-mic-container.recording .bloom-core {
       background: radial-gradient(circle at 35% 35%,
-        #FEE2E2 0%,
-        #FCA5A5 25%,
-        #F87171 55%,
-        #EF4444 85%,
-        #DC2626 100%
-      );
+          #FEE2E2 0%,
+          #FCA5A5 25%,
+          #F87171 55%,
+          #EF4444 85%,
+          #DC2626 100%);
       border-color: #EF4444;
       animation: recordingCoreFlash 1.5s ease-in-out infinite;
     }
 
-    /* 錄音時花瓣保持球形閉合（與待機狀態相同），但加入微光呼吸效果 */
     .voice-mic-container.recording .bloom-petal {
       animation: recordingPetalGlow 1.8s ease-in-out infinite;
     }
 
     @keyframes recordingCoreFlash {
-      0%, 100% {
-        transform: translate(-50%, -50%) scale(1);
+
+      0%,
+      100% {
+        transform: translate(-50%, -50%) translateZ(120px) scale(1);
         box-shadow:
           0 4px 20px rgba(239, 68, 68, 0.4),
           inset 0 1px 2px rgba(255, 255, 255, 0.3);
       }
+
       50% {
-        transform: translate(-50%, -50%) scale(1.15);
+        transform: translate(-50%, -50%) translateZ(120px) scale(1.15);
         box-shadow:
           0 6px 30px rgba(239, 68, 68, 0.6),
           inset 0 1px 3px rgba(255, 255, 255, 0.4);
       }
     }
 
-    /* 花瓣微光呼吸（僅改變透明度和亮度，不改變形狀）*/
     @keyframes recordingPetalGlow {
-      0%, 100% {
+
+      0%,
+      100% {
         opacity: 0.85;
         filter: brightness(1);
       }
+
       50% {
         opacity: 1;
         filter: brightness(1.08);
       }
     }
 
-    /* === Agent 回覆中：花瓣完全綻放（蓮花盛開狀態）+ 柔和呼吸波浪 === */
     .voice-mic-container.speaking .bloom-petal {
       opacity: 1;
     }
 
-    /* 外層 8 片大花瓣：完全平展向外（rotateX 0deg = 平放）*/
-    .voice-mic-container.speaking .bloom-petal:nth-child(-n+8) {
-      animation: petalSpeakingOuter 3s ease-in-out infinite;
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal {
+      animation: none;
     }
 
-    /* 內層 8 片小花瓣：稍微抬起（rotateX 10deg），形成層次感 */
-    .voice-mic-container.speaking .bloom-petal:nth-child(n+9) {
-      animation: petalSpeakingInner 3s ease-in-out infinite 0.3s;
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal {
+      animation: none;
     }
 
-    /* 外層花瓣動畫：完全綻放 + 輕微呼吸（內縮版本）*/
-    @keyframes petalSpeakingOuter {
-      0%, 100% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle, 0deg)) rotateX(0deg) translateY(-30px) scale(1);
-      }
-      50% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle, 0deg)) rotateX(0deg) translateY(-33px) scale(1.03);
-      }
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(1) {
+      --rotate: 0deg;
+      transform: translate(-50%, -50%) rotateZ(0deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 0s;
+      z-index: 11;
     }
 
-    /* 內層花瓣動畫：略微抬起 + 反向呼吸 */
-    @keyframes petalSpeakingInner {
-      0%, 100% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(10deg) translateY(-28px) scale(1.05);
-      }
-      50% {
-        transform: translate(-50%, -50%) rotateZ(var(--speaking-angle-inner, 0deg)) rotateX(10deg) translateY(-25px) scale(1.02);
-      }
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(2) {
+      --rotate: 45deg;
+      transform: translate(-50%, -50%) rotateZ(45deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 0.2s;
+      z-index: 9;
     }
 
-    /* 定義每片花瓣的角度（外層）*/
-    .voice-mic-container.speaking .bloom-petal:nth-child(1) { --speaking-angle: 0deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(2) { --speaking-angle: 45deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(3) { --speaking-angle: 90deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(4) { --speaking-angle: 135deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(5) { --speaking-angle: 180deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(6) { --speaking-angle: 225deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(7) { --speaking-angle: 270deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(8) { --speaking-angle: 315deg; }
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(3) {
+      --rotate: 90deg;
+      transform: translate(-50%, -50%) rotateZ(90deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 0.4s;
+      z-index: 7;
+    }
 
-    /* 定義每片花瓣的角度（內層）*/
-    .voice-mic-container.speaking .bloom-petal:nth-child(9) { --speaking-angle-inner: 22.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(10) { --speaking-angle-inner: 67.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(11) { --speaking-angle-inner: 112.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(12) { --speaking-angle-inner: 157.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(13) { --speaking-angle-inner: 202.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(14) { --speaking-angle-inner: 247.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(15) { --speaking-angle-inner: 292.5deg; }
-    .voice-mic-container.speaking .bloom-petal:nth-child(16) { --speaking-angle-inner: 337.5deg; }
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(4) {
+      --rotate: 135deg;
+      transform: translate(-50%, -50%) rotateZ(135deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 0.6s;
+      z-index: 5;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(5) {
+      --rotate: 180deg;
+      transform: translate(-50%, -50%) rotateZ(180deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 0.8s;
+      z-index: 3;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(6) {
+      --rotate: 225deg;
+      transform: translate(-50%, -50%) rotateZ(225deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 1s;
+      z-index: 5;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(7) {
+      --rotate: 270deg;
+      transform: translate(-50%, -50%) rotateZ(270deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 1.2s;
+      z-index: 7;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.upper .bloom-petal:nth-child(8) {
+      --rotate: 315deg;
+      transform: translate(-50%, -50%) rotateZ(315deg) rotateX(0deg) translateY(-15px) scale(0.6);
+      animation: petalBloom 1.6s ease-in-out infinite 1.4s;
+      z-index: 9;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(1) {
+      --rotate-inner: 0deg;
+      transform: translate(-50%, -50%) rotateZ(0deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 0.1s;
+      z-index: 21;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(2) {
+      --rotate-inner: 45deg;
+      transform: translate(-50%, -50%) rotateZ(45deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 0.3s;
+      z-index: 19;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(3) {
+      --rotate-inner: 90deg;
+      transform: translate(-50%, -50%) rotateZ(90deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 0.5s;
+      z-index: 17;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(4) {
+      --rotate-inner: 135deg;
+      transform: translate(-50%, -50%) rotateZ(135deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 0.7s;
+      z-index: 15;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(5) {
+      --rotate-inner: 180deg;
+      transform: translate(-50%, -50%) rotateZ(180deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 0.9s;
+      z-index: 13;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(6) {
+      --rotate-inner: 225deg;
+      transform: translate(-50%, -50%) rotateZ(225deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 1.1s;
+      z-index: 15;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(7) {
+      --rotate-inner: 270deg;
+      transform: translate(-50%, -50%) rotateZ(270deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 1.3s;
+      z-index: 17;
+    }
+
+    .voice-mic-container.speaking .bloom-petal-group.lower .bloom-petal:nth-child(8) {
+      --rotate-inner: 315deg;
+      transform: translate(-50%, -50%) rotateZ(315deg) rotateX(15deg) rotateZ(20deg) translateY(-10px) translateZ(10px) scale(0.55);
+      animation: petalBloomInner 1.6s ease-in-out infinite 1.5s;
+      z-index: 19;
+    }
 
     .voice-mic-container.speaking .bloom-petal::before {
       box-shadow:
@@ -863,101 +967,338 @@
         inset 2px -3px 12px rgba(255, 255, 255, 0.95);
     }
 
-    /* 花蕊在回覆時保持金黃色，但有呼吸效果 */
     .voice-mic-container.speaking .bloom-core {
       animation: speakingCoreBreath 2.4s ease-in-out infinite;
+      transform: translate(-50%, -50%) translateZ(120px);
     }
 
     @keyframes speakingCoreBreath {
-      0%, 100% {
-        transform: translate(-50%, -50%) scale(1);
+
+      0%,
+      100% {
+        transform: translate(-50%, -50%) translateZ(120px) scale(calc(var(--core-scale, 1) * 1));
       }
+
       50% {
-        transform: translate(-50%, -50%) scale(1.08);
+        transform: translate(-50%, -50%) translateZ(120px) scale(calc(var(--core-scale, 1) * 1.08));
       }
     }
 
 
     /* === Agent 文字輸出區域（打字機效果）=== */
     .voice-agent-output {
-      max-width: 600px;
+      --agent-output-ink: #171717;
+      --agent-output-muted: rgba(23, 23, 23, 0.58);
+      --agent-output-line: rgba(23, 23, 23, 0.11);
+      --agent-output-glow: rgba(48, 71, 94, 0.13);
+      /* 【關鍵修復】使用固定定位在螢幕底部，避免偏移 */
+      position: fixed;
+      bottom: 120px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px) scale(0.985);
+      width: clamp(320px, 60vw, 680px);
+      max-width: calc(100vw - 40px);
+      min-height: 60px;
+      max-height: min(30vh, 320px);
       padding: 20px 28px;
-      background: rgba(255, 255, 255, 0.98);
-      border: 1px solid rgba(0, 0, 0, 0.1);
-      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.72);
       backdrop-filter: blur(20px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      border-radius: 20px;
       font-size: 16px;
-      font-weight: 400;
-      color: #1A1A1A;
-      text-align: left;
-      line-height: 1.7;
-      box-shadow: 0 6px 28px rgba(0, 0, 0, 0.1);
-      font-family: 'Inter', -apple-system, sans-serif;
-      display: none; /* 預設隱藏 */
+      line-height: 1.6;
+      color: #171717;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
+      z-index: 1000;
+      pointer-events: auto;
+      transition: all 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+      display: none;
       opacity: 0;
-      transform: translateY(10px);
-      transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-      /* 限制兩行高度 + 滾動 */
-      max-height: calc(1.7em * 2 + 40px); /* 兩行文字 + padding */
+      transition:
+        opacity 260ms ease,
+        transform 360ms cubic-bezier(0.22, 1, 0.36, 1),
+        width 240ms ease,
+        max-height 240ms ease;
       overflow-y: auto;
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
+      scrollbar-gutter: stable;
     }
 
     .voice-agent-output.active {
       display: block;
       opacity: 1;
-      transform: translateY(0);
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+
+    .agent-output-shell {
+      display: grid;
+      grid-template-columns: 3px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      animation: agentOutputFlowIn 280ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .agent-output-shell::before {
+      content: '';
+      width: 3px;
+      min-height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(67, 87, 71, 0.55), rgba(67, 87, 71, 0.08));
+      box-shadow: 0 0 18px rgba(67, 87, 71, 0.18);
+    }
+
+    .agent-output-content {
+      min-width: 0;
+    }
+
+    .voice-agent-output.typing-active .agent-output-content {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .voice-agent-output.typing-active .agent-output-content p,
+    .voice-agent-output.typing-active .agent-output-content ul,
+    .voice-agent-output.typing-active .agent-output-content li,
+    .voice-agent-output.typing-active .agent-output-content h1,
+    .voice-agent-output.typing-active .agent-output-content h2,
+    .voice-agent-output.typing-active .agent-output-content h3 {
+      display: inline;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .voice-agent-output.output-mode-processing {
+      max-height: 200px;
+    }
+
+    .voice-agent-output.output-mode-streaming {
+      max-height: min(28vh, 280px);
+    }
+
+    .voice-agent-output.output-mode-final {
+      max-height: min(30vh, 320px);
+    }
+
+    .voice-agent-output h1,
+    .voice-agent-output h2,
+    .voice-agent-output h3 {
+      margin: 0 0 8px;
+      line-height: 1.25;
+      font-weight: 700;
+    }
+
+    .voice-agent-output h1 {
+      font-size: 1.18em;
+    }
+
+    .voice-agent-output h2 {
+      font-size: 1.1em;
+    }
+
+    .voice-agent-output h3 {
+      font-size: 1.02em;
+    }
+
+    .voice-agent-output p {
+      margin: 0 0 10px;
+    }
+
+    .voice-agent-output p:last-child,
+    .voice-agent-output h1:last-child,
+    .voice-agent-output h2:last-child,
+    .voice-agent-output h3:last-child,
+    .voice-agent-output ul:last-child {
+      margin-bottom: 0;
+    }
+
+    .agent-output-typewriter-line {
+      margin: 0;
+    }
+
+    .voice-agent-output p:last-child,
+    .voice-agent-output ul:last-child,
+    .voice-agent-output pre:last-child {
+      margin-bottom: 0;
+    }
+
+    .voice-agent-output ul {
+      margin: 0 0 8px 1.1em;
+      padding: 0;
+    }
+
+    .voice-agent-output li {
+      margin: 2px 0;
+    }
+
+    .voice-agent-output code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.88em;
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: rgba(0, 0, 0, 0.06);
+    }
+
+    .voice-agent-output pre {
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      overflow-x: auto;
+      background: rgba(0, 0, 0, 0.07);
+    }
+
+    .voice-agent-output pre code {
+      padding: 0;
+      background: transparent;
+    }
+
+    .voice-agent-output a {
+      color: #0B5CAD;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(11, 92, 173, 0.28);
+    }
+
+    .voice-agent-output.progress-mode {
+      overflow: hidden;
+    }
+
+    .agent-progress-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .agent-progress-row {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      align-items: center;
+      gap: 10px;
+      color: var(--agent-output-muted);
+      font-size: 13px;
+      line-height: 1.45;
+      animation: agentOutputFlowIn 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .agent-progress-row.current {
+      color: var(--agent-output-ink);
+      font-weight: 600;
+    }
+
+    .agent-progress-dot {
+      width: 8px;
+      height: 8px;
+      justify-self: center;
+      border-radius: 50%;
+      background: rgba(23, 23, 23, 0.22);
+      box-shadow: 0 0 0 5px rgba(23, 23, 23, 0.035);
+    }
+
+    .agent-progress-row.current .agent-progress-dot {
+      background: #435747;
+      animation: agentProgressPulse 1.18s ease-in-out infinite;
+    }
+
+    @keyframes agentOutputFlowIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes agentProgressPulse {
+
+      0%,
+      100% {
+        box-shadow: 0 0 0 4px rgba(67, 87, 71, 0.12);
+        transform: scale(0.92);
+      }
+
+      50% {
+        box-shadow: 0 0 0 9px rgba(67, 87, 71, 0.04);
+        transform: scale(1.08);
+      }
     }
 
     /* 自訂滾動條樣式 */
     .voice-agent-output::-webkit-scrollbar {
       width: 4px;
     }
+
     .voice-agent-output::-webkit-scrollbar-track {
       background: transparent;
     }
+
     .voice-agent-output::-webkit-scrollbar-thumb {
       background: rgba(0, 0, 0, 0.15);
       border-radius: 2px;
     }
 
     /* 打字游標效果 */
-    .voice-agent-output::after {
+    .voice-agent-output.typing-active .typing-cursor {
       content: '▋';
+      display: inline-block;
       animation: typingCursor 0.8s steps(2) infinite;
       margin-left: 2px;
       color: rgba(0, 0, 0, 0.6);
-    }
-
-    .voice-agent-output.typing-done::after {
-      display: none; /* 打字完成後隱藏游標 */
+      vertical-align: baseline;
     }
 
     @keyframes typingCursor {
-      0%, 50% { opacity: 1; }
-      51%, 100% { opacity: 0; }
+
+      0%,
+      50% {
+        opacity: 1;
+      }
+
+      51%,
+      100% {
+        opacity: 0;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+
+      .voice-agent-output,
+      .agent-output-shell,
+      .agent-progress-row,
+      .agent-progress-row.current .agent-progress-dot,
+      .voice-agent-output.typing-active .typing-cursor {
+        animation: none !important;
+        transition: none !important;
+      }
     }
 
     /* === 實時字幕 / 文字輸入框 === */
     .voice-transcript {
-      max-width: 700px;
-      padding: 24px 32px;
-      background: rgba(255, 255, 255, 0.95);
-      border: 1px solid rgba(0, 0, 0, 0.08);
-      border-radius: 16px;
-      backdrop-filter: blur(20px) saturate(180%);
-      font-size: 20px;
-      font-weight: 400;
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: auto;
+      min-width: 140px;
+      max-width: clamp(300px, 80vw, 800px);
+      padding: 16px 32px;
+      background: rgba(255, 255, 255, 0.65);
+      backdrop-filter: blur(25px) saturate(200%);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 20px;
+      font-size: 18px;
       color: #1A1A1A;
       text-align: center;
-      line-height: 1.6;
-      min-height: 60px;
+      min-height: 56px;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.3s;
-      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
+      z-index: 1100;
+      transition: all 0.4s ease;
     }
 
     .voice-transcript.provisional {
@@ -967,7 +1308,8 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-height: calc(1.6em + 48px); /* 一行文字 + padding */
+      max-height: calc(1.6em + 48px);
+      /* 一行文字 + padding */
     }
 
     .voice-transcript.final {
@@ -1006,17 +1348,32 @@
     }
 
     /* === 工具卡片 === */
+    #tool-cards-container {
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    #tool-cards-container .voice-tool-card {
+      pointer-events: auto;
+    }
+
     .voice-tool-card {
       position: absolute;
       padding: 20px 24px;
       background: rgba(255, 255, 255, 0.98);
-      border: 1px solid rgba(0, 0, 0, 0.08);
+      border: 1px solid rgba(15, 23, 42, 0.06);
       border-radius: 16px;
       backdrop-filter: blur(30px) saturate(180%);
       min-width: 280px;
       max-width: 360px;
       z-index: 40;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+      box-shadow:
+        0 10px 30px rgba(15, 23, 42, 0.08),
+        0 2px 10px rgba(15, 23, 42, 0.04),
+        inset 0 1px 0 rgba(255, 255, 255, 0.7);
       animation: cardEnter 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
     }
 
@@ -1025,6 +1382,7 @@
         opacity: 0;
         transform: translateY(20px) scale(0.95);
       }
+
       to {
         opacity: 1;
         transform: translateY(0) scale(1);
@@ -1040,6 +1398,7 @@
         opacity: 1;
         transform: scale(1);
       }
+
       to {
         opacity: 0;
         transform: scale(0.95);
@@ -1073,7 +1432,7 @@
       gap: 12px;
       margin-bottom: 16px;
       padding-bottom: 16px;
-      border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+      border-bottom: 1px solid rgba(15, 23, 42, 0.05);
     }
 
     .voice-tool-card .card-icon {
@@ -1103,7 +1462,7 @@
       justify-content: space-between;
       align-items: center;
       padding: 10px 0;
-      border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+      border-bottom: 1px solid rgba(15, 23, 42, 0.05);
     }
 
     .voice-tool-card .data-row:last-child {
@@ -1143,6 +1502,7 @@
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       font-size: 20px;
+      pointer-events: auto;
     }
 
     .chat-icon:hover {
@@ -1170,6 +1530,7 @@
       transition: all 0.2s;
       backdrop-filter: blur(10px);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      pointer-events: auto;
     }
 
     .exit-button:hover {
@@ -1225,8 +1586,15 @@
     }
 
     @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.3;
+      }
     }
 
     /* === 登入覆蓋層（蓮花風格）=== */
@@ -1275,8 +1643,15 @@
     }
 
     @keyframes float {
-      0%, 100% { transform: translateY(0px); }
-      50% { transform: translateY(-10px); }
+
+      0%,
+      100% {
+        transform: translateY(0px);
+      }
+
+      50% {
+        transform: translateY(-10px);
+      }
     }
 
     .login-title {
@@ -1342,7 +1717,8 @@
       border: 1px solid rgba(0, 0, 0, 0.08);
       border-right: none;
       border-radius: 12px 0 0 12px;
-      display: none; /* 預設隱藏，有工具結果時才顯示 */
+      display: none;
+      /* 預設隱藏，有工具結果時才顯示 */
       align-items: center;
       justify-content: center;
       cursor: pointer;
@@ -1454,14 +1830,16 @@
 
     /* 抽屜內滾動條樣式 */
     .tool-drawer-content::-webkit-scrollbar {
-      width: 4px;
+      width: 3px;
     }
+
     .tool-drawer-content::-webkit-scrollbar-track {
       background: transparent;
     }
+
     .tool-drawer-content::-webkit-scrollbar-thumb {
-      background: rgba(0, 0, 0, 0.15);
-      border-radius: 2px;
+      background: rgba(15, 23, 42, 0.12);
+      border-radius: 999px;
     }
 
     /* 抽屜遮罩層 */
@@ -1485,115 +1863,236 @@
 
     /* === 響應式設計：根據裝置類型切換工具卡片顯示方式 === */
     /* ========== 響應式設計：設備檢測與適配 ========== */
-    
+
     /* === 1. 手機模式（寬度 <= 480px）=== */
     @media (max-width: 480px) {
-      #tool-cards-container { display: none !important; }
-      .tool-drawer-toggle.visible { display: flex; }
-      .tool-drawer { display: flex; }
+      #tool-cards-container {
+        display: none !important;
+      }
+
+      .tool-drawer-toggle.visible {
+        display: flex;
+      }
+
+      .tool-drawer {
+        display: flex;
+      }
 
       /* 花朵縮小 */
-      .voice-waveform-container { width: 280px; height: 280px; }
-      .voice-mic-container { width: 180px; height: 180px; }
-      .bloom-core {
-        width: 28px;
-        height: 28px;
-        --core-scale: 0.8; /* 28/35 = 0.8 */
+      .voice-waveform-container {
+        width: 280px;
+        height: 280px;
       }
-      .bloom-petal:nth-child(-n+8) { width: 50px; height: 80px; }
-      .bloom-petal:nth-child(n+9) { width: 38px; height: 65px; }
+
+      .voice-mic-container {
+        width: 180px;
+        height: 180px;
+      }
+
+      .bloom-core {
+        width: 40px;
+        height: 40px;
+        --core-scale: 0.8;
+      }
+
+      .bloom-petal:nth-child(-n+8) {
+        width: 58px;
+        height: 112px;
+      }
+
+      .bloom-petal:nth-child(n+9) {
+        width: 46px;
+        height: 88px;
+      }
 
       /* 文字輸出區域 */
-      .voice-agent-output { max-width: 90vw; font-size: 14px; padding: 16px 20px; }
+      .voice-agent-output {
+        width: calc(100vw - 32px);
+        max-width: calc(100vw - 32px);
+        max-height: min(36vh, 300px);
+        font-size: 14px;
+        padding: 15px 17px;
+      }
+
+      .agent-output-shell {
+        grid-template-columns: 2px minmax(0, 1fr);
+        gap: 11px;
+      }
     }
 
     /* === 2. 平板模式（481px - 1024px）=== */
     @media (min-width: 481px) and (max-width: 1024px) {
-      #tool-cards-container { display: none !important; }
-      .tool-drawer-toggle.visible { display: flex; }
-      .tool-drawer { display: flex; }
-      
+      #tool-cards-container {
+        display: none !important;
+      }
+
+      .tool-drawer-toggle.visible {
+        display: flex;
+      }
+
+      .tool-drawer {
+        display: flex;
+      }
+
       /* 花朵適中 */
-      .voice-waveform-container { width: 350px; height: 350px; }
-      .voice-mic-container { width: 210px; height: 210px; }
+      .voice-waveform-container {
+        width: 350px;
+        height: 350px;
+      }
+
+      .voice-mic-container {
+        width: 210px;
+        height: 210px;
+      }
+
+      .voice-agent-output {
+        width: min(78vw, 680px);
+        max-height: min(32vh, 340px);
+      }
     }
 
     /* === 3. 電腦模式（寬度 > 1024px 且非直立螢幕）=== */
     @media (min-width: 1025px) and (orientation: landscape) {
-      #tool-cards-container { display: block; }
-      .tool-drawer-toggle { display: none !important; }
-      .tool-drawer { display: none !important; }
-      .tool-drawer-overlay { display: none !important; }
+      #tool-cards-container {
+        display: block;
+      }
+
+      .tool-drawer-toggle {
+        display: none !important;
+      }
+
+      .tool-drawer {
+        display: none !important;
+      }
+
+      .tool-drawer-overlay {
+        display: none !important;
+      }
+
+      .voice-agent-output {
+        width: clamp(320px, 50vw, 640px);
+      }
     }
 
     /* === 4. 90度橫屏/直立螢幕模式（寬度 < 高度，無論實際寬度）=== */
     /* 這適用於外接顯示器 90 度旋轉的情況 */
     @media (orientation: portrait) and (min-width: 600px) {
+
       /* 使用抽屜模式 */
-      #tool-cards-container { display: none !important; }
-      .tool-drawer-toggle.visible { display: flex; }
-      .tool-drawer { display: flex; }
+      #tool-cards-container {
+        display: none !important;
+      }
+
+      .tool-drawer-toggle.visible {
+        display: flex;
+      }
+
+      .tool-drawer {
+        display: flex;
+      }
 
       /* 花朵響應式放大（根據視窗高度）*/
       .voice-waveform-container {
         width: min(50vh, 500px);
         height: min(50vh, 500px);
       }
+
       .voice-mic-container {
         width: min(30vh, 300px);
         height: min(30vh, 300px);
       }
+
       .bloom-core {
         width: min(5vh, 45px);
         height: min(5vh, 45px);
-        --core-scale: 1.29; /* 45/35 = 1.29 (max scale) */
+        --core-scale: 1.29;
+        /* 45/35 = 1.29 (max scale) */
       }
+
       .bloom-petal:nth-child(-n+8) {
-        width: min(8vh, 80px);
-        height: min(13vh, 130px);
+        width: min(9vh, 94px);
+        height: min(15vh, 160px);
       }
+
       .bloom-petal:nth-child(n+9) {
-        width: min(6vh, 60px);
-        height: min(10vh, 100px);
+        width: min(7vh, 72px);
+        height: min(12vh, 122px);
       }
 
       /* 文字輸出區域適配 */
       .voice-agent-output {
-        max-width: 80vw;
-        font-size: clamp(14px, 2vh, 18px);
+        width: clamp(300px, 72vw, 640px);
+        max-width: calc(100vw - 32px);
+        max-height: min(32vh, 380px);
+        font-size: clamp(14px, 1.6vh, 17px);
       }
     }
 
     /* === 5. 超寬螢幕（寬度 > 1920px）=== */
     @media (min-width: 1921px) {
-      .voice-waveform-container { width: 500px; height: 500px; }
-      .voice-mic-container { width: 300px; height: 300px; }
+      .voice-waveform-container {
+        width: 500px;
+        height: 500px;
+      }
+
+      .voice-mic-container {
+        width: 300px;
+        height: 300px;
+      }
+
       .bloom-core {
         width: 45px;
         height: 45px;
-        --core-scale: 1.29; /* 45/35 = 1.29 */
+        --core-scale: 1.29;
+        /* 45/35 = 1.29 */
       }
-      .bloom-petal:nth-child(-n+8) { width: 80px; height: 130px; }
-      .bloom-petal:nth-child(n+9) { width: 60px; height: 100px; }
+
+      .bloom-petal:nth-child(-n+8) {
+        width: 92px;
+        height: 154px;
+      }
+
+      .bloom-petal:nth-child(n+9) {
+        width: 74px;
+        height: 122px;
+      }
+
+      .voice-agent-output {
+        width: clamp(480px, 40vw, 640px);
+        max-height: min(34vh, 460px);
+      }
     }
 
     /* === 6. 強制直立模式（JS 動態添加 class）=== */
-    body.portrait-mode #tool-cards-container { display: none !important; }
-    body.portrait-mode .tool-drawer-toggle.visible { display: flex; }
-    body.portrait-mode .tool-drawer { display: flex; }
+    body.portrait-mode #tool-cards-container {
+      display: none !important;
+    }
+
+    body.portrait-mode .tool-drawer-toggle.visible {
+      display: flex;
+    }
+
+    body.portrait-mode .tool-drawer {
+      display: flex;
+    }
+
     body.portrait-mode .voice-waveform-container {
       width: min(50vh, 500px);
       height: min(50vh, 500px);
     }
+
     body.portrait-mode .voice-mic-container {
       width: min(30vh, 300px);
       height: min(30vh, 300px);
     }
+
     body.portrait-mode .bloom-core {
-      --core-scale: 1.29; /* 與直立螢幕模式一致 */
+      --core-scale: 1.29;
+      /* 與直立螢幕模式一致 */
     }
   </style>
 </head>
+
 <body>
   <div class="control-panel">
     <h3>🎛️ 控制面板</h3>
@@ -1638,7 +2137,8 @@
 
     <div class="control-group">
       <label>💡 喚醒詞可行性評估</label>
-      <div style="font-size: 11px; line-height: 1.6; color: rgba(0,0,0,0.6); padding: 12px; background: rgba(0,0,0,0.02); border-radius: 8px; border: 1px solid rgba(0,0,0,0.06);">
+      <div
+        style="font-size: 11px; line-height: 1.6; color: rgba(0,0,0,0.6); padding: 12px; background: rgba(0,0,0,0.02); border-radius: 8px; border: 1px solid rgba(0,0,0,0.06);">
         <strong style="color: rgba(0,0,0,0.8);">技術限制：</strong><br>
         • Web Speech API 不支援持續監聽<br>
         • 需要用戶點擊才能啟動麥克風<br>
@@ -1664,6 +2164,7 @@
 
     <div class="chat-icon" id="chatIcon" title="切換對話視窗">💬</div>
 
+
     <div class="voice-center-container">
       <div class="voice-waveform-container">
         <canvas id="waveform-canvas" width="400" height="400"></canvas>
@@ -1672,31 +2173,35 @@
           <div class="bloom-core"></div>
 
           <div class="bloom-petals">
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
-            <div class="bloom-petal"></div>
+            <div class="bloom-petal-group upper" data-petal-layer="upper">
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+            </div>
+            <div class="bloom-petal-group lower" data-petal-layer="lower">
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+              <div class="bloom-petal"></div>
+            </div>
           </div>
         </div>
       </div>
+    </div>
 
-      <div class="voice-agent-output" id="agent-output"></div>
+    <div class="voice-agent-output" id="agent-output" role="status" aria-live="polite" aria-atomic="false"></div>
 
-      <div class="voice-transcript provisional" id="transcript">
-        請說話...
-      </div>
+    <div class="voice-transcript provisional" id="transcript">
+      請說話...
     </div>
 
     <div id="tool-cards-container"></div>
@@ -1726,15 +2231,15 @@
   <script src="js/app.js"></script>
 
   <script>
-    (function() {
+    (function () {
       function detectScreenOrientation() {
         const width = window.innerWidth;
         const height = window.innerHeight;
         const isPortrait = height > width;
         const isLargePortrait = isPortrait && width >= 600;
-        
+
         document.body.classList.remove('mobile-mode', 'tablet-mode', 'desktop-mode', 'portrait-mode');
-        
+
         if (isLargePortrait) {
           document.body.classList.add('portrait-mode');
           // console.log('📱 螢幕模式: 直立螢幕（90度橫屏）', width, 'x', height);
@@ -1749,7 +2254,7 @@
           // console.log('🖥️ 螢幕模式: 桌機/筆電', width, 'x', height);
         }
       }
-      
+
       detectScreenOrientation();
       window.addEventListener('resize', detectScreenOrientation);
       if (screen.orientation) {
@@ -1758,4 +2263,5 @@
     })();
   </script>
 </body>
+
 </html>

@@ -118,7 +118,7 @@ async def analyze_file(
 
                 analysis = await ai_service.generate_response_async(
                     messages,
-                    model="gpt-4o-mini",  # 使用支援 Vision 的模型
+                    model=None,  # 尊重環境變數設定
                 )
 
                 return FileAnalysisResponse(

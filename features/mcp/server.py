@@ -11,8 +11,13 @@ import time
 import os
 from typing import Dict, Any, List, Optional, Callable, Tuple
 from enum import Enum
-from .types import Tool
+from .types import Tool, ToolCallResult
 from .auto_registry import MCPAutoRegistry
+
+try:
+    import jsonschema
+except ImportError:
+    jsonschema = None
 
 LOG_LEVEL_NAME = os.getenv("BLOOMWARE_LOG_LEVEL", "WARNING").upper()
 LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
@@ -183,7 +188,17 @@ class FeaturesMCPServer:
                     name=tool_name,
                     description=description,
                     inputSchema={"type": "object", "properties": {}},
-                    handler=handler
+                    handler=handler,
+                    outputSchema={
+                        "type": "object",
+                        "properties": {
+                            "success": {"type": "boolean"},
+                            "content": {"type": "string"},
+                            "error": {"type": ["string", "null"]},
+                            "error_code": {"type": ["string", "null"]},
+                        },
+                        "required": ["success"],
+                    }
                 )
                 self.register_tool(tool)
 
@@ -215,6 +230,60 @@ class FeaturesMCPServer:
         """註冊工具"""
         self.tools[tool.name] = tool
         logger.info(f"註冊工具: {tool.name}")
+
+    def _format_tool_result(self, tool_name: str, result: Any) -> Dict[str, Any]:
+        """轉成 MCP tools/call result，保留 structuredContent。"""
+        if isinstance(result, ToolCallResult):
+            return result.to_dict()
+
+        if isinstance(result, dict):
+            is_error = result.get("success") is False
+            content = result.get("content")
+            if not content:
+                content = result.get("error") if is_error else json.dumps(result, ensure_ascii=False)
+
+            output_issue = self._validate_tool_output(tool_name, result)
+            if output_issue:
+                return ToolCallResult(
+                    content=[{"type": "text", "text": "工具輸出格式不符合契約"}],
+                    structuredContent={
+                        "success": False,
+                        "error_code": "TOOL_OUTPUT_VALIDATION",
+                        "tool_name": tool_name,
+                        "details": output_issue,
+                    },
+                    isError=True,
+                ).to_dict()
+
+            payload = ToolCallResult(
+                content=[{"type": "text", "text": str(content)}],
+                structuredContent=result,
+                isError=is_error,
+            ).to_dict()
+            if is_error and "error_code" not in payload["structuredContent"]:
+                payload["structuredContent"]["error_code"] = "TOOL_EXECUTION_ERROR"
+            return payload
+
+        return ToolCallResult(
+            content=[{"type": "text", "text": str(result)}],
+            structuredContent={"tool_name": tool_name, "value": result},
+            isError=False,
+        ).to_dict()
+
+    def _validate_tool_output(self, tool_name: str, result: Dict[str, Any]) -> Optional[str]:
+        """用工具 outputSchema 驗證 structuredContent。"""
+        tool = self.tools.get(tool_name)
+        if not tool or not tool.outputSchema or jsonschema is None:
+            return None
+
+        try:
+            jsonschema.validate(result, tool.outputSchema)
+            return None
+        except jsonschema.ValidationError as exc:
+            field_path = ".".join(str(part) for part in exc.absolute_path)
+            if field_path:
+                return f"{field_path}: {exc.message}"
+            return exc.message
     
     def get_tools_summary(self) -> List[Dict[str, Any]]:
         """
@@ -352,22 +421,29 @@ class FeaturesMCPServer:
         if tool.handler:
             try:
                 result = await tool.handler(arguments)
-
-                # 統一回應格式
-                if isinstance(result, dict) and result.get("success"):
-                    content = result.get("content", "")
-                    return {"content": [{"type": "text", "text": content}]}
-                elif isinstance(result, dict) and not result.get("success"):
-                    error_msg = result.get("error", "工具執行失敗")
-                    return {"content": [{"type": "text", "text": f"❌ {error_msg}"}], "isError": True}
-                else:
-                    return {"content": [{"type": "text", "text": str(result)}]}
+                return self._format_tool_result(tool_name, result)
 
             except Exception as e:
                 logger.error(f"工具執行錯誤 {tool_name}: {e}")
-                return {"content": [{"type": "text", "text": f"❌ 執行錯誤: {str(e)}"}], "isError": True}
+                return ToolCallResult(
+                    content=[{"type": "text", "text": "工具執行失敗"}],
+                    structuredContent={
+                        "success": False,
+                        "error_code": "TOOL_EXECUTION_ERROR",
+                        "tool_name": tool_name,
+                    },
+                    isError=True,
+                ).to_dict()
 
-        return {"content": [{"type": "text", "text": "工具未實作"}]}
+        return ToolCallResult(
+            content=[{"type": "text", "text": "工具未實作"}],
+            structuredContent={
+                "success": False,
+                "error_code": "TOOL_NOT_IMPLEMENTED",
+                "tool_name": tool_name,
+            },
+            isError=True,
+        ).to_dict()
 
     async def cleanup(self):
         """清理資源"""

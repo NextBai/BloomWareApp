@@ -165,6 +165,7 @@ class MCPClient:
             name = tool_data.get("name")
             description = tool_data.get("description", "")
             input_schema = tool_data.get("inputSchema", {"type": "object", "properties": {}})
+            output_schema = tool_data.get("outputSchema")
 
             # 創建代理處理器
             async def tool_handler(arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,7 +175,8 @@ class MCPClient:
                 name=name,
                 description=description,
                 inputSchema=input_schema,
-                handler=tool_handler
+                handler=tool_handler,
+                outputSchema=output_schema
             )
 
             return tool
@@ -192,7 +194,21 @@ class MCPClient:
             })
 
             if response and response.get("result"):
-                content = response["result"].get("content", [])
+                result = response["result"]
+                content = result.get("content", [])
+                structured = result.get("structuredContent")
+                if result.get("isError"):
+                    if structured:
+                        structured = dict(structured)
+                        structured.setdefault("success", False)
+                        structured.setdefault("error", "\n".join([item.get("text", "") for item in content if item.get("type") == "text"]))
+                        return structured
+                    return {
+                        "success": False,
+                        "error": "\n".join([item.get("text", "") for item in content if item.get("type") == "text"]) or "外部工具執行失敗"
+                    }
+                if structured:
+                    return structured
                 return {
                     "success": True,
                     "content": "\n".join([item.get("text", "") for item in content if item.get("type") == "text"])

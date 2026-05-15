@@ -17,8 +17,12 @@ from typing import Dict, Any, Optional, Tuple, List
 
 from core.tool_registry import tool_registry
 from core.logging import get_logger
+from core.config import settings
+from core.prompts.tool_calling_policy import get_tool_calling_policy
 
 logger = get_logger("core.intent_detector")
+
+MIN_TOOL_CONFIDENCE = 0.90
 
 
 class IntentDetector:
@@ -37,6 +41,14 @@ class IntentDetector:
     
     def __init__(self):
         self._cache: Dict[str, Tuple[bool, Optional[Dict[str, Any]], float]] = {}
+
+    @staticmethod
+    def _estimate_tool_confidence(tool_name: str, arguments: Dict[str, Any]) -> float:
+        if not tool_name:
+            return 0.0
+        if not isinstance(arguments, dict):
+            return 0.0
+        return 0.95 if arguments else 0.92
     
     async def detect(
         self,
@@ -143,7 +155,7 @@ class IntentDetector:
                 messages=messages,
                 tools=tools,
                 user_id="intent_detection",
-                model="gpt-5-nano",
+                model=settings.GPT_INTENT_MODEL,
                 reasoning_effort=optimal_effort,
             )
             
@@ -159,12 +171,14 @@ class IntentDetector:
         
         注意：不再描述每個工具，工具定義由 tools 參數傳遞
         """
-        return """你是一個多語言智能助手，根據用戶需求選擇合適的工具。支援中文、英文、日文、印尼文、越南文。
+        return f"""你是一個多語言智能助手，根據用戶需求選擇合適的工具。支援中文、英文、日文、印尼文、越南文。
+
+{get_tool_calling_policy()}
 
 【核心規則】
 1. 用戶詢問任何可用工具能解決的需求時，必須選擇對應工具
 2. 只有純粹的閒聊、問候、情感表達才不選擇工具
-3. 工具參數盡量從用戶消息中提取，無法確定的使用合理預設值
+3. 工具參數從用戶消息中提取；無法確定的可選參數留空，不自行編造預設值
 
 【多語言意圖識別】
 無論用戶使用什麼語言，都要識別以下意圖並選擇對應工具：
@@ -251,6 +265,7 @@ class IntentDetector:
                 "tool_name": tool_name,
                 "arguments": arguments,
                 "emotion": emotion,
+                "confidence": self._estimate_tool_confidence(tool_name, arguments),
             }
         
         # 沒有工具調用，視為一般聊天

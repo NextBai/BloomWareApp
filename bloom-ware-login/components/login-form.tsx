@@ -238,26 +238,66 @@ export function LoginForm() {
     setVoiceStatus('請求麥克風權限...');
     console.log('🎤 開始語音登入...');
 
+    let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
+    let source: MediaStreamAudioSourceNode | null = null;
+    let processor: AudioWorkletNode | null = null;
+
+    const cleanupAudio = async () => {
+      if (processor) {
+        processor.port.onmessage = null;
+        processor.disconnect();
+        processor = null;
+      }
+
+      if (source) {
+        source.disconnect();
+        source = null;
+      }
+
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+
+      if (audioContext) {
+        await audioContext.close().catch(() => undefined);
+        audioContext = null;
+      }
+    };
+
     try {
       // 請求麥克風權限
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
       console.log('✅ 麥克風權限已獲取');
 
       // 設定錄音參數
-      const audioContext = new AudioContext({ sampleRate: 16000 });
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      audioContext = new AudioContext({ sampleRate: 16000 });
+      await audioContext.audioWorklet.addModule('/audio/pcm-recorder-worklet.js');
+      await audioContext.resume();
+      source = audioContext.createMediaStreamSource(stream);
+      processor = new AudioWorkletNode(audioContext, 'pcm-recorder-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        channelCount: 1,
+      });
       
-      const audioChunks: Float32Array[] = [];
+      const audioChunks: Int16Array[] = [];
       const recordDuration = 4000; // 4 秒（確保足夠長度）
       
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        audioChunks.push(new Float32Array(inputData));
+      processor.port.onmessage = (event) => {
+        audioChunks.push(new Int16Array(event.data));
       };
       
       source.connect(processor);
-      processor.connect(audioContext.destination);
       
       setVoiceStatus('🎙️ 錄音中... 請說話 (4秒)');
       console.log('🎙️ 開始錄音 4 秒...');
@@ -266,30 +306,20 @@ export function LoginForm() {
       await new Promise(resolve => setTimeout(resolve, recordDuration));
       
       // 停止錄音
-      processor.disconnect();
-      source.disconnect();
-      stream.getTracks().forEach(track => track.stop());
-      await audioContext.close();
+      await cleanupAudio();
       
       setVoiceStatus('辨識中...');
       console.log('✅ 錄音完成，處理音訊...');
       
       // 合併音訊資料
       const totalLength = audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
-      const audioData = new Float32Array(totalLength);
+      const pcm16 = new Int16Array(totalLength);
       let offset = 0;
       for (const chunk of audioChunks) {
-        audioData.set(chunk, offset);
+        pcm16.set(chunk, offset);
         offset += chunk.length;
       }
-      
-      // 轉換為 PCM16
-      const pcm16 = new Int16Array(audioData.length);
-      for (let i = 0; i < audioData.length; i++) {
-        const s = Math.max(-1, Math.min(1, audioData[i]));
-        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      
+
       // 轉換為 base64
       const uint8Array = new Uint8Array(pcm16.buffer);
       let binary = '';
@@ -335,6 +365,7 @@ export function LoginForm() {
       }
       setIsLoading(false);
       setLoadingType(null);
+      await cleanupAudio();
     }
   }
 

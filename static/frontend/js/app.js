@@ -88,22 +88,34 @@ async function requestRequiredPermissions() {
 
   if (navigator.geolocation) {
     try {
+      // 在 2026 現代瀏覽器中，可以先檢查 permission 狀態，避免跳警告
+      if (navigator.permissions && navigator.permissions.query) {
+        const permission = await navigator.permissions.query({ name: 'geolocation' });
+        if (permission.state === 'denied') {
+          throw { code: 1, message: 'User denied Geolocation' }; // 模擬 code 1: PERMISSION_DENIED
+        }
+      }
+
       await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(
           (position) => {
             resolve(position);
           },
           (error) => {
-            console.warn('⚠️ 地理位置權限被拒絕:', error);
             reject(error);
           },
           { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 }
         );
       });
     } catch (error) {
-      console.warn('⚠️ 地理位置權限被拒絕，部分功能（如查詢附近公車）將無法使用');
-      if (typeof showErrorNotification === 'function') {
-        showErrorNotification('建議允許地理位置權限以使用完整功能（如查詢附近公車、天氣等）');
+      if (error.code === 1) { // PERMISSION_DENIED
+        console.warn('⚠️ 地理位置權限被明確拒絕:', error.message);
+        if (typeof showErrorNotification === 'function') {
+          showErrorNotification('建議允許地理位置權限以使用完整功能（如查詢附近公車、天氣等）');
+        }
+      } else { // POSITION_UNAVAILABLE (2) 或 TIMEOUT (3)
+        console.warn(`⚠️ 無法透過 GPS 獲得位置縮小誤差 (代碼: ${error.code})，前端環境準備回退。`);
+        // 我們讓專門處理定位的 location.js 中的機制作後續 fallback，避免在權限申請階段就卡死或誤報
       }
     }
   } else {

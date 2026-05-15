@@ -28,6 +28,11 @@ class Settings:
     _firebase_creds_base64: Optional[str] = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON_BASE64")
     _firebase_service_account_path: Optional[str] = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
 
+    # Google Cloud Speech / TTS 專用服務帳戶（可與 Firebase 不同 GCP 專案）
+    _google_speech_creds_json: Optional[str] = os.getenv("GOOGLE_SPEECH_CREDENTIALS_JSON")
+    _google_speech_creds_base64: Optional[str] = os.getenv("GOOGLE_SPEECH_SERVICE_ACCOUNT_JSON_BASE64")
+    _google_speech_sa_path: Optional[str] = os.getenv("GOOGLE_SPEECH_SERVICE_ACCOUNT_PATH")
+
     @classmethod
     def get_firebase_credentials(cls) -> Dict[str, Any]:
         """
@@ -80,22 +85,111 @@ class Settings:
                 "3. FIREBASE_SERVICE_ACCOUNT_PATH（檔案路徑）"
             )
 
+    @classmethod
+    def try_get_google_speech_credentials(cls) -> Optional[Dict[str, Any]]:
+        """
+        載入 STT/TTS 專用 Google 服務帳戶 JSON（與 Firebase 分離）。
+
+        若三種來源皆未設定，回傳 None；若已設定但格式錯誤則拋出 ValueError。
+        """
+        if cls._google_speech_creds_json:
+            try:
+                return json.loads(cls._google_speech_creds_json)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"GOOGLE_SPEECH_CREDENTIALS_JSON 格式錯誤: {e}") from e
+        if cls._google_speech_creds_base64:
+            try:
+                decoded_bytes = base64.b64decode(cls._google_speech_creds_base64)
+                return json.loads(decoded_bytes.decode("utf-8"))
+            except Exception as e:
+                raise ValueError(f"GOOGLE_SPEECH_SERVICE_ACCOUNT_JSON_BASE64 解碼失敗: {e}") from e
+        if cls._google_speech_sa_path:
+            try:
+                with open(cls._google_speech_sa_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except FileNotFoundError:
+                raise ValueError(f"GOOGLE_SPEECH_SERVICE_ACCOUNT_PATH 檔案不存在: {cls._google_speech_sa_path}") from None
+            except json.JSONDecodeError as e:
+                raise ValueError(f"GOOGLE_SPEECH_SERVICE_ACCOUNT_PATH JSON 格式錯誤: {e}") from e
+        return None
+
+    @classmethod
+    def resolve_speech_service_account_info(cls) -> tuple[Optional[Dict[str, Any]], str]:
+        """
+        解析語音 API 使用的服務帳戶：優先 GOOGLE_SPEECH_*，否則退回 Firebase 憑證（相容舊部署）。
+
+        Returns:
+            (credentials_dict | None, "speech" | "firebase" | "none")
+        """
+        speech = cls.try_get_google_speech_credentials()
+        if speech is not None:
+            return speech, "speech"
+        try:
+            return cls.get_firebase_credentials(), "firebase"
+        except ValueError:
+            return None, "none"
+
+    @classmethod
+    def get_google_speech_project_id(cls, credential_project_id: Optional[str] = None) -> str:
+        """
+        Speech-to-Text recognizer 所屬 GCP 專案 ID。
+
+        優先順序：GOOGLE_SPEECH_PROJECT_ID → GOOGLE_CLOUD_PROJECT_ID（若為純數字「專案編號」
+        且憑證 JSON 內有字串型 project_id，則改用憑證內 ID，避免誤用編號）→
+        憑證 JSON 內 project_id → FIREBASE_PROJECT_ID
+        """
+        if cls.GOOGLE_SPEECH_PROJECT_ID.strip():
+            return cls.GOOGLE_SPEECH_PROJECT_ID.strip()
+        cloud = cls.GOOGLE_CLOUD_PROJECT_ID.strip()
+        cred = (credential_project_id or "").strip()
+        if cloud.isdigit() and cred and not cred.isdigit():
+            return cred
+        if cloud:
+            return cloud
+        if cred:
+            return cred
+        return cls.FIREBASE_PROJECT_ID.strip()
+
     # ===== OpenAI 配置 =====
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+    OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4")
     OPENAI_TIMEOUT: int = int(os.getenv("OPENAI_TIMEOUT", "30"))
+    OPENAI_RESPONSES_TIMEOUT: int = int(os.getenv("OPENAI_RESPONSES_TIMEOUT", "90"))
+    OPENAI_USE_RESPONSES: bool = os.getenv("OPENAI_USE_RESPONSES", "true").lower() == "true"
+    OPENAI_MODEL_CONTEXT_WINDOW: int = int(os.getenv("OPENAI_MODEL_CONTEXT_WINDOW", "1000000"))
+    OPENAI_MODEL_AUTO_COMPACT_TOKEN_LIMIT: int = int(os.getenv("OPENAI_MODEL_AUTO_COMPACT_TOKEN_LIMIT", "900000"))
+    OPENAI_ENABLE_WEB_SEARCH: bool = os.getenv("OPENAI_ENABLE_WEB_SEARCH", "true").lower() == "true"
+    OPENAI_ENABLE_REMOTE_MCP: bool = os.getenv("OPENAI_ENABLE_REMOTE_MCP", "false").lower() == "true"
+    OPENAI_REMOTE_MCP_SERVERS_JSON: str = os.getenv("OPENAI_REMOTE_MCP_SERVERS_JSON", "[]")
+    OPENAI_ENABLE_SKILLS: bool = os.getenv("OPENAI_ENABLE_SKILLS", "false").lower() == "true"
 
-    # ===== Google OAuth 配置 =====
+    # ===== Google OAuth（使用者「登入 Bloom Ware」用，非語音 API）=====
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_REDIRECT_URI: str = os.getenv(
         "GOOGLE_REDIRECT_URI",
         "http://localhost:8080/auth/google/callback"  # 開發環境預設值
     )
+    # ----- Google Cloud「語音」專案（STT/TTS，例：supervisor-project；常與 Firebase 不同）-----
+    # GOOGLE_CLOUD_PROJECT_ID：語音相關 REST/專案語境之預設專案 ID（請填「專案 ID」字串，勿只填控制台「專案編號」）
+    GOOGLE_CLOUD_PROJECT_ID: str = os.getenv("GOOGLE_CLOUD_PROJECT_ID", os.getenv("FIREBASE_PROJECT_ID", ""))
+    # GOOGLE_SPEECH_PROJECT_ID：明確指定 STT recognizer 所屬專案；與 Firebase 分離時必須搭配 GOOGLE_SPEECH_* 服務帳戶
+    GOOGLE_SPEECH_PROJECT_ID: str = os.getenv("GOOGLE_SPEECH_PROJECT_ID", "")
+    # STT gRPC 臨時除錯用；正式環境請用服務帳戶
+    GOOGLE_STT_ACCESS_TOKEN: str = os.getenv("GOOGLE_STT_ACCESS_TOKEN", "")
+    # TTS 與部分 REST 用 API Key（屬於語音 GCP；與 STT 串流 gRPC OAuth 分開）
+    GOOGLE_SPEECH_API_KEY: str = os.getenv("GOOGLE_SPEECH_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    GOOGLE_TTS_API_KEY: str = os.getenv("GOOGLE_TTS_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    GOOGLE_STT_LOCATION: str = os.getenv("GOOGLE_STT_LOCATION", "global")
+    GOOGLE_STT_RECOGNIZER_ID: str = os.getenv("GOOGLE_STT_RECOGNIZER_ID", "_")
+    GOOGLE_STT_AUTO_LANGUAGE_CODES: str = os.getenv("GOOGLE_STT_AUTO_LANGUAGE_CODES", "cmn-Hant-TW,en-US,ja-JP")
+    GOOGLE_TTS_LANGUAGE_CODE: str = os.getenv("GOOGLE_TTS_LANGUAGE_CODE", "cmn-TW")
+    GOOGLE_TTS_DEFAULT_VOICE: str = os.getenv("GOOGLE_TTS_DEFAULT_VOICE", "cmn-TW-Wavenet-A")
 
     # ===== 第三方 API Keys =====
     WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
-    NEWSDATA_API_KEY: str = os.getenv("NEWSDATA_API_KEY", "")
+    TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
     EXCHANGE_API_KEY: str = os.getenv("EXCHANGE_API_KEY", "")
 
     # ===== JWT 認證配置 =====
@@ -108,7 +202,7 @@ class Settings:
 
     # ===== GPT 意圖檢測配置 =====
     USE_GPT_INTENT: bool = os.getenv("USE_GPT_INTENT", "true").lower() == "true"
-    GPT_INTENT_MODEL: str = os.getenv("GPT_INTENT_MODEL", "gpt-5-nano")
+    GPT_INTENT_MODEL: str = os.getenv("GPT_INTENT_MODEL", "gpt-5.4")
 
     # ===== 背景任務開關 =====
     ENABLE_BACKGROUND_JOBS: bool = os.getenv("ENABLE_BACKGROUND_JOBS", "true").lower() == "true"
@@ -190,8 +284,8 @@ class Settings:
             logger.error("請檢查 FIREBASE_CREDENTIALS_JSON 或 FIREBASE_SERVICE_ACCOUNT_PATH")
             return False
 
-        # 驗證 OpenAI API Key 格式（基本檢查）
-        if not cls.OPENAI_API_KEY.startswith("sk-"):
+        # 驗證 OpenAI API Key 格式（OpenAI-compatible relay keys may not use sk-*）
+        if not cls.OPENAI_BASE_URL and not cls.OPENAI_API_KEY.startswith("sk-"):
             import logging
             logger = logging.getLogger("core.config")
             logger.warning("⚠️ OpenAI API Key 格式可能不正確（應以 'sk-' 開頭）")
@@ -236,7 +330,10 @@ class Settings:
             firebase_source = "未設定 ❌"
         logger.info(f"Firebase 憑證來源: {firebase_source}")
         logger.info(f"OpenAI 模型: {cls.OPENAI_MODEL}")
+        logger.info(f"OpenAI Base URL: {cls.OPENAI_BASE_URL or 'default'}")
+        logger.info(f"OpenAI Responses API: {'enabled' if cls.OPENAI_USE_RESPONSES else 'disabled'}")
         logger.info(f"OpenAI Timeout: {cls.OPENAI_TIMEOUT}s")
+        logger.info(f"OpenAI Responses Timeout: {cls.OPENAI_RESPONSES_TIMEOUT}s")
         logger.info(f"Google OAuth 回調 URI: {cls.GOOGLE_REDIRECT_URI}")
         logger.info(f"JWT Token 有效期: {cls.ACCESS_TOKEN_EXPIRE_MINUTES} 分鐘")
         logger.info(f"伺服器監聽: {cls.HOST}:{cls.PORT}")

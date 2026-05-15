@@ -1,9 +1,15 @@
 """
 意圖檢測 Prompt 模板
-精簡化設計，減少 token 消耗約 40%
+⚠️ DEPRECATED: 此模組的 TOOL_RULES 和 get_intent_prompt() 在生產環境中未被使用。
+生產意圖偵測由 features/mcp/agent_bridge.py 的 _build_function_calling_prompt() 處理。
+本模組僅保留向後兼容的定義，供既有測試使用。
 """
 
-# 工具特定規則（按需載入）
+import warnings as _warnings
+
+from core.prompts.tool_calling_policy import get_tool_calling_policy
+
+# ── 工具特定規則（DEPRECATED — 生產中由 agent_bridge 硬編碼處理） ──
 TOOL_RULES = {
     "weather": """天氣查詢：城市必須用英文（台北→Taipei, 高雄→Kaohsiung），預設 Taipei""",
 
@@ -32,7 +38,7 @@ TOOL_RULES = {
 「怎麼去 X」→ forward_geocode:query=X""",
 }
 
-# 情緒標籤說明
+# ── 情緒標籤說明 ──
 EMOTION_RULES = """情緒判斷：neutral/happy/sad/angry/fear/surprise
 - happy: 開心、興奮（「好開心！」「太棒了」）
 - sad: 難過、沮喪（「好難過」「心情不好」）
@@ -44,7 +50,10 @@ EMOTION_RULES = """情緒判斷：neutral/happy/sad/angry/fear/surprise
 
 def get_intent_prompt(tools_description: str, include_rules: list = None) -> str:
     """
-    生成意圖檢測 Prompt
+    生成意圖檢測 Prompt（向後兼容）
+
+    ⚠️ DEPRECATED: 生產環境使用 features/mcp/agent_bridge.py 的
+    _build_function_calling_prompt() + OpenAI Function Calling。
 
     Args:
         tools_description: 可用工具描述
@@ -53,8 +62,16 @@ def get_intent_prompt(tools_description: str, include_rules: list = None) -> str
     Returns:
         精簡化的 System Prompt
     """
+    _warnings.warn(
+        "core.prompts.intent_detection.get_intent_prompt() is deprecated. "
+        "Production intent detection uses MCPAgentBridge._build_function_calling_prompt().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # 基礎 Prompt
     base = f"""你是意圖解析助手。分析用戶消息，決定是否調用工具。
+
+{get_tool_calling_policy()}
 
 可用工具：
 {tools_description}

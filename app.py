@@ -1,3 +1,4 @@
+# BloomWare Application - Confidence-Driven Agent Loop
 import os
 import json
 import time
@@ -6,6 +7,7 @@ import mimetypes
 import logging
 import secrets
 import jwt
+import unicodedata
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
@@ -76,6 +78,7 @@ from core.memory_system import memory_manager
 # 環境 Context 寫入 API
 from core.database import set_user_env_current, add_user_env_snapshot
 from core.environment import EnvironmentContextService
+from middleware import CSPMiddleware
 
 
 # -----------------------------
@@ -108,6 +111,77 @@ def serialize_for_json(obj: Any) -> Any:
             return str(obj)
         except Exception:
             return None
+
+
+def _normalize_bcp47_language_tag(tag: Optional[str]) -> Optional[str]:
+    raw = str(tag or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("_", "-")
+    parts = [part for part in normalized.split("-") if part]
+    if not parts:
+        return None
+
+    language = parts[0].lower()
+    rest: List[str] = []
+    for part in parts[1:]:
+        if len(part) == 4 and part.isalpha():
+            rest.append(part.title())
+        elif len(part) in {2, 3} and part.isalpha():
+            rest.append(part.upper())
+        else:
+            rest.append(part)
+    return "-".join([language, *rest])
+
+
+def _preferred_language_from_text(text: str) -> Optional[str]:
+    script_counts: Dict[str, int] = {}
+    for ch in str(text or ""):
+        if ch.isspace():
+            continue
+        try:
+            name = unicodedata.name(ch)
+        except ValueError:
+            continue
+        for script in ("HIRAGANA", "KATAKANA", "HANGUL", "CJK UNIFIED IDEOGRAPH", "LATIN", "CYRILLIC", "THAI"):
+            if script in name:
+                script_counts[script] = script_counts.get(script, 0) + 1
+                break
+
+    if script_counts.get("HIRAGANA", 0) or script_counts.get("KATAKANA", 0):
+        return "ja-JP"
+    if script_counts.get("HANGUL", 0):
+        return "ko-KR"
+    if script_counts.get("THAI", 0):
+        return "th-TH"
+    if script_counts.get("CYRILLIC", 0):
+        return "ru-RU"
+    if script_counts.get("LATIN", 0) and not script_counts.get("CJK UNIFIED IDEOGRAPH", 0):
+        return "en-US"
+    if script_counts.get("CJK UNIFIED IDEOGRAPH", 0):
+        return "zh-TW"
+    return None
+
+
+def _resolve_conversation_language(
+    user_message: str,
+    requested_language: Optional[str],
+    locale_hint: Optional[str] = None,
+) -> str:
+    explicit = _normalize_bcp47_language_tag(requested_language)
+    if explicit and explicit.lower() != "auto":
+        return explicit
+
+    inferred = _preferred_language_from_text(user_message)
+    if inferred:
+        return inferred
+
+    locale_tag = _normalize_bcp47_language_tag(locale_hint)
+    if locale_tag and locale_tag.lower() != "auto":
+        return locale_tag
+
+    return "zh-TW"
+
 
 # -----------------------------
 # Pydantic 模型（從統一模組導入）
@@ -322,33 +396,6 @@ app.add_middleware(
 )
 
 # CSP Middleware（允許內嵌 script 用於語音沉浸式前端）
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
-from starlette.responses import Response
-
-class CSPMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
-        response = await call_next(request)
-        # 對所有靜態檔案路徑添加寬鬆的 CSP header（用於語音沉浸式前端）
-        if request.url.path.startswith("/static/"):
-            # 移除可能存在的嚴格 CSP
-            if "Content-Security-Policy" in response.headers:
-                del response.headers["Content-Security-Policy"]
-
-            # 設定寬鬆的 CSP 以允許內嵌 script
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://www.gstatic.com; "
-                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                "font-src 'self' https://fonts.gstatic.com data:; "
-                "connect-src 'self' ws: wss: https://accounts.google.com; "
-                "img-src 'self' data: https: blob:; "
-                "media-src 'self' blob: data:; "
-                "frame-src https://accounts.google.com; "
-                "base-uri 'self';"
-            )
-        return response
-
 app.add_middleware(CSPMiddleware)
 
 # 掛載靜態檔案目錄（語音沉浸式前端）
@@ -495,6 +542,18 @@ async def websocket_endpoint_with_jwt(
 
                 td = app.state.feature_router.get_current_time_data()
                 # 使用語音登入傳遞的情緒（如果有）
+                
+                # 如果登入情緒是極端情緒，自動啟動關懷模式
+                is_care_active = False
+                if emotion in ["sad", "angry", "fear"]:
+                    from core.emotion_care_manager import EmotionCareManager
+                    # 使用 force=True 確保從登入情緒直接進入，不需等待連續偵測
+                    is_care_active = EmotionCareManager.check_and_enter_care_mode(
+                        user_id, emotion, chat_id=current_chat_id, force=True
+                    )
+                    if is_care_active:
+                        logger.info(f"💙 偵測到登入情緒 [{emotion}]，自動啟動關懷模式 (user_id={user_id})")
+
                 welcome_msg = compose_welcome(
                     user_name=user_info.get('name'),
                     time_data=td,
@@ -506,19 +565,35 @@ async def websocket_endpoint_with_jwt(
                 welcome_msg = f"歡迎回來，{user_info['name']}！"
 
             # 發送歡迎訊息，並附帶 chat_id
+            # 通知前端當前情緒與關懷模式狀態
+            await websocket.send_json({
+                "type": "emotion_detected",
+                "emotion": emotion or "neutral",
+                "care_mode": is_care_active if 'is_care_active' in locals() else False
+            })
+
             await websocket.send_json({
                 "type": "system",
                 "message": welcome_msg,
-                "chat_id": current_chat_id
+                "chat_id": current_chat_id,
+                "care_mode": is_care_active if 'is_care_active' in locals() else False
             })
 
         while True:
-            data = await websocket.receive_text()
+            try:
+                # 🎯 2026 穩定性優化：加入 WebSocket 心跳 (Ping) 機制，防止長思考工具調用導致連線中斷
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type": "ping", "timestamp": time.time()})
+                    continue
+                except Exception:
+                    break # 連線已失效
+            
             try:
                 message_data = json.loads(data)
                 message_type_raw = message_data.get("type", "")
                 message_type = (message_type_raw or "").strip().lower()
-
                 # 更新最後活動時間
                 manager.user_sessions[user_id]["last_activity"] = datetime.now()
 
@@ -527,6 +602,7 @@ async def websocket_endpoint_with_jwt(
                     if not user_message:
                         await manager.send_message("收到空消息", user_id, "error")
                         continue
+                    message_language = message_data.get("language") or "auto"
 
                     chat_id = message_data.get("chat_id", None)
 
@@ -573,9 +649,8 @@ async def websocket_endpoint_with_jwt(
                             "content": (
                                 "你是一個友善、有禮且能夠提供幫助的AI助手。\n\n"
                                 "【重要】語言使用規範：\n"
-                                "- 回覆用戶時：必須使用繁體中文，保持簡潔清晰的表達\n"
+                                "- 回覆用戶時：必須使用對應的語言，保持簡潔清晰的表達\n"
                                 "- 調用工具時：所有參數必須使用英文（城市名、國家名、貨幣代碼等）\n\n"
-                                "另外，請勿自稱為 GPT-4 或其他版本。若需要自我介紹，請表述為 '基於 gpt-5-nano 模型'。"
                             ),
                         },
                         {"role": "user", "content": user_message},
@@ -588,7 +663,28 @@ async def websocket_endpoint_with_jwt(
                         try:
                             logger.info(f"🚀 開始處理訊息: user_id={user_id}, chat_id={chat_id}")
                             
-                            async def _on_text_emotion(em: str, cm: bool):
+                            async def _on_text_emotion(em: str, cm: bool, payload: Optional[Dict[str, Any]] = None):
+                                if em == "__bot_delta__" and payload:
+                                    await websocket.send_json({
+                                        "type": "bot_delta",
+                                        "message_id": payload.get("message_id"),
+                                        "delta": payload.get("delta", ""),
+                                        "text": payload.get("text", ""),
+                                        "temporary": True,
+                                        "phase": payload.get("phase", "answering"),
+                                        "timestamp": time.time(),
+                                    })
+                                    return
+                                if em == "__bot_status__" and payload:
+                                    await websocket.send_json({
+                                        "type": "bot_status",
+                                        "status": payload.get("status", "processing"),
+                                        "message": payload.get("message", "正在處理..."),
+                                        "temporary": True,
+                                        "phase": payload.get("phase", payload.get("status", "processing")),
+                                        "timestamp": time.time(),
+                                    })
+                                    return
                                 logger.info(f"📤 [即時回調] 發送 text emotion_detected: {em}, care_mode={cm}")
                                 await websocket.send_json({
                                     "type": "emotion_detected",
@@ -596,7 +692,7 @@ async def websocket_endpoint_with_jwt(
                                     "care_mode": cm
                                 })
 
-                            response = await handle_message(user_message, user_id, chat_id, messages_for_handler, request_id=request_id, emotion_callback=_on_text_emotion)
+                            response = await handle_message(user_message, user_id, chat_id, messages_for_handler, request_id=request_id, language=message_language, emotion_callback=_on_text_emotion)
                             logger.info(f"📥 handle_message 返回: type={type(response)}, response={response}")
 
                             # 【優化】處理空回應：轉換為帶情緒的 dict 格式
@@ -673,8 +769,7 @@ async def websocket_endpoint_with_jwt(
                         except Exception as e:
                             logger.exception(f"❌ _do_process_and_send 發生異常: {e}")
 
-                    import asyncio as _asyncio
-                    _asyncio.create_task(_do_process_and_send())
+                    asyncio.create_task(_do_process_and_send())
 
                 elif message_type == "env_snapshot":
                     try:
@@ -752,7 +847,16 @@ async def websocket_endpoint_with_jwt(
                         sr = 16000
 
                     if mode == "realtime_chat":
-                        # === 即時轉錄模式（使用 OpenAI Realtime API）===
+                        # 🎯 中斷 Barge-in：如果正在處理上一個回覆，立即取消
+                        await manager.cancel_user_tasks(user_id)
+                        
+                        # 🎯 2026 穩定性優化：每次開始對話時清除上一次的音頻緩衝與轉錄，防止「語音殘留」污染下一次識別
+                        client_info = manager.get_client_info(user_id) or {}
+                        client_info["audio_buffer"] = b""
+                        client_info["realtime_transcript"] = ""
+                        manager.set_client_info(user_id, client_info)
+                        
+                        # === 即時轉錄模式（使用 Google Speech-to-Text）===
                         try:
                             from services.realtime_stt_service import RealtimeSTTService
 
@@ -785,21 +889,32 @@ async def websocket_endpoint_with_jwt(
                                 client_info["realtime_transcript"] = full_text
                                 manager.set_client_info(user_id, client_info)
 
-                            async def on_vad_committed(item_id: str):
-                                """VAD 偵測到語音段結束"""
-                                logger.debug(f"🎤 VAD Committed: {item_id}")
+                            async def on_vad_committed(status: str):
+                                """VAD 偵測到語音狀態變化"""
+                                if status == "error":
+                                    await websocket.send_json({
+                                        "type": "error",
+                                        "message": "語音識別服務異常 (Stream Timeout)，正在自動重置環境..."
+                                    })
+                                else:
+                                    await websocket.send_json({
+                                        "type": "stt_status",
+                                        "status": status,
+                                        "timestamp": time.time()
+                                    })
+                                logger.debug(f"🎤 VAD Status: {status}")
 
                             # 從前端獲取語言設定（支援：zh, en, id, ja, vi，或 auto 自動檢測）
                             language = message_data.get("language", "auto")
                             logger.info(f"🌐 語言設定: {language}")
 
-                            # 連線到 OpenAI Realtime API
+                            # 連線到 Google Speech-to-Text 服務
                             success = await realtime_stt.connect(
                                 on_transcript_delta=on_transcript_delta,
                                 on_transcript_done=on_transcript_done,
                                 on_vad_committed=on_vad_committed,
-                                model="gpt-4o-mini-transcribe",
-                                language=language
+                                language=language,
+                                sample_rate=sr
                             )
 
                             if success:
@@ -812,11 +927,12 @@ async def websocket_endpoint_with_jwt(
                                 await websocket.send_json({
                                     "type": "realtime_stt_status",
                                     "status": "connected",
-                                    "message": "即時轉錄已啟動"
+                                    "message": "即時轉錄已啟動",
+                                    "language": language,
                                 })
                                 logger.info(f"✅ 用戶 {user_id} 即時轉錄已啟動")
                             else:
-                                raise Exception("無法連接到 OpenAI Realtime API")
+                                raise Exception("無法連接到 Google Speech-to-Text")
 
                         except Exception as e:
                             logger.error(f"❌ 啟動即時轉錄失敗: {e}")
@@ -845,16 +961,22 @@ async def websocket_endpoint_with_jwt(
                         realtime_stt = client_info.get("realtime_stt")
 
                         if realtime_stt and b64:
-                            # === 即時轉錄模式：轉發到 OpenAI Realtime API ===
+                        # === 即時轉錄模式：轉發到 Google Speech-to-Text 緩衝 ===
                             try:
                                 import base64
                                 audio_bytes = base64.b64decode(b64)
                                 await realtime_stt.send_audio_chunk(audio_bytes)
-                                logger.debug(f"🎤 轉發音頻到 OpenAI: {len(audio_bytes)} bytes")
+                                logger.debug(f"🎤 轉發音頻到 Google STT: {len(audio_bytes)} bytes")
                                 
                                 # 同時儲存到本地緩衝（用於音頻情緒辨識）
+                                # 🎯 效能與記憶體優化：實施滑動窗口（Sliding Window），僅保留最近 15 秒音頻
+                                # 16000Hz * 2bytes/sample * 15s = 480,000 bytes
+                                MAX_BUFFER_SIZE = 480000 
                                 audio_buffer = client_info.get("audio_buffer", b"")
                                 audio_buffer += audio_bytes
+                                if len(audio_buffer) > MAX_BUFFER_SIZE:
+                                    audio_buffer = audio_buffer[-MAX_BUFFER_SIZE:]
+                                    
                                 client_info["audio_buffer"] = audio_buffer
                                 manager.set_client_info(user_id, client_info)
                                 
@@ -1000,7 +1122,10 @@ async def websocket_endpoint_with_jwt(
                                     td = app.state.feature_router.get_current_time_data()
                                     name = user.get("name") or "用戶"
                                     emo = result.get("emotion") or {}
-                                    emo_label = str(emo.get("label") or "")
+                                    emo_label = str(emo.get("label") or "neutral")
+                                    # 🎯 使用原始標籤（包含中文）來生成歡迎詞，確保「心情低落」等詞彙能正確匹配
+                                    raw_emo_label = str(emo.get("raw_label") or emo_label)
+                                    
                                     tz_hint = None
                                     try:
                                         env_res = await get_user_env_current(user_id)
@@ -1011,7 +1136,7 @@ async def websocket_endpoint_with_jwt(
                                     welcome = compose_welcome(
                                         user_name=name,
                                         time_data=td,
-                                        emotion_label=emo_label,
+                                        emotion_label=raw_emo_label,
                                         timezone=tz_hint,
                                     )
                                 except Exception:
@@ -1029,6 +1154,13 @@ async def websocket_endpoint_with_jwt(
                                 except Exception as e:
                                     logger.error(f"生成 JWT token 失敗: {e}")
                                     access_token = None
+
+                                await websocket.send_json({
+                                    "type": "emotion_detected",
+                                    "emotion": emo_label,
+                                    "care_mode": False,
+                                    "source": "voice_login"
+                                })
 
                                 await websocket.send_json({
                                     "type": "voice_login_result",
@@ -1067,7 +1199,7 @@ async def websocket_endpoint_with_jwt(
                             })
 
                     elif mode == "realtime_chat":
-                        # === 即時轉錄模式：關閉 OpenAI Realtime 連線並處理轉錄結果 ===
+                        # === 即時轉錄模式：提交 Google STT 並處理轉錄結果 ===
                         try:
                             client_info = manager.get_client_info(user_id) or {}
                             realtime_stt = client_info.get("realtime_stt")
@@ -1075,6 +1207,24 @@ async def websocket_endpoint_with_jwt(
                             audio_buffer = client_info.get("audio_buffer", b"")
 
                             if realtime_stt:
+                                await websocket.send_json({
+                                    "type": "stt_status",
+                                    "status": "transcribing",
+                                    "timestamp": time.time()
+                                })
+                                logger.info(f"📝 等待即時轉錄 final，用戶 {user_id}")
+                                final_transcript = await realtime_stt.wait_for_final_transcript(timeout=3.5)
+                                if final_transcript and final_transcript != client_info.get("realtime_transcript"):
+                                    transcription = final_transcript
+                                    client_info["realtime_transcript"] = final_transcript
+                                    await websocket.send_json({
+                                        "type": "stt_final",
+                                        "text": final_transcript,
+                                        "timestamp": time.time()
+                                    })
+                                elif final_transcript:
+                                    transcription = final_transcript
+
                                 logger.info(f"🔌 關閉即時轉錄連線，用戶 {user_id}")
                                 await realtime_stt.disconnect()
 
@@ -1099,150 +1249,128 @@ async def websocket_endpoint_with_jwt(
                                 # 立即通知前端開始思考，提升即時響應感
                                 await websocket.send_json({"type": "typing", "message": "thinking"})
 
-                                # === 方案 B：語音情緒辨識（情緒分佈驗證 + 智能回退）===
-                                audio_emotion = None
-                                if audio_buffer and len(audio_buffer) >= 16000 * 2:  # 至少 1 秒
-                                    try:
-                                        logger.info(f"🎭 開始語音情緒辨識，音訊長度: {len(audio_buffer)} bytes")
-                                        emotion_result = await predict_emotion_from_audio(audio_buffer, sample_rate=16000)
-                                        
-                                        if emotion_result.get("success"):
-                                            emotion_label = emotion_result.get("emotion", "neutral")
-                                            confidence = emotion_result.get("confidence", 0.0)
-                                            all_emotions = emotion_result.get("all_emotions", {})
-                                            
-                                            # 計算 top-1 與 top-2 的 margin
-                                            sorted_emotions = sorted(all_emotions.items(), key=lambda x: x[1], reverse=True)
-                                            margin = sorted_emotions[0][1] - sorted_emotions[1][1] if len(sorted_emotions) >= 2 else confidence
-                                            
-                                            # 方案 B 判斷邏輯
-                                            use_audio_emotion = False
-                                            reason = ""
-                                            
-                                            if emotion_label == "neutral":
-                                                # neutral 需要更高置信度，但 margin 可較寬鬆
-                                                if confidence >= 0.55 and margin >= 0.12:
-                                                    use_audio_emotion = True
-                                                    reason = f"neutral 高信心 (conf={confidence:.3f}, margin={margin:.3f})"
-                                                else:
-                                                    reason = f"neutral 信心不足 (conf={confidence:.3f}, margin={margin:.3f}) → 回退文字"
-                                            else:
-                                                # 非 neutral 需要足夠 confidence 與 margin
-                                                if confidence >= 0.48 and margin >= 0.18:
-                                                    use_audio_emotion = True
-                                                    reason = f"{emotion_label} 高信心 (conf={confidence:.3f}, margin={margin:.3f})"
-                                                else:
-                                                    reason = f"{emotion_label} 信心不足 (conf={confidence:.3f}, margin={margin:.3f}) → 回退文字"
-                                            
-                                            if use_audio_emotion:
-                                                audio_emotion = emotion_result
-                                                logger.info(f"✅ 使用語音情緒: {emotion_label}, {reason}")
-                                            else:
-                                                audio_emotion = None
-                                                logger.info(f"📝 {reason}")
-                                        else:
-                                            logger.warning(f"⚠️ 語音情緒辨識失敗: {emotion_result.get('error')}")
-                                    except Exception as e:
-                                        logger.error(f"❌ 語音情緒辨識異常: {e}")
-                                        audio_emotion = None
-                                
-                                # 清理音頻緩衝
-                                if audio_buffer:
-                                    client_info.pop("audio_buffer", None)
-                                    manager.set_client_info(user_id, client_info)
+                                # === 優化：並行處理語音情緒辨識與 Agent 邏輯 ===
+                                async def _get_audio_emotion():
+                                    if audio_buffer and len(audio_buffer) >= 16000 * 1.5:  # 至少 1.5 秒
+                                        try:
+                                            logger.info(f"🎭 [Parallel] 開始語音情緒辨識，長度: {len(audio_buffer)} bytes")
+                                            res = await predict_emotion_from_audio(audio_buffer, sample_rate=16000)
+                                            if res.get("success"):
+                                                # 簡單過濾低信心度
+                                                if res.get("confidence", 0) > 0.4:
+                                                    res["source"] = "realtime_voice"
+                                                    return res
+                                        except Exception as e:
+                                            logger.error(f"❌ 語音情緒辨識異常: {e}")
+                                    return {"success": False, "source": "realtime_voice"}
 
-                                # 異步處理對話邏輯
-                                async def _process_realtime_chat():
+                                # 定義一個內部函數來處理整個流程，稍後將其作為 Task 執行
+                                async def _process_full_request():
+                                    # 啟動並行任務
+                                    emotion_task = asyncio.create_task(_get_audio_emotion())
+                                    
+                                    # 同步準備對話 ID 等基礎工作 (這些很快，不需額外 Task)
                                     chat_id = message_data.get("chat_id")
-
-                                    # 如果沒有 chat_id，創建新對話
                                     if not chat_id:
                                         try:
                                             user_chats_result = await get_user_chats(user_id)
                                             if user_chats_result["success"] and user_chats_result["chats"]:
-                                                latest_chat = user_chats_result["chats"][0]
-                                                chat_id = latest_chat["chat_id"]
+                                                chat_id = user_chats_result["chats"][0]["chat_id"]
                                             else:
-                                                chat_title = f"語音對話 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                                chat_result = await create_chat(user_id, chat_title)
-                                                if chat_result["success"]:
-                                                    chat_id = chat_result["chat"]["chat_id"]
+                                                chat_title = f"語音對話 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                                                chat_res = await create_chat(user_id, chat_title)
+                                                if chat_res["success"]:
+                                                    chat_id = chat_res["chat"]["chat_id"]
                                         except Exception as e:
-                                            logger.error(f"創建對話失敗: {e}")
-                                            await websocket.send_json({"type": "error", "message": "無法創建對話"})
-                                            return
+                                            logger.error(f"準備對話時出錯: {e}")
+                                    
+                                    # 保存用戶訊息（異步）
+                                    if chat_id:
+                                        asyncio.create_task(save_message_to_db(user_id, chat_id, "user", transcription))
 
-                                    # 保存用戶訊息
-                                    await save_message_to_db(user_id, chat_id, "user", transcription)
-
-                                    # 取得語言設定
+                                    # 等待情緒分析結果（如果還沒出的話，這邊會稍微等一下，但通常會與 GPT 意圖偵測並行）
+                                    # 為了讓意圖偵測儘早開始，我們甚至可以在 handle_message 內部去 await emotion_task
+                                    # 但這裡我們採取簡單策略：先啟動 handle_message，並傳入 task 或稍後合併
+                                    
+                                    # 實際上，handle_message 內部會做 GPT 意圖偵測，這耗時最久。
+                                    # 我們讓 handle_message 帶入 emotion_task
+                                    
                                     language = client_info.get("language", "auto")
+                                    
+                                    async def _on_emotion_detected(em: str, cm: bool, payload: Optional[Dict[str, Any]] = None):
+                                        # ... (原有回調邏輯)
+                                        if em.startswith("__bot_"): # 狀態回調
+                                            await websocket.send_json({"type": em.replace("__", ""), **(payload or {})})
+                                            return
+                                        await websocket.send_json({"type": "emotion_detected", "emotion": em, "care_mode": cm})
 
-                                    # 發送即時情緒的回調函數
-                                    async def _on_emotion_detected(em: str, cm: bool):
-                                        logger.info(f"📤 [即時回調] 發送 emotion_detected: {em}, care_mode={cm}")
-                                        await websocket.send_json({
-                                            "type": "emotion_detected",
-                                            "emotion": em,
-                                            "care_mode": cm
-                                        })
+                                    # 等待情緒完成，或者設定超時
+                                    try:
+                                        audio_emotion_res = await asyncio.wait_for(emotion_task, timeout=2.0)
+                                    except asyncio.TimeoutError:
+                                        logger.warning("⚠️ 語音情緒辨識超時，回退至文字分析")
+                                        audio_emotion_res = {"success": False}
 
-                                    # 處理對話（透過 handle_message，自動處理 pipeline）
+                                    # 執行 Agent 邏輯
                                     response = await handle_message(
                                         transcription,
                                         user_id,
                                         chat_id,
-                                        [],  # messages 參數（會自動從數據庫載入）
-                                        audio_emotion=audio_emotion,  # 傳遞音頻情緒
-                                        language=language,  # 傳遞語言設定（新增）
+                                        [],
+                                        audio_emotion=audio_emotion_res,
+                                        language=language,
                                         emotion_callback=_on_emotion_detected
                                     )
 
-                                    # 發送回應
-                                    # 從 PipelineResult 提取情緒
-                                    emotion = None
-                                    care_mode = False
+                                    # 發送結果
                                     if isinstance(response, PipelineResult):
-                                        message_text = response.text
-                                        if response.meta:
-                                            emotion = response.meta.get('emotion')
-                                            care_mode = response.meta.get('care_mode', False)
-
                                         await websocket.send_json({
                                             "type": "bot_message",
-                                            "message": message_text,
+                                            "message": response.text,
                                             "timestamp": time.time(),
-                                            "tool_name": None,
-                                            "tool_data": None,
-                                            "emotion": emotion,
-                                            "care_mode": care_mode
+                                            "emotion": response.meta.get("emotion") if response.meta else "neutral",
+                                            "care_mode": response.meta.get("care_mode", False) if response.meta else False,
+                                            "language": language,
                                         })
+                                        # 保存 AI 訊息
+                                        if chat_id:
+                                            asyncio.create_task(save_message_to_db(user_id, chat_id, "assistant", response.text))
                                     elif isinstance(response, dict):
-                                        tool_name = response.get('tool_name')
-                                        tool_data = response.get('tool_data')
-                                        emotion = response.get('emotion')
-                                        message_text = response.get('message', response.get('content', ''))
-
                                         await websocket.send_json({
                                             "type": "bot_message",
-                                            "message": message_text,
+                                            "message": response.get("message", response.get("content", "")),
                                             "timestamp": time.time(),
-                                            "tool_name": tool_name,
-                                            "tool_data": tool_data,
-                                            "emotion": emotion
+                                            "tool_name": response.get("tool_name"),
+                                            "tool_data": response.get("tool_data"),
+                                            "emotion": response.get("emotion", "neutral"),
+                                            "care_mode": response.get("care_mode", False),
+                                            "language": response.get("language", language),
                                         })
+                                        if chat_id:
+                                            asyncio.create_task(save_message_to_db(user_id, chat_id, "assistant", str(response.get("message", ""))))
                                     else:
                                         # 字串回應
                                         await websocket.send_json({
                                             "type": "bot_message",
                                             "message": str(response),
-                                            "timestamp": time.time(),
-                                            "emotion": None
+                                            "timestamp": time.time()
                                         })
+                                        if chat_id:
+                                            asyncio.create_task(save_message_to_db(user_id, chat_id, "assistant", str(response)))
 
-                                await _process_realtime_chat()
+                                # 啟動整體處理任務
+                                # 🎯 註冊任務，以便支援 Barge-in 中斷
+                                task = asyncio.create_task(_process_full_request())
+                                manager.register_task(user_id, task)
+
+                                # 清理緩衝區並直接返回循環，讓連線保持暢通
+                                if audio_buffer:
+                                    client_info.pop("audio_buffer", None)
+                                    manager.set_client_info(user_id, client_info)
+
                             else:
                                 logger.debug(f"沒有轉錄文字，返回待機狀態")
+                                await websocket.send_json({"type": "stt_status", "status": "idle"})
 
                         except Exception as e:
                             logger.error(f"❌ 關閉即時轉錄失敗: {e}")
@@ -1270,20 +1398,26 @@ async def websocket_endpoint_with_jwt(
 # 消息處理與AI
 # -----------------------------
 async def handle_message(user_message, user_id, chat_id, messages, request_id: str = None, audio_emotion: dict = None, language: str = None, emotion_callback=None):
+    user_message = (user_message or "").strip()
     logger.info(f"📥 handle_message: 收到訊息='{user_message}', user_id={user_id}, audio_emotion={audio_emotion}, language={language}")
+    resolved_language = _resolve_conversation_language(user_message, language)
     
+    if not user_message:
+        logger.info(f"🚫 攔截到空請求，中斷交由 Agent 處理。")
+        return "不好意思，我剛剛沒有聽清楚或是沒收到內容，可以請您再說一次嗎？"
+
     # 指令優先，避免進入管線造成不必要延遲
-    if user_message and user_message.startswith("/"):
+    if user_message.startswith("/"):
         cmd = await handle_command(user_message, user_id)
         if cmd:
             return cmd
 
     feature_router:MCPAgentBridge  = app.state.feature_router
 
-    async def _detect(msg: str):
+    async def _detect(msg: str, tool_context: str = "", language: str = None, **kwargs):
         logger.info(f"🎯 Pipeline: 開始意圖偵測，訊息='{msg}'")
         try:
-            result = await feature_router.detect_intent(msg)
+            result = await feature_router.detect_intent(msg, tool_context=tool_context, language=language or resolved_language)
             logger.info(f"🎯 Pipeline: 意圖偵測結果={result}")
             return result
         except Exception as e:
@@ -1301,7 +1435,59 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         logger.info(f"🔧 Pipeline: 功能處理結果='{result}'")
         return result
 
-    async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None, emotion_label=None, language=None):
+    stream_message_id = request_id or f"stream_{int(time.time() * 1000)}"
+    stream_accumulator = {"text": ""}
+
+    async def _emit_bot_status(status: str, message: str, phase: Optional[str] = None):
+        if emotion_callback is None:
+            return
+        try:
+            await emotion_callback(
+                "__bot_status__",
+                False,
+                {
+                    "status": status,
+                    "message": message,
+                    "phase": phase or status,
+                    "temporary": True,
+                },
+            )
+        except TypeError:
+            return
+
+    async def _on_ai_chunk(delta: Any):
+        if not delta or emotion_callback is None:
+            return
+        if isinstance(delta, dict):
+            delta.setdefault("temporary", True)
+            delta.setdefault("phase", delta.get("status", "processing"))
+            try:
+                await emotion_callback("__bot_status__", False, delta)
+            except TypeError:
+                return
+            return
+
+        stream_accumulator["text"] += str(delta)
+        try:
+            await emotion_callback(
+                "__bot_delta__",
+                False,
+                {
+                    "message_id": stream_message_id,
+                    "delta": str(delta),
+                    "text": stream_accumulator["text"],
+                    "language": _preferred_language_from_text(stream_accumulator["text"]) or resolved_language,
+                    "phase": "answering",
+                    "temporary": True,
+                },
+            )
+        except TypeError:
+            return
+
+    async def _ai(messages_in, cid, model, rid, chat_id, use_care_mode=False, care_emotion=None, emotion_label=None, language=None, tool_context: str = "", is_first_care: bool = False):
+        # 【效能優化】立即通知前端進入 AI 生成階段，這會刷新思考超時
+        await _emit_bot_status("generating", "正在組織語言回答您...", "thinking")
+        
         env_context = {}
         env_service = getattr(app.state, 'env_service', None)
         if env_service:
@@ -1320,37 +1506,49 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
             logger.debug(f"無法取得用戶名稱，使用預設值: {e}")
 
         # 使用傳入的 language 參數（優先）或閉包捕獲的外部變數
-        lang = language if language is not None else globals().get('language', 'zh')
+        lang = language if language is not None else resolved_language
 
         # 兼容：如果傳入字串，視為 user_message；如果傳入 list，視為 messages
-        if isinstance(messages_in, str):
-            return await ai_service.generate_response_for_user(
-                user_message=messages_in,
-                user_id=cid,
-                model=model,
-                request_id=rid,
-                chat_id=chat_id,
-                use_care_mode=use_care_mode,
-                care_emotion=care_emotion,
-                user_name=user_name,
-                emotion_label=emotion_label,
-                env_context=env_context,
-                language=lang,
-            )
-        else:
-            return await ai_service.generate_response_for_user(
-                messages=messages_in,
-                user_id=cid,
-                model=model,
-                request_id=rid,
-                chat_id=chat_id,
-                use_care_mode=use_care_mode,
-                care_emotion=care_emotion,
-                user_name=user_name,
-                emotion_label=emotion_label,
-                env_context=env_context,
-                language=lang,
-            )
+        try:
+            if isinstance(messages_in, str):
+                return await ai_service.generate_response_for_user(
+                    user_message=messages_in,
+                    user_id=cid,
+                    model=model,
+                    request_id=rid,
+                    chat_id=chat_id,
+                    use_care_mode=use_care_mode,
+                    care_emotion=care_emotion,
+                    user_name=user_name,
+                    emotion_label=emotion_label,
+                    env_context=env_context,
+                    language=lang,
+                    stream=bool(emotion_callback),
+                    on_chunk=_on_ai_chunk if emotion_callback else None,
+                    tool_context=tool_context,
+                    is_first_care=is_first_care,
+                )
+            else:
+                return await ai_service.generate_response_for_user(
+                    messages=messages_in,
+                    user_id=cid,
+                    model=model,
+                    request_id=rid,
+                    chat_id=chat_id,
+                    use_care_mode=use_care_mode,
+                    care_emotion=care_emotion,
+                    user_name=user_name,
+                    emotion_label=emotion_label,
+                    env_context=env_context,
+                    language=lang,
+                    stream=bool(emotion_callback),
+                    on_chunk=_on_ai_chunk if emotion_callback else None,
+                    tool_context=tool_context,
+                    is_first_care=is_first_care,
+                )
+        except Exception as e:
+            logger.error(f"AI 生成過程出錯: {e}")
+            raise
 
     model = settings.OPENAI_MODEL
     # 簡化 Pipeline：移除未使用的記憶管理和摘要決策
@@ -1360,12 +1558,13 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         _process_feature,
         _ai,
         model=model,
-        detect_timeout=10.0,  # 意圖檢測超時 (15 → 10)
+        detect_timeout=25.0,  # 意圖檢測超時：保留 Agent 自主工具判斷空間
         feature_timeout=30.0,  # 功能處理超時 (15 → 30，新聞摘要生成需要更長時間)
-        ai_timeout=20.0,  # AI回應超時 (30 → 20)
+        ai_timeout=60.0,  # AI回應超時：hosted WebSearch/工具階段可能先無文字 delta
     )
-    logger.info(f"⚙️ 準備調用 ChatPipeline.process，user_message='{user_message}', audio_emotion={audio_emotion}, language={language}")
-    res: PipelineResult = await pipeline.process(user_message, user_id=user_id, chat_id=chat_id, request_id=request_id, audio_emotion=audio_emotion, language=language, emotion_callback=emotion_callback)
+    logger.info(f"⚙️ 準備調用 ChatPipeline.process，user_message='{user_message}', audio_emotion={audio_emotion}, language={resolved_language}")
+    await _emit_bot_status("planning", "已收到，正在規劃處理方式...", "planning")
+    res: PipelineResult = await pipeline.process(user_message, user_id=user_id, chat_id=chat_id, request_id=request_id, audio_emotion=audio_emotion, language=resolved_language, emotion_callback=emotion_callback)
     logger.info(f"⚙️ ChatPipeline.process 完成，結果='{res.text}', is_fallback={res.is_fallback}, reason={res.reason}")
     
     # 檢查是否有工具元數據
@@ -1408,6 +1607,7 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
     # 提取情緒與關懷模式資訊（新增）
     emotion = res.meta.get('emotion') if res.meta else None
     care_mode = res.meta.get('care_mode', False) if res.meta else False
+    final_language = _preferred_language_from_text(res.text) or _normalize_bcp47_language_tag(language) or "zh-TW"
     
     logger.info(f"🎭 handle_message 情緒: emotion={emotion}, care_mode={care_mode}, meta={res.meta}")
 
@@ -1420,7 +1620,8 @@ async def handle_message(user_message, user_id, chat_id, messages, request_id: s
         'tool_name': tool_name,
         'tool_data': tool_data,
         'emotion': final_emotion,
-        'care_mode': care_mode
+        'care_mode': care_mode,
+        'language': final_language,
     }
 
 
@@ -1800,6 +2001,7 @@ async def voice_login(request: VoiceLoginRequest):
         
         if not result.get("success"):
             error_code = result.get("error", "UNKNOWN_ERROR")
+            quality_warnings = result.get("quality_warnings") or []
             error_messages = {
                 "NO_AUDIO": "沒有收到音訊資料",
                 "AUDIO_TOO_SHORT": "音訊太短，請錄製至少 3 秒",
@@ -1808,11 +2010,15 @@ async def voice_login(request: VoiceLoginRequest):
                 "THRESHOLD_NOT_MET": "無法確認身份，請重試",
                 "MODEL_ERROR": "辨識系統錯誤，請稍後重試",
             }
-            logger.warning(f"🎙️ 語音辨識失敗: {error_code}")
+            logger.warning(f"🎙️ 語音辨識失敗: {error_code} quality_warnings={quality_warnings}")
             return JSONResponse(content={
                 "success": False,
                 "error": error_messages.get(error_code, f"辨識失敗：{error_code}")
             })
+
+        quality_warnings = result.get("quality_warnings") or []
+        if quality_warnings:
+            logger.warning(f"🎙️ 語音登入品質警告（未阻擋）: {quality_warnings}")
         
         # 取得辨識結果
         speaker_label = result.get("label")
@@ -2146,13 +2352,13 @@ async def analyze_image_with_gpt_vision(filename: str, image_base64: str, mime_t
             }
         ]
         try:
-            response = ai_service.client.chat.completions.create(
-                model="gpt-5-nano",
+            analysis = await ai_service.generate_response_for_user(
                 messages=messages,
-                max_completion_tokens=1500,
-                reasoning_effort="medium"  # 圖片分析需要較深入理解，使用 medium
+                user_id="image_analysis",
+                chat_id=None,
+                max_tokens=1500,
+                reasoning_effort="medium",
             )
-            analysis = response.choices[0].message.content
             return analysis
         except Exception as e:
             logger.error(f"GPT Vision分析錯誤: {str(e)}")
@@ -2401,6 +2607,12 @@ class TTSRequest(BaseModel):
     text: str
     voice: Optional[str] = "nova"
     speed: Optional[float] = 1.0
+    language: Optional[str] = None
+    persona: Optional[str] = "xiaohua"
+    mode: Optional[str] = "standard"
+    speaking_rate: Optional[float] = None
+    markup: Optional[str] = None
+    custom_pronunciations: Optional[list[dict]] = None
 
 
 @app.post("/api/tts")
@@ -2430,7 +2642,10 @@ async def synthesize_speech(
                 content={"success": False, "error": "文字長度必須在 1-4096 字元之間"}
             )
 
-        valid_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+        valid_voices = [
+            "alloy", "echo", "fable", "onyx", "nova", "shimmer", "coral",
+            "zh-tw", "zh-cn", "en-us", "ja-jp", "ko-kr", "id-id", "vi-vn"
+        ]
         if request.voice not in valid_voices:
             return JSONResponse(
                 status_code=400,
@@ -2443,10 +2658,21 @@ async def synthesize_speech(
                 content={"success": False, "error": "語速必須在 0.25 到 4.0 之間"}
             )
 
-        logger.info(f"🔊 TTS 請求: text={request.text[:50]}..., voice={request.voice}, speed={request.speed}")
+        logger.info(
+            f"🔊 TTS 請求: text={request.text[:50]}..., voice={request.voice}, speed={request.speed}, "
+            f"language={request.language}, persona={request.persona}, speaking_rate={request.speaking_rate}, "
+            f"has_markup={bool(request.markup)}, custom_pronunciations={len(request.custom_pronunciations or [])}"
+        )
 
         # 調用 TTS 服務獲取完整音頻
-        result = await text_to_speech(request.text, request.voice, request.speed)
+        result = await text_to_speech(
+            request.text,
+            request.voice,
+            request.speed,
+            language=request.language,
+            persona=request.persona,
+            speaking_rate=request.speaking_rate,
+        )
 
         if not result.get("success"):
             return JSONResponse(
@@ -2472,6 +2698,93 @@ async def synthesize_speech(
             status_code=500,
             content={"success": False, "error": str(e)}
         )
+
+
+@app.websocket("/ws/tts")
+async def tts_stream_websocket(websocket: WebSocket):
+    await websocket.accept()
+    stream_started_at = time.perf_counter()
+    total_chunks = 0
+    total_bytes = 0
+    first_chunk_at = None
+    try:
+        payload = await websocket.receive_json()
+        text = str(payload.get("text") or "").strip()
+        voice = str(payload.get("voice") or "nova")
+        speed = float(payload.get("speed") or 1.0)
+        language = payload.get("language")
+        persona = payload.get("persona") or "xiaohua"
+        speaking_rate = payload.get("speaking_rate")
+        markup = payload.get("markup")
+        custom_pronunciations = payload.get("custom_pronunciations")
+        emotion = payload.get("emotion")
+        care_mode = bool(payload.get("care_mode", False))
+
+        if not text and not markup:
+            await websocket.send_json({"type": "tts_error", "error": "文字不可為空"})
+            await websocket.close()
+            return
+
+        from services.tts_service import tts_service
+
+        await websocket.send_json({
+            "type": "tts_stream_start",
+            "sample_rate": 24000,
+            "encoding": "LINEAR16",
+            "persona": persona,
+            "language": language,
+        })
+
+        async for chunk in tts_service.streaming_synthesize(
+            text=text,
+            voice=voice,
+            speed=speed,
+            language=language,
+            persona=persona,
+            speaking_rate=speaking_rate,
+            markup=markup,
+            custom_pronunciations=custom_pronunciations,
+            emotion=emotion,
+            care_mode=care_mode,
+        ):
+            total_chunks += 1
+            total_bytes += len(chunk)
+            if first_chunk_at is None:
+                first_chunk_at = time.perf_counter()
+            await websocket.send_json({
+                "type": "tts_audio_chunk",
+                "audio_base64": base64.b64encode(chunk).decode("ascii"),
+            })
+
+        logger.debug(
+            "📡 TTS 串流傳送完成: chunks=%d bytes=%d first_chunk_delay=%s total_elapsed=%.2fs",
+            total_chunks,
+            total_bytes,
+            f"{(first_chunk_at - stream_started_at):.2f}s" if first_chunk_at is not None else "none",
+            time.perf_counter() - stream_started_at,
+        )
+        await websocket.send_json({"type": "tts_stream_end"})
+    except WebSocketDisconnect:
+        logger.debug(
+            "🔌 TTS 串流連線已由客戶端關閉: chunks=%d bytes=%d first_chunk_delay=%s total_elapsed=%.2fs",
+            total_chunks,
+            total_bytes,
+            f"{(first_chunk_at - stream_started_at):.2f}s" if first_chunk_at is not None else "none",
+            time.perf_counter() - stream_started_at,
+        )
+    except Exception as e:
+        error_detail = f"{type(e).__name__}: {str(e) or repr(e)}"
+        logger.error(f"❌ TTS 串流失敗: {error_detail}")
+        logger.exception("TTS 串流詳細錯誤堆疊:")
+        try:
+            await websocket.send_json({"type": "tts_error", "error": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 

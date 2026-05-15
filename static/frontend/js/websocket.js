@@ -1,3 +1,24 @@
+window.inferConversationLanguage = function inferConversationLanguage(text, fallback = null) {
+  const source = String(text || '').trim();
+  if (!source) {
+    return fallback || window.currentConversationLanguage || window.currentSpeechLanguage || navigator.language || 'zh-TW';
+  }
+
+  if (/[\u3040-\u30ff]/.test(source)) {
+    return 'ja-JP';
+  }
+  if (/[\uac00-\ud7af]/.test(source)) {
+    return 'ko-KR';
+  }
+  if (/[\u0e00-\u0e7f]/.test(source)) {
+    return 'th-TH';
+  }
+  if (/[A-Za-z]/.test(source) && !/[\u3400-\u9fff]/.test(source)) {
+    return 'en-US';
+  }
+
+  return fallback || window.currentConversationLanguage || window.currentSpeechLanguage || navigator.language || 'zh-TW';
+};
 
 
 class WebSocketManager {
@@ -16,7 +37,10 @@ class WebSocketManager {
     this.audioStream = null;
     this.audioProcessor = null;
     this.audioSource = null;
+    this.audioWorkletModuleUrl = null;
     this.isRecording = false;
+    this.localPreviewFinal = '';
+    this.localPreviewInterim = '';
 
     this.connect = this.connect.bind(this);
     this.handleOpen = this.handleOpen.bind(this);
@@ -25,6 +49,8 @@ class WebSocketManager {
     this.handleError = this.handleError.bind(this);
     this.startRecording = this.startRecording.bind(this);
     this.stopRecording = this.stopRecording.bind(this);
+    this.cleanupAudioResources = this.cleanupAudioResources.bind(this);
+    this.ensurePCMRecorderWorklet = this.ensurePCMRecorderWorklet.bind(this);
   }
 
   async connect() {
@@ -201,10 +227,15 @@ class WebSocketManager {
       return false;
     }
 
+    const inferredLanguage = window.inferConversationLanguage(text, navigator.language || 'zh-TW');
+    window.currentConversationLanguage = inferredLanguage;
+    window.currentSpeechLanguage = inferredLanguage;
+
     const payload = {
       type: 'user_message',
       message: text,
-      chat_id: chatId
+      chat_id: chatId,
+      language: inferredLanguage
     };
 
     return this.send(payload);
@@ -246,6 +277,111 @@ class WebSocketManager {
     });
   }
 
+  updateTranscriptPreview(text, className = 'provisional') {
+    const transcript = document.getElementById('transcript');
+    if (!transcript || !text) return;
+    transcript.textContent = text;
+    transcript.className = `voice-transcript ${className}`;
+  }
+
+  startLocalTranscriptPreview() {
+    const recognizer = window.speechRecognition;
+    this.localPreviewFinal = '';
+    this.localPreviewInterim = '';
+
+    if (!recognizer || !recognizer.isSupported) {
+      this.updateTranscriptPreview('聆聽中...', 'provisional');
+      return;
+    }
+
+    recognizer.onResult = (finalText, interimText) => {
+      if (finalText) {
+        this.localPreviewFinal += finalText;
+      }
+      this.localPreviewInterim = interimText || '';
+
+      const preview = `${this.localPreviewFinal}${this.localPreviewInterim}`.trim();
+      if (preview) {
+        this.updateTranscriptPreview(preview, this.localPreviewInterim ? 'realtime' : 'provisional');
+      }
+    };
+    recognizer.onError = () => {
+      this.updateTranscriptPreview('持續接收語音中...', 'provisional');
+    };
+    recognizer.onEnd = () => {};
+    recognizer.start();
+  }
+
+  stopLocalTranscriptPreview() {
+    const recognizer = window.speechRecognition;
+    if (recognizer && recognizer.isSupported) {
+      recognizer.stop();
+    }
+  }
+
+  cleanupAudioResources() {
+    if (this.audioProcessor) {
+      try {
+        this.audioProcessor.port.onmessage = null;
+        this.audioProcessor.disconnect();
+      } catch (e) {
+        console.warn('⚠️ 斷開音訊處理器失敗:', e);
+      }
+      this.audioProcessor = null;
+    }
+
+    if (this.audioSource) {
+      try {
+        this.audioSource.disconnect();
+      } catch (e) {
+        console.warn('⚠️ 斷開音訊源失敗:', e);
+      }
+      this.audioSource = null;
+    }
+
+    if (this.audioStream) {
+      this.audioStream.getTracks().forEach(track => track.stop());
+      this.audioStream = null;
+    }
+
+    if (this.audioContext) {
+      this.audioContext.close().catch(error => {
+        console.warn('⚠️ 關閉 AudioContext 失敗:', error);
+      });
+      this.audioContext = null;
+    }
+  }
+
+  async ensurePCMRecorderWorklet() {
+    if (this.audioWorkletModuleUrl) {
+      return this.audioWorkletModuleUrl;
+    }
+
+    const workletSource = `
+class PCMRecorderProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const channelData = inputs[0] && inputs[0][0];
+    if (channelData && channelData.length) {
+      const pcm16 = new Int16Array(channelData.length);
+      for (let i = 0; i < channelData.length; i++) {
+        const sample = Math.max(-1, Math.min(1, channelData[i]));
+        pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      }
+      this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
+    }
+    return true;
+  }
+}
+
+		registerProcessor('pcm-recorder-processor', PCMRecorderProcessor);
+		`.trim();
+
+    this.audioWorkletModuleUrl = URL.createObjectURL(
+      new Blob([workletSource], { type: 'application/javascript' })
+    );
+    return this.audioWorkletModuleUrl;
+  }
+
 
   async startRecording() {
     if (this.isRecording) {
@@ -277,12 +413,18 @@ class WebSocketManager {
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: 16000
       });
+      const workletModuleUrl = await this.ensurePCMRecorderWorklet();
+      await this.audioContext.audioWorklet.addModule(workletModuleUrl);
+      await this.audioContext.resume();
 
       this.audioSource = this.audioContext.createMediaStreamSource(this.audioStream);
-      this.audioProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      this.audioProcessor = new AudioWorkletNode(this.audioContext, 'pcm-recorder-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 0,
+        channelCount: 1
+      });
 
       this.audioSource.connect(this.audioProcessor);
-      this.audioProcessor.connect(this.audioContext.destination);
 
       this.send({
         type: 'audio_start',
@@ -290,23 +432,25 @@ class WebSocketManager {
         mode: 'realtime_chat',  // 即時轉錄模式（使用 OpenAI Realtime API）
         language: 'auto'  // 自動檢測語言（支援：zh/en/id/ja/vi）
       });
+      window.currentSpeechLanguage = 'auto';
       
 
       this.isRecording = true;
+      window.realtimeTranscript = '';
+      // 重置串流 TTS 狀態（開始新對話）
+      if (typeof resetStreamingTTS === 'function') {
+        resetStreamingTTS();
+      }
+      if (typeof stopSpeaking === 'function') {
+        stopSpeaking();
+      }
+      this.startLocalTranscriptPreview();
 
-      this.audioProcessor.onaudioprocess = (e) => {
+      this.audioProcessor.port.onmessage = (event) => {
         if (!this.isRecording) return;
 
         try {
-          const inputData = e.inputBuffer.getChannelData(0);
-
-          const pcm16 = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            let sample = Math.max(-1, Math.min(1, inputData[i]));
-            pcm16[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-          }
-
-          const bytes = new Uint8Array(pcm16.buffer);
+          const bytes = new Uint8Array(event.data);
           const b64 = btoa(String.fromCharCode(...bytes));
 
           this.send({ 
@@ -330,6 +474,7 @@ class WebSocketManager {
         }
       }
       
+      this.cleanupAudioResources();
       this.isRecording = false;
       return false;
     }
@@ -341,36 +486,15 @@ class WebSocketManager {
       return;
     }
 
-
-    if (this.audioProcessor) {
-      this.audioProcessor.disconnect();
-      this.audioProcessor = null;
-    }
-
-    if (this.audioSource) {
-      try {
-        this.audioSource.disconnect();
-      } catch (e) {
-        console.warn('⚠️ 斷開音訊源失敗:', e);
-      }
-      this.audioSource = null;
-    }
-
-    if (this.audioStream) {
-      this.audioStream.getTracks().forEach(track => track.stop());
-      this.audioStream = null;
-    }
-
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
+    this.cleanupAudioResources();
 
     this.send({
       type: 'audio_stop',
       mode: 'realtime_chat'  // 即時轉錄模式
     });
 
+    this.stopLocalTranscriptPreview();
+    this.updateTranscriptPreview('轉錄中...', 'provisional');
     this.isRecording = false;
   }
 }
@@ -410,6 +534,12 @@ function initializeWebSocket(token) {
 
       case 'typing':
         if (data.message === 'thinking') {
+          window.currentConversationLanguage = null;
+          window.currentSpeechLanguage = null;
+          // 重置串流 TTS（進入思考狀態時停止/重置）
+          if (typeof resetStreamingTTS === 'function') {
+            resetStreamingTTS();
+          }
           setState('thinking');
           if (typeof hideToolCards === 'function') {
             hideToolCards();
@@ -417,20 +547,74 @@ function initializeWebSocket(token) {
         }
         break;
 
+      case 'bot_delta':
+        if (data.language) {
+          window.currentConversationLanguage = data.language;
+          window.currentSpeechLanguage = data.language;
+        }
+        if (typeof currentState !== 'undefined' && currentState !== 'speaking') {
+          setState('speaking');
+        } else {
+          micContainer.classList.add('speaking');
+        }
+        if (typeof editAgentOutput === 'function') {
+          editAgentOutput(data.text || '', true);
+        }
+        // 即時句子串流 TTS：逐句合成播放，不等全文
+        if (typeof enqueueStreamingTTS === 'function') {
+          enqueueStreamingTTS(data.text || '');
+        }
+        break;
+
+      case 'bot_status':
+        if (typeof currentState !== 'undefined' && currentState === 'speaking') {
+          break;
+        }
+        micContainer.classList.add('thinking');
+        if (typeof editAgentOutput === 'function' && data.message) {
+          editAgentOutput(data.message, true, {progress: true});
+        }
+        break;
+
       case 'bot_message':
-        // 【統一】不在此處套用情緒，只由 emotion_detected 事件控制
-        // 保留情緒資訊在 data 中供調試使用
+        if (data.language) {
+          window.currentConversationLanguage = data.language;
+          window.currentSpeechLanguage = data.language;
+        }
+        // 完成串流 TTS（說出最後一段未以標點結尾的殘餘文字）
+        if (typeof finalizeStreamingTTS === 'function') {
+          finalizeStreamingTTS(data.message || '');
+        }
+
+        const useFullTtsFallback = typeof shouldFallbackToFullTTS === 'function'
+          ? shouldFallbackToFullTTS()
+          : false;
+        const awaitSpeechCompletion = typeof hasPendingStreamingSpeech === 'function'
+          ? hasPendingStreamingSpeech() || useFullTtsFallback
+          : useFullTtsFallback;
 
         if (data.care_mode && typeof hideToolCards === 'function') {
           hideToolCards();
         }
 
-        setState('speaking', {
-          outputText: data.message,
-          enableTTS: true
-        });
+        if (typeof finishAgentOutput === 'function') {
+          finishAgentOutput(data.message, useFullTtsFallback, {
+            awaitSpeechCompletion,
+          });
+        } else {
+          setState('speaking', {
+            outputText: data.message,
+            enableTTS: useFullTtsFallback
+          });
+        }
 
-        if (data.tool_name && data.tool_data) {
+        if (data.executed_tools && data.executed_tools.length > 0) {
+          if (typeof displayMultipleToolCards === 'function') {
+            displayMultipleToolCards(data.executed_tools);
+          } else if (data.tool_name && data.tool_data) {
+            displayToolCard(data.tool_name, data.tool_data);
+          }
+        } else if (data.tool_name && data.tool_data) {
           displayToolCard(data.tool_name, data.tool_data);
         }
         break;
@@ -441,24 +625,55 @@ function initializeWebSocket(token) {
         break;
 
       case 'stt_delta':
-        if (!window.realtimeTranscript) {
-          window.realtimeTranscript = '';
-        }
-        window.realtimeTranscript += data.text;
-        transcript.textContent = window.realtimeTranscript;
+        transcript.textContent = data.text;
         transcript.className = 'voice-transcript realtime';
         break;
 
       case 'stt_final':
+        if (data.text) {
+          const inferredLanguage = window.inferConversationLanguage(data.text, window.currentSpeechLanguage || navigator.language || 'zh-TW');
+          window.currentConversationLanguage = inferredLanguage;
+          window.currentSpeechLanguage = inferredLanguage;
+        }
         transcript.textContent = data.text;
         transcript.className = 'voice-transcript final';
         window.realtimeTranscript = '';
         // 【統一】不在此處套用情緒，只由 emotion_detected 事件控制
         break;
 
+      case 'stt_status':
+        if (data.status === 'speech_started') {
+          if (!transcript.textContent || transcript.textContent === '請說話...') {
+            transcript.textContent = '聆聽中...';
+          }
+          transcript.className = 'voice-transcript realtime';
+        } else if (data.status === 'speech_stopped') {
+          transcript.textContent = transcript.textContent || '語音結束，整理轉錄中...';
+          transcript.className = 'voice-transcript provisional';
+        } else if (data.status === 'transcribing' || String(data.status || '').startsWith('committed')) {
+          if (!window.realtimeTranscript) {
+            transcript.textContent = '轉錄中...';
+          }
+          transcript.className = 'voice-transcript provisional';
+        } else if (data.status === 'idle' || data.status === 'error') {
+          if (typeof currentState !== 'undefined' && currentState === 'speaking') {
+            break;
+          }
+          if (typeof resetAgent === 'function') {
+            resetAgent();
+          }
+        }
+        break;
+
       case 'realtime_stt_status':
         if (data.status === 'connected') {
           window.realtimeTranscript = '';
+          if (data.language) {
+            window.currentSpeechLanguage = data.language;
+            window.currentConversationLanguage = data.language;
+          }
+          transcript.textContent = '聆聽中...';
+          transcript.className = 'voice-transcript provisional';
         }
         break;
 
@@ -468,7 +683,11 @@ function initializeWebSocket(token) {
 
       case 'error':
         console.error('❌ 後端錯誤:', data.message);
-        setState('idle');
+        if (typeof resetAgent === 'function') {
+          resetAgent();
+        } else {
+          setState('idle');
+        }
         showErrorNotification(data.message);
         break;
 
@@ -481,7 +700,7 @@ function initializeWebSocket(token) {
 
       case 'emotion_detected':
         if (data.emotion && typeof applyEmotion === 'function') {
-          applyEmotion(data.emotion);
+          applyEmotion(data.emotion, data.care_mode);
         }
         if (data.care_mode && typeof hideToolCards === 'function') {
           hideToolCards();
@@ -534,4 +753,3 @@ function handleVoiceLoginResult(data) {
     showErrorNotification(`語音登入失敗: ${data.error || '未知錯誤'}`);
   }
 }
-

@@ -28,15 +28,16 @@ class ToolRouter:
     
     # 分類關鍵字映射
     CATEGORY_KEYWORDS = {
-        "weather": ["天氣", "氣溫", "下雨", "晴天", "陰天", "weather", "溫度", "濕度"],
+        "weather": ["天氣", "氣溫", "下雨", "晴天", "陰天", "weather", "溫度", "濕度", "天気", "雨", "気温"],
         "transportation": [
             "公車", "巴士", "bus", "火車", "台鐵", "高鐵", "捷運", "metro",
-            "youbike", "ubike", "微笑單車", "共享單車", "停車場", "停車位"
+            "youbike", "ubike", "微笑單車", "共享單車", "停車場", "停車位",
+            "バス", "電車", "地下鉄", "新幹線", "駐輪場", "駐車場"
         ],
-        "location": ["我在哪", "這是哪", "位置", "地址", "怎麼去", "導航", "路線"],
-        "information": ["新聞", "消息", "報導", "news"],
-        "finance": ["匯率", "換算", "美元", "日圓", "歐元", "currency", "exchange"],
-        "health": ["心率", "步數", "血氧", "睡眠", "健康", "運動"],
+        "location": ["我在哪", "這是哪", "位置", "地址", "怎麼去", "導航", "路線", "どこ", "現在地", "住所", "ナビ"],
+        "information": ["新聞", "消息", "報導", "news", "ニュース", "報道"],
+        "finance": ["匯率", "換算", "美元", "日圓", "歐元", "currency", "exchange", "為替", "レート", "円", "ドル"],
+        "health": ["心率", "步數", "血氧", "睡眠", "健康", "運動", "健康", "歩数", "心拍", "運動"],
     }
     
     # 時間敏感工具（深夜可能不適用）
@@ -89,6 +90,7 @@ class ToolRouter:
         logger.debug(f"🎯 檢測到的分類: {detected_categories}")
         
         # 2. 過濾工具
+        language = context.get("language")
         filtered_tools = []
         for tool in tools:
             tool_name = tool.get("function", {}).get("name", "")
@@ -106,6 +108,12 @@ class ToolRouter:
             filtered_tools.append(tool)
         
         # 3. 排序工具（相關分類優先）
+        # 如果是日語，特別提升新聞與天氣的優先級（補償關鍵字可能不全的情況）
+        if language == 'ja':
+            detected_categories.add("weather")
+            detected_categories.add("finance")
+            detected_categories.add("information")
+
         sorted_tools = self._sort_tools(filtered_tools, detected_categories, context)
         
         # 4. 限制工具數量（減少 token 消耗）
@@ -114,7 +122,7 @@ class ToolRouter:
             logger.info(f"📉 工具數量從 {len(sorted_tools)} 限制到 {max_tools}")
             sorted_tools = sorted_tools[:max_tools]
         
-        logger.info(f"🔧 過濾後工具: {[t['function']['name'] for t in sorted_tools]}")
+        logger.info(f"🔧 過濾後工具: {[t['function']['name'] for t in sorted_tools]} (用戶語系: {language})")
         return sorted_tools
     
     def _detect_categories(self, message: str) -> Set[str]:
@@ -234,11 +242,11 @@ class ToolRouter:
             return 20
         
         if len(detected_categories) == 1:
-            # 單一分類，但仍需要保留足夠工具（如 directions）
-            return 12
+            # 單一分類，只需保留核心工具，顯著減少 LLM 負擔
+            return 6
         
-        # 多個分類
-        return 15
+        # 多個分類，保持在較小範圍
+        return 10
     
     def record_tool_usage(self, user_id: str, tool_name: str) -> None:
         """記錄工具使用（用於優先級調整）"""

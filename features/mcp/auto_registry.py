@@ -54,14 +54,17 @@ class MCPAutoRegistry:
 
             logger.info(f"掃描工具目錄: {tools_path}")
 
-            # 掃描所有 Python 文件（包含 *_tool.py 和 tdx_*.py）
-            tool_files = list(tools_path.glob("*_tool.py")) + list(tools_path.glob("tdx_*.py"))
-            # 去重（避免 tdx_*_tool.py 被掃描兩次）
-            tool_files = list(set(tool_files))
+            # 掃描所有 Python 文件
+            tool_files = list(tools_path.rglob("*.py"))
             
             for py_file in tool_files:
+                if py_file.name == "__init__.py" or py_file.name == "base_tool.py" or py_file.name == "tdx_base.py":
+                    continue
+                    
                 tool_name = py_file.stem
-                module_name = f"{tools_dir}.{tool_name}"
+                rel_path = py_file.relative_to(tools_path)
+                module_parts = list(rel_path.parts[:-1]) + [tool_name]
+                module_name = f"{tools_dir}.{'.'.join(module_parts)}"
 
                 try:
                     # 動態導入模組
@@ -175,7 +178,8 @@ class MCPAutoRegistry:
                 description=definition["description"],
                 inputSchema=definition["inputSchema"],
                 handler=handler,
-                metadata=definition.get("metadata", {})
+                metadata=definition.get("metadata", {}),
+                outputSchema=definition.get("outputSchema")
             )
 
             return tool
@@ -198,7 +202,8 @@ class MCPAutoRegistry:
                     description=definition["description"],
                     inputSchema=definition["inputSchema"],
                     handler=handler,
-                    metadata=definition.get("metadata", {})
+                    metadata=definition.get("metadata", {}),
+                    outputSchema=definition.get("outputSchema")
                 )
                 return tool
             else:
@@ -211,7 +216,8 @@ class MCPAutoRegistry:
                     description=definition["description"],
                     inputSchema=definition["inputSchema"],
                     handler=handler,
-                    metadata=definition.get("metadata", {})
+                    metadata=definition.get("metadata", {}),
+                    outputSchema=definition.get("outputSchema")
                 )
                 return tool
 
@@ -293,7 +299,17 @@ class MCPAutoRegistry:
                 description=description,
                 inputSchema=input_schema,
                 handler=placeholder_handler,
-                metadata=metadata
+                metadata=metadata,
+                outputSchema={
+                    "type": "object",
+                    "properties": {
+                        "success": {"type": "boolean"},
+                        "content": {"type": "string"},
+                        "error": {"type": ["string", "null"]},
+                        "error_code": {"type": ["string", "null"]},
+                    },
+                    "required": ["success"],
+                }
             )
 
             logger.info(f"創建系統工具占位符: {name}")

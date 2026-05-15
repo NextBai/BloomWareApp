@@ -5,10 +5,11 @@ Pydantic 工具 Schema 定義
 功能：
 1. 工具輸入/輸出的 Pydantic 基礎類別
 2. 自動生成 OpenAI tools 格式的 JSON Schema
-3. 支援 strict mode 確保 100% 有效輸出
+3. 支援 provider strict mode 確保工具參數結構穩定
 4. 裝飾器模式自動註冊工具
 """
 
+from copy import deepcopy
 from typing import Dict, Any, Optional, List, Callable, Type, TypeVar, get_type_hints
 from dataclasses import dataclass, field
 from functools import wraps
@@ -54,7 +55,7 @@ class ToolSchema:
         轉換為 OpenAI Function Calling 格式
         
         Args:
-            strict: 是否啟用 strict mode（確保輸出符合 schema）
+        strict: 是否啟用 provider strict mode（約束工具參數 schema）
         
         Returns:
             OpenAI tools 格式的字典
@@ -110,31 +111,73 @@ class ToolSchema:
         
         strict mode 要求：
         1. additionalProperties: false
-        2. 所有屬性都在 required 中（或有 default）
-        3. 不支援 oneOf/anyOf/allOf
+        2. 保留 JSON Schema required 語意
+        3. 可選欄位必須透過 default 或 nullable 型別明確表達
         """
-        result = dict(schema)
+        result = deepcopy(schema)
         
         # 確保是 object 類型
         if result.get("type") != "object":
             result = {"type": "object", "properties": result}
         
-        # 添加 additionalProperties: false
-        result["additionalProperties"] = False
-        
-        # 確保所有屬性都在 required 中
+        # Provider strict mode 要求所有 properties 都列入 required；
+        # 有 default 的欄位先保留 default，執行端仍會套用工具 schema 預設值。
+        self._apply_provider_strict_object_rules(result)
         properties = result.get("properties", {})
-        existing_required = set(result.get("required", []))
-        
-        # 收集所有沒有 default 的屬性
-        all_required = []
-        for prop_name, prop_schema in properties.items():
-            if prop_name in existing_required or "default" not in prop_schema:
-                all_required.append(prop_name)
-        
-        result["required"] = all_required
+        result["required"] = list(properties.keys())
         
         return result
+
+    def _apply_provider_strict_object_rules(self, schema: Dict[str, Any]) -> None:
+        """遞迴套用 provider strict object schema 規則。"""
+        if schema.get("type") == "object":
+            schema["additionalProperties"] = False
+            properties = schema.get("properties", {})
+            if isinstance(properties, dict):
+                schema["required"] = list(properties.keys())
+                for prop_schema in properties.values():
+                    if isinstance(prop_schema, dict):
+                        self._apply_provider_strict_object_rules(prop_schema)
+
+        for key in ("items",):
+            nested = schema.get(key)
+            if isinstance(nested, dict):
+                self._apply_provider_strict_object_rules(nested)
+
+    def validate_schema_contract(self) -> List[str]:
+        """檢查 input/output schema 是否有會破壞工具調用的契約問題。"""
+        issues: List[str] = []
+        if not self.metadata.name:
+            issues.append("tool name is required")
+        if self.input_schema.get("type") != "object":
+            issues.append(f"{self.metadata.name}: input_schema.type must be object")
+
+        properties = self.input_schema.get("properties", {})
+        if not isinstance(properties, dict):
+            issues.append(f"{self.metadata.name}: input_schema.properties must be object")
+
+        required = self.input_schema.get("required", [])
+        if required and not isinstance(required, list):
+            issues.append(f"{self.metadata.name}: input_schema.required must be list")
+        for field in required:
+            if field not in properties:
+                issues.append(f"{self.metadata.name}: required field '{field}' missing from properties")
+
+        if self.output_schema is not None:
+            if self.output_schema.get("type") != "object":
+                issues.append(f"{self.metadata.name}: output_schema.type must be object")
+            output_props = self.output_schema.get("properties", {})
+            if not isinstance(output_props, dict):
+                issues.append(f"{self.metadata.name}: output_schema.properties must be object")
+
+        return issues
+
+    def contract_warnings(self) -> List[str]:
+        """回報不阻擋執行、但會降低模型選工具品質的問題。"""
+        warnings: List[str] = []
+        if not self.metadata.description:
+            warnings.append(f"{self.metadata.name}: description is empty")
+        return warnings
 
     def get_summary(self) -> Dict[str, Any]:
         """獲取工具摘要（用於快速意圖匹配）"""
@@ -185,7 +228,6 @@ def extract_schema_from_mcp_tool(tool_class: Type) -> Optional[ToolSchema]:
         try:
             input_schema = tool_class.get_input_schema()
         except Exception as e:
-            logger.warning(f"提取 {name} input schema 失敗: {e}")
             input_schema = {"type": "object", "properties": {}}
         
         # 提取 output schema（可選）
@@ -253,6 +295,11 @@ class ToolSchemaRegistry:
     
     def register(self, schema: ToolSchema) -> None:
         """註冊工具 Schema"""
+        issues = schema.validate_schema_contract()
+        if issues:
+            raise ValueError("; ".join(issues))
+        for warning in schema.contract_warnings():
+            logger.warning(warning)
         self._schemas[schema.metadata.name] = schema
         logger.debug(f"註冊工具 Schema: {schema.metadata.name}")
     

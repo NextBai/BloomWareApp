@@ -1,14 +1,38 @@
 import asyncio
 import logging
+import re
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from .tool_models import ToolMetadata, ToolResult
 
+try:
+    import jsonschema
+except ImportError:
+    jsonschema = None
+
 logger = logging.getLogger(__name__)
+
+CITY_ALIASES = {
+    "台北市": "台北",
+    "臺北市": "臺北",
+    "新北市": "新北",
+    "桃園市": "桃園",
+    "台中市": "台中",
+    "臺中市": "臺中",
+    "台南市": "台南",
+    "臺南市": "臺南",
+    "高雄市": "高雄",
+    "新竹市": "新竹",
+}
 
 EnvProvider = Callable[[Optional[str]], Awaitable[Dict[str, Any]]]
 ResultFormatter = Callable[[str, str, Dict[str, Any], str], Awaitable[str]]
 ToolHandler = Callable[[Dict[str, Any]], Awaitable[Any]]
+OutputSchemaProvider = Callable[[str], Optional[Dict[str, Any]]]
+
+
+class ToolOutputValidationError(RuntimeError):
+    """Raised when a tool result violates its declared outputSchema."""
 
 
 class ToolCoordinator:
@@ -25,11 +49,13 @@ class ToolCoordinator:
         env_provider: EnvProvider,
         tool_lookup: Callable[[str], Optional[ToolHandler]],
         formatter: ResultFormatter,
+        output_schema_provider: Optional[OutputSchemaProvider] = None,
         failure_handlers: Optional[Dict[str, Callable[[Dict[str, Any], Exception], ToolResult]]] = None,
     ) -> None:
         self._env_provider = env_provider
         self._tool_lookup = tool_lookup
         self._formatter = formatter
+        self._output_schema_provider = output_schema_provider
         self._metadata: Dict[str, ToolMetadata] = {}
         self._failure_handlers = failure_handlers or {}
 
@@ -78,7 +104,10 @@ class ToolCoordinator:
             logger.info(f"📦 [Coordinator] 環境資訊: {env_ctx}")
             if env_ctx:
                 for field in metadata.requires_env:
-                    if merged.get(field) is not None:
+                    val = merged.get(field)
+                    # 如果參數已有值且不是預設佔位符（如 0 或空字串），則跳過注入
+                    # 這是為了解決 GPT 可能會填入 0 作為座標佔位符的問題
+                    if val is not None and val != 0 and val != "":
                         continue
                     env_value = env_ctx.get(field)
                     # 主欄位為 None 時，嘗試 fallback 欄位
@@ -90,6 +119,7 @@ class ToolCoordinator:
                                 break
                     # 只注入非 None 的值，避免覆蓋工具的預設值或觸發 schema 驗證錯誤
                     if env_value is not None:
+                        env_value = self._normalize_env_value(field, env_value)
                         merged[field] = env_value
                         logger.info(f"📦 [Coordinator] 注入環境變數: {field}={env_value}")
         elif not user_id:
@@ -97,6 +127,24 @@ class ToolCoordinator:
 
         logger.info(f"📦 [Coordinator] 最終參數: {merged}")
         return merged
+
+    @staticmethod
+    def _normalize_env_value(field: str, value: Any) -> Any:
+        if field != "city" or not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        if not normalized:
+            return value
+
+        if normalized in CITY_ALIASES:
+            return CITY_ALIASES[normalized]
+
+        exact_match = re.match(r"^(台北|臺北|新北|桃園|台中|臺中|台南|臺南|高雄|新竹)(?:市|縣)?$", normalized)
+        if exact_match:
+            return exact_match.group(1)
+
+        return normalized
 
     async def _execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         handler = self._tool_lookup(tool_name)
@@ -109,8 +157,13 @@ class ToolCoordinator:
             try:
                 result = await asyncio.wait_for(handler(arguments), timeout=30.0)
                 if isinstance(result, dict):
+                    self._validate_output(tool_name, result)
                     return result
-                return {"success": True, "content": str(result)}
+                wrapped = {"success": True, "content": str(result)}
+                self._validate_output(tool_name, wrapped)
+                return wrapped
+            except ToolOutputValidationError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 logger.warning("工具 %s 執行失敗 (attempt=%s): %s", tool_name, attempt, exc)
@@ -119,6 +172,21 @@ class ToolCoordinator:
         if handler and last_exc:
             return handler(arguments, last_exc)  # type: ignore[arg-type]
         raise RuntimeError(f"工具 {tool_name} 執行失敗：{last_exc}")  # type: ignore[arg-type]
+
+    def _validate_output(self, tool_name: str, result: Dict[str, Any]) -> None:
+        if not self._output_schema_provider or jsonschema is None:
+            return
+
+        schema = self._output_schema_provider(tool_name)
+        if not schema:
+            return
+
+        try:
+            jsonschema.validate(result, schema)
+        except jsonschema.ValidationError as exc:
+            field_path = ".".join(str(part) for part in exc.absolute_path)
+            detail = f"{field_path}: {exc.message}" if field_path else exc.message
+            raise ToolOutputValidationError(f"工具 {tool_name} 輸出格式不符合契約: {detail}") from exc
 
     async def _format_result(
         self,

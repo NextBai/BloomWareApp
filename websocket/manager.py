@@ -23,6 +23,7 @@ class ConnectionManager:
         self.client_info: Dict[str, dict] = {}
         self.user_sessions: Dict[str, Dict[str, Any]] = {}
         self.last_env: Dict[str, Dict[str, Any]] = {}
+        self.active_tasks: Dict[str, Any] = {}  # 🎯 追蹤每個用戶正在運行的非同步任務
 
     async def connect(
         self,
@@ -102,6 +103,22 @@ class ConnectionManager:
     def get_client_info(self, user_id: str) -> dict:
         """取得客戶端資訊"""
         return self.client_info.get(user_id, {})
+
+    def register_task(self, user_id: str, task: Any) -> None:
+        """註冊用戶的非同步任務，以便後續取消"""
+        self.active_tasks[user_id] = task
+
+    async def cancel_user_tasks(self, user_id: str) -> None:
+        """取消用戶所有正在運行的任務（用於中斷 Barge-in）"""
+        task = self.active_tasks.get(user_id)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except Exception:
+                pass # 忽略取消時的異常
+            logger.info(f"🛑 已成功中斷用戶 {user_id} 的正在執行任務 (Barge-in)")
+        self.active_tasks.pop(user_id, None)
 
     def get_user_session(self, user_id: str) -> Optional[Dict[str, Any]]:
         """取得用戶會話資訊"""

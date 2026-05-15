@@ -23,6 +23,26 @@
     "description": "MCP 功能服務器，提供天氣、新聞、匯率等查詢功能",
     "protocol_version": "2024-11-05"
   },
+  "openai_tools": {
+    "web_search": {
+      "enabled": true,
+      "description": "OpenAI hosted web_search tool for current public information"
+    },
+    "file_search": {
+      "enabled": false,
+      "disabled_reason": "Not used by this project until vector stores are explicitly configured"
+    },
+    "remote_mcp": {
+      "enabled": true,
+      "approval_default": "always",
+      "items": []
+    },
+    "skills": {
+      "enabled": true,
+      "mode": "system_context",
+      "skills_root": "features/mcp/skills"
+    }
+  },
   "tools": {
     "system_list_features": {
       "name": "system_list_features",
@@ -36,12 +56,52 @@
       "category": "system",
       "examples": ["健康檢查", "服務狀態"]
     },
+    "environment_context": {
+      "name": "environment_context",
+      "description": "取得使用者目前環境感知資料（位置、時區、語言、裝置、活動狀態）",
+      "category": "environment",
+      "examples": ["我現在在哪", "目前環境資訊"],
+      "module": "features.mcp.tools.environment.context_tool",
+      "class": "EnvironmentContextTool"
+    },
+    "weather_query": {
+      "name": "weather_query",
+      "description": "查詢即時天氣資訊",
+      "category": "location",
+      "examples": ["台北天氣", "今天會下雨嗎"],
+      "module": "features.mcp.tools.location.weather_tool",
+      "class": "WeatherTool"
+    },
+    "reverse_geocode": {
+      "name": "reverse_geocode",
+      "description": "將座標轉換成地址、城市與行政區",
+      "category": "location",
+      "examples": ["我在哪裡", "這個座標是哪裡"],
+      "module": "features.mcp.tools.location.geocode_tool",
+      "class": "ReverseGeocodeTool"
+    },
+    "forward_geocode": {
+      "name": "forward_geocode",
+      "description": "將地點名稱轉換成座標",
+      "category": "location",
+      "examples": ["銘傳大學在哪", "台北車站座標"],
+      "module": "features.mcp.tools.location.geocoding_tool",
+      "class": "ForwardGeocodeTool"
+    },
+    "directions": {
+      "name": "directions",
+      "description": "規劃兩點之間的路線",
+      "category": "location",
+      "examples": ["從這裡到台北車站怎麼走", "幫我規劃路線"],
+      "module": "features.mcp.tools.location.directions_tool",
+      "class": "DirectionsTool"
+    },
     "tdx_bus_arrival": {
       "name": "tdx_bus_arrival",
       "description": "查詢公車即時到站時間（自動感知用戶位置，找最近站點）",
       "category": "transportation",
       "examples": ["307 公車還要多久", "附近有什麼公車"],
-      "module": "features.mcp.tools.tdx_bus_arrival",
+      "module": "features.mcp.tools.transportation.tdx_bus_arrival",
       "class": "TDXBusArrivalTool"
     },
     "tdx_metro": {
@@ -49,7 +109,7 @@
       "description": "查詢捷運即時到站、最近車站（台北/高雄/桃園/台中捷運）",
       "category": "transportation",
       "examples": ["最近的捷運站在哪", "台北車站捷運幾分鐘到"],
-      "module": "features.mcp.tools.tdx_metro",
+      "module": "features.mcp.tools.transportation.tdx_metro",
       "class": "TDXMetroTool"
     },
     "tdx_parking": {
@@ -57,7 +117,7 @@
       "description": "查詢附近停車場資訊和即時空位",
       "category": "transportation",
       "examples": ["附近停車場", "台北車站附近停車位"],
-      "module": "features.mcp.tools.tdx_parking",
+      "module": "features.mcp.tools.transportation.tdx_parking",
       "class": "TDXParkingTool"
     },
     "tdx_thsr": {
@@ -65,7 +125,7 @@
       "description": "查詢高鐵時刻表、票價和即時資訊",
       "category": "transportation",
       "examples": ["高鐵從台北到台中", "高鐵票價查詢"],
-      "module": "features.mcp.tools.tdx_thsr",
+      "module": "features.mcp.tools.transportation.tdx_thsr",
       "class": "TDXTHSRTool"
     },
     "tdx_train": {
@@ -73,7 +133,7 @@
       "description": "查詢台鐵時刻表和即時資訊",
       "category": "transportation",
       "examples": ["台鐵從台北到新竹", "火車時刻表"],
-      "module": "features.mcp.tools.tdx_train",
+      "module": "features.mcp.tools.transportation.tdx_train",
       "class": "TDXTrainTool"
     },
     "tdx_youbike": {
@@ -81,20 +141,45 @@
       "description": "查詢 YouBike 站點資訊和即時車輛數量",
       "category": "transportation",
       "examples": ["附近 YouBike", "捷運站 YouBike 數量"],
-      "module": "features.mcp.tools.tdx_youbike",
+      "module": "features.mcp.tools.transportation.tdx_youbike",
       "class": "TDXBikeTool"
+    },
+    "news_query": {
+      "name": "news_query",
+      "description": "查詢最新新聞，可指定類別、語言與數量",
+      "category": "utility",
+      "examples": ["今天科技新聞", "台灣最新消息"],
+      "module": "features.mcp.tools.utility.news_tool",
+      "class": "NewsTool"
+    },
+    "exchange_query": {
+      "name": "exchange_query",
+      "description": "查詢即時匯率並換算貨幣",
+      "category": "utility",
+      "examples": ["100 美元換台幣", "日圓匯率"],
+      "module": "features.mcp.tools.utility.exchange_tool",
+      "class": "ExchangeTool"
+    },
+    "healthkit_query": {
+      "name": "healthkit_query",
+      "description": "查詢使用者健康資料（心率、步數、血氧、睡眠等）",
+      "category": "utility",
+      "examples": ["我今天走幾步", "最近心率如何"],
+      "module": "features.mcp.tools.utility.healthkit_tool",
+      "class": "HealthKitTool"
     }
   },
   "environment": {
     "required_env_vars": [
       "WEATHER_API_KEY",
-      "NEWSAPI_KEY",
+      "NEWSDATA_API_KEY",
       "TDX_CLIENT_ID",
       "TDX_CLIENT_SECRET",
       "OPENROUTESERVICE_API_KEY"
     ],
     "optional_env_vars": [
       "FIXER_API_KEY",
+      "EXCHANGE_API_KEY",
       "HTTP_TIMEOUT"
     ],
     "default_values": {

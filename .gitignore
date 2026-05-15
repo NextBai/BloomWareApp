@@ -1,5 +1,7 @@
 # Python
 __pycache__/
+.pytest_cache/
+.benchmarks/
 *.py[cod]
 *$py.class
 *.so
@@ -33,6 +35,7 @@ MANIFEST
 # Firebase credentials (JSON files)
 *-firebase-adminsdk-*.json
 bloomware-*.json
+supervisor-project*.json
 
 # IDE
 .vscode/

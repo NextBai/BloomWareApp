@@ -1,368 +1,372 @@
 """
-OpenAI Realtime API - 即時語音轉文字服務
-使用 WebSocket 進行低延遲串流轉錄
+Google Cloud Speech-to-Text v2 串流辨識（gRPC StreamingRecognize）。
 
-支援語言：中文(zh)、英文(en)、印尼文(id)、日文(ja)、越南文(vi)
+注意：語音 GCP（STT/TTS 所屬專案，例如 supervisor-project）與 Firebase、
+Google OAuth 登入是不同脈絡——專案 ID、API Key、服務帳戶請勿與 Firestore 混用。
+STT 串流僅支援 gRPC + OAuth（服務帳戶）；API Key 僅供 TTS REST 等用途。
+
+音訊限制見官方文件：每則 StreamingRecognize 訊息（含首則設定）上限 25 KB。
+前端送 LINEAR16 mono PCM；依 sample_rate 設定 explicit decoding。
 """
 
-import os
-import json
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Optional, Callable, Dict, Any, Literal
-import websockets
+import queue
+import threading
+from typing import Any, Callable, Coroutine, List, Optional
+
 from dotenv import load_dotenv
+from google.oauth2 import credentials as oauth2_credentials
+from google.oauth2 import service_account
+
+from core.config import settings
 
 load_dotenv()
 
 logger = logging.getLogger("services.realtime_stt")
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    logger.warning("⚠️ OPENAI_API_KEY 未設置")
+# 官方上限 25 KB；保留餘量避免邊界錯誤
+_MAX_STREAMING_BYTES = 24 * 1024
+# 即時串流：每累積 3200 bytes（~100ms @ 16kHz 16-bit mono）就送出一次，減少初始延遲
+_FLUSH_THRESHOLD_BYTES = 3200
 
-# OpenAI Realtime API WebSocket URL
-REALTIME_API_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
-
-# 支援的語言列表
-SupportedLanguage = Literal["zh", "en", "id", "ja", "vi"]
 SUPPORTED_LANGUAGES = {
-    "zh": "中文",
-    "en": "English",
-    "id": "Bahasa Indonesia",
-    "ja": "日本語",
-    "vi": "Tiếng Việt"
+    "zh": ["cmn-Hant-TW", "cmn-Hans-CN", "yue-Hant-HK"],
+    "zh-TW": ["cmn-Hant-TW"],
+    "zh-CN": ["cmn-Hans-CN"],
+    "en": ["en-US", "en-GB"],
+    "ja": ["ja-JP"],
+    "ko": ["ko-KR"],
+    "id": ["id-ID"],
+    "vi": ["vi-VN"],
+    "th": ["th-TH"],
+    "fr": ["fr-FR"],
+    "de": ["de-DE"],
+    "es": ["es-ES", "es-US"],
 }
+
+DEFAULT_AUTO_LANGUAGE_CODES = ["cmn-Hant-TW", "en-US", "ja-JP"]
+
+
+def _normalize_v2_model(model: str) -> str:
+    m = (model or "long").strip().lower()
+    if m in ("latest_long", "default"):
+        return "long"
+    if m in ("latest_short",):
+        return "short"
+    return (model or "long").strip()
 
 
 class RealtimeSTTService:
-    """OpenAI Realtime API 即時語音轉文字服務"""
+    """Speech-to-Text v2 雙向串流；需 OAuth（服務帳戶或有效 access token），不支援僅 API Key。"""
 
-    def __init__(self):
-        self.api_key = OPENAI_API_KEY
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
+    def __init__(self) -> None:
+        self.location = settings.GOOGLE_STT_LOCATION
+        self.recognizer_id = settings.GOOGLE_STT_RECOGNIZER_ID
+        self.api_key = settings.GOOGLE_SPEECH_API_KEY
+        self.project_id = ""
+        self._grpc_credentials = None
+        self._reload_speech_identity()
+        self.current_language = "auto"
+        self.sample_rate = 16000
+        self.model = "long"
         self.is_connected = False
-        self._receive_task: Optional[asyncio.Task] = None
-        self.current_language: str = "zh"
+        self._audio_buffer = bytearray()
+        self._pending_send = bytearray()
+        self._final_transcript: Optional[str] = None
+        self._final_transcript_event = asyncio.Event()
+        self._on_transcript_delta: Optional[Callable[[str], Any]] = None
+        self._on_transcript_done: Optional[Callable[[str], Any]] = None
+        self._on_status: Optional[Callable[[str], Any]] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._audio_thread_queue: Optional[queue.Queue] = None
+        self._grpc_thread: Optional[threading.Thread] = None
+        self._final_segments: List[str] = []
+        self._speech_account_source: str = "none"
 
-    def _build_language_prompt(self, language: Optional[str] = None) -> Optional[str]:
-        """
-        建立語言提示
-        
-        注意：不使用具體詞彙（如「你好」「Hello」），避免 Whisper 在靜音或
-        低音量時產生幻覺，將 prompt 中的文字當作轉錄結果輸出。
-        
-        Args:
-            language: 語言代碼（zh/en/id/ja/vi）或 None（自動檢測）
-        
-        Returns:
-            語言提示字串，或 None（不使用 prompt）
-        """
-        # 不使用 prompt，完全依賴 language 參數和音頻內容
-        # 這樣可以避免 Whisper 幻覺出 prompt 中的文字
-        return None
-    
-    def _validate_language(self, language: str) -> Optional[str]:
-        """
-        驗證並正規化語言代碼
+    def _language_codes(self, language: str) -> list[str]:
+        lang = (language or "auto").strip()
+        if lang in {"auto", "detect", ""}:
+            configured = [
+                item.strip()
+                for item in settings.GOOGLE_STT_AUTO_LANGUAGE_CODES.split(",")
+                if item.strip()
+            ]
+            return (configured or DEFAULT_AUTO_LANGUAGE_CODES)[:3]
+        return SUPPORTED_LANGUAGES.get(lang, DEFAULT_AUTO_LANGUAGE_CODES)[:3]
 
-        Args:
-            language: 語言代碼（或 'auto' 表示自動檢測）
+    def _recognizer_name(self) -> str:
+        return (
+            f"projects/{self.project_id}/locations/{self.location}"
+            f"/recognizers/{self.recognizer_id}"
+        )
 
-        Returns:
-            正規化後的語言代碼，或 None（自動檢測）
-        """
-        lang = language.lower().strip()
-        
-        # 自動檢測模式
-        if lang in ('auto', 'detect', ''):
-            logger.info("🌐 啟用自動語言檢測")
-            return None
-        
-        if lang in SUPPORTED_LANGUAGES:
-            return lang
-        
-        # 嘗試從完整語言名稱匹配
-        for code, name in SUPPORTED_LANGUAGES.items():
-            if name.lower() == lang.lower():
-                return code
-        
-        # 不支援的語言，使用自動檢測
-        logger.warning(f"⚠️ 不支援的語言 '{language}'，改用自動檢測")
-        return None
-
-    async def connect(
-        self,
-        on_transcript_delta: Optional[Callable[[str], None]] = None,
-        on_transcript_done: Optional[Callable[[str], None]] = None,
-        on_vad_committed: Optional[Callable[[str], None]] = None,
-        model: str = "gpt-4o-mini-transcribe",
-        language: str = "zh",
-    ) -> bool:
-        """
-        建立與 OpenAI Realtime API 的 WebSocket 連線
-
-        Args:
-            on_transcript_delta: 接收部分轉錄結果的回調函數
-            on_transcript_done: 接收完整轉錄結果的回調函數
-            on_vad_committed: VAD 偵測到語音結束的回調函數
-            model: 使用的模型（gpt-4o-transcribe 或 gpt-4o-mini-transcribe）
-            language: 語言代碼（zh/en/id/ja/vi）
-
-        Returns:
-            bool: 連線是否成功
-        """
-        if not self.api_key:
-            logger.error("❌ OpenAI API Key 未設置")
-            return False
-
-        # 驗證語言
-        validated_language = self._validate_language(language)
-        self.current_language = validated_language or "auto"
-        
-        if validated_language:
-            language_name = SUPPORTED_LANGUAGES.get(validated_language, validated_language)
-            logger.info(f"🌐 語言設定: {language_name} ({validated_language})")
-        else:
-            logger.info("🌐 語言設定: 自動檢測（支援 zh/en/id/ja/vi）")
-
-        try:
-            logger.info(f"🔌 連接到 OpenAI Realtime API: {REALTIME_API_URL}")
-
-            # 建立 WebSocket 連線（使用 API Key 認證）
-            self.ws = await websockets.connect(
-                REALTIME_API_URL,
-                additional_headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "OpenAI-Beta": "realtime=v1"
-                }
-            )
-
-            self.is_connected = True
-            logger.info("✅ 已連接到 OpenAI Realtime API")
-
-            # 發送 session 配置（正確格式：需要 session 物件包裹）
-            # 不使用 prompt 參數，避免 Whisper 幻覺
-            transcription_config = {
-                "model": model,
-            }
-            
-            # 如果指定了語言，加入 language 參數
-            if validated_language:
-                transcription_config["language"] = validated_language
-                logger.info(f"🌐 Whisper 語言設定: {validated_language}")
-            
-            session_config = {
-                "type": "transcription_session.update",
-                "session": {
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": transcription_config,
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 500
-                    },
-                    "input_audio_noise_reduction": {
-                        "type": "near_field"
-                    }
-                }
-            }
-
-            await self.ws.send(json.dumps(session_config))
-            logger.info("📤 已發送 session 配置（含語言引導提示）")
-
-            # 啟動接收事件的背景任務
-            self._receive_task = asyncio.create_task(
-                self._receive_events(
-                    on_transcript_delta,
-                    on_transcript_done,
-                    on_vad_committed
+    def _validate_config(self) -> Optional[str]:
+        if self._grpc_credentials is None:
+            if self.api_key:
+                return (
+                    "STT 串流需 gRPC + OAuth（語音專案請設 GOOGLE_SPEECH_* 服務帳戶）；"
+                    "僅 API Key 無法用於 Speech v2 streaming（API Key 可給 TTS REST）"
                 )
+            return (
+                "Google STT 串流需要 OAuth 憑證：請設定 GOOGLE_SPEECH_SERVICE_ACCOUNT_PATH "
+                "（或 *_JSON / *_BASE64）指向語音 GCP 之服務帳戶"
             )
+        if not self.project_id:
+            return (
+                "缺少 Speech API 所屬 GCP 專案 ID：請設定 GOOGLE_SPEECH_PROJECT_ID 或 "
+                "GOOGLE_CLOUD_PROJECT_ID（或於語音專用服務帳戶 JSON 內提供 project_id）"
+            )
+        speech_only_pid = settings.GOOGLE_SPEECH_PROJECT_ID.strip()
+        if speech_only_pid and self._speech_account_source == "firebase":
+            fb = settings.FIREBASE_PROJECT_ID.strip()
+            if fb and speech_only_pid != fb:
+                return (
+                    "GOOGLE_SPEECH_PROJECT_ID 指向語音 GCP，但目前 OAuth 仍為 Firebase 服務帳戶；"
+                    "請補上 GOOGLE_SPEECH_* 憑證（與語音專案一致），或移除 GOOGLE_SPEECH_PROJECT_ID"
+                )
+        return None
 
-            return True
+    def _reload_speech_identity(self) -> None:
+        """從 .env 載入語音專用憑證（優先 GOOGLE_SPEECH_*，與 Firebase 分離）。"""
+        self._speech_account_source = "none"
+        info, source = settings.resolve_speech_service_account_info()
+        cred_pid = (info or {}).get("project_id") if info else None
+        self.project_id = settings.get_google_speech_project_id(
+            str(cred_pid) if cred_pid else None,
+        )
 
-        except Exception as e:
-            logger.error(f"❌ 連接失敗: {e}")
-            self.is_connected = False
-            return False
+        if info is not None:
+            try:
+                self._grpc_credentials = service_account.Credentials.from_service_account_info(
+                    info,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                self._speech_account_source = source
+                if source == "speech":
+                    logger.info("Google STT 使用 GOOGLE_SPEECH_* 服務帳戶（與 Firebase 分離）")
+                return
+            except Exception as exc:
+                logger.warning("Google STT service account 載入失敗: %s", exc)
+                self._grpc_credentials = None
 
-    async def _receive_events(
-        self,
-        on_transcript_delta: Optional[Callable],
-        on_transcript_done: Optional[Callable],
-        on_vad_committed: Optional[Callable]
-    ):
-        """
-        接收並處理來自 OpenAI Realtime API 的事件
+        static_token = settings.GOOGLE_STT_ACCESS_TOKEN.strip()
+        if static_token:
+            logger.warning("Google STT using static access token for gRPC; prefer service account")
+            self._grpc_credentials = oauth2_credentials.Credentials(token=static_token)
+            self._speech_account_source = "token"
+        else:
+            self._grpc_credentials = None
+            self._speech_account_source = "none"
 
-        Args:
-            on_transcript_delta: 部分轉錄回調
-            on_transcript_done: 完整轉錄回調
-            on_vad_committed: VAD 提交回調
-        """
-        try:
-            while self.is_connected and self.ws:
-                try:
-                    message = await self.ws.recv()
-                    event = json.loads(message)
-                    event_type = event.get("type")
-
-                    logger.debug(f"📩 收到事件: {event_type}")
-
-                    # 處理使用者語音的部分轉錄結果（即時串流）
-                    if event_type == "conversation.item.input_audio_transcription.delta":
-                        delta_text = event.get("delta", "")
-                        if on_transcript_delta and delta_text:
-                            await self._safe_callback(on_transcript_delta, delta_text)
-
-                    # 處理完整轉錄結果（語音段結束）
-                    elif event_type == "conversation.item.input_audio_transcription.completed":
-                        full_text = event.get("transcript", "")
-                        if on_transcript_done and full_text:
-                            await self._safe_callback(on_transcript_done, full_text)
-
-                    # 處理 VAD 提交事件（語音段結束）
-                    elif event_type == "input_audio_buffer.committed":
-                        item_id = event.get("item_id", "")
-                        if on_vad_committed:
-                            await self._safe_callback(on_vad_committed, item_id)
-
-                    # 處理錯誤事件
-                    elif event_type == "error":
-                        error_msg = event.get("error", {})
-                        logger.error(f"❌ OpenAI API 錯誤: {error_msg}")
-
-                except websockets.exceptions.ConnectionClosed:
-                    logger.warning("⚠️ WebSocket 連線已關閉")
-                    break
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ JSON 解析錯誤: {e}")
-                except Exception as e:
-                    logger.error(f"❌ 接收事件失敗: {e}")
-
-        except Exception as e:
-            logger.error(f"❌ 事件接收循環失敗: {e}")
-        finally:
-            self.is_connected = False
-
-    async def _safe_callback(self, callback: Callable, *args):
-        """安全地執行回調函數（支援同步和異步）"""
+    async def _safe_callback(self, callback: Optional[Callable], *args) -> None:
+        if not callback:
+            return
         try:
             if asyncio.iscoroutinefunction(callback):
                 await callback(*args)
             else:
                 callback(*args)
-        except Exception as e:
-            logger.error(f"❌ 回調函數執行失敗: {e}")
+        except Exception as exc:
+            logger.error("Google STT callback failed: %s", exc)
+
+    def _schedule_coroutine(self, coro: Coroutine[Any, Any, None]) -> None:
+        if self._loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except RuntimeError:
+            logger.warning("Google STT event loop unavailable, drop async update")
+
+    def _grpc_worker(self) -> None:
+        from google.cloud.speech_v2 import SpeechClient
+        from google.cloud.speech_v2.types import cloud_speech as cloud_speech_types
+
+        assert self._audio_thread_queue is not None
+
+        client = SpeechClient(credentials=self._grpc_credentials)
+        language_codes = self._language_codes(self.current_language)
+        recognition_config = cloud_speech_types.RecognitionConfig(
+            explicit_decoding_config=cloud_speech_types.ExplicitDecodingConfig(
+                encoding=cloud_speech_types.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=int(self.sample_rate),
+                audio_channel_count=1,
+            ),
+            language_codes=language_codes,
+            model=_normalize_v2_model(self.model),
+        )
+        streaming_config = cloud_speech_types.StreamingRecognitionConfig(
+            config=recognition_config,
+            streaming_features=cloud_speech_types.StreamingRecognitionFeatures(
+                interim_results=True,
+                enable_voice_activity_events=True,
+            ),
+        )
+        config_request = cloud_speech_types.StreamingRecognizeRequest(
+            recognizer=self._recognizer_name(),
+            streaming_config=streaming_config,
+        )
+
+        def requests_iter():
+            yield config_request
+            while True:
+                chunk = self._audio_thread_queue.get()
+                if chunk is None:
+                    return
+                yield cloud_speech_types.StreamingRecognizeRequest(audio=chunk)
+
+        try:
+            for response in client.streaming_recognize(requests=requests_iter()):
+                ev = response.speech_event_type
+                if ev == cloud_speech_types.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_BEGIN:
+                    self._schedule_coroutine(self._safe_callback(self._on_status, "receiving_audio"))
+                elif ev == cloud_speech_types.StreamingRecognizeResponse.SpeechEventType.SPEECH_ACTIVITY_END:
+                    self._schedule_coroutine(self._safe_callback(self._on_status, "speech_stopped"))
+
+                for result in response.results:
+                    if not result.alternatives:
+                        continue
+                    text = (result.alternatives[0].transcript or "").strip()
+                    if not text:
+                        continue
+                    if result.is_final:
+                        self._final_segments.append(text)
+                    combined = " ".join(self._final_segments)
+                    preview = f"{combined} {text}".strip() if not result.is_final and combined else text
+                    out = combined if result.is_final else preview
+                    self._schedule_coroutine(self._safe_callback(self._on_transcript_delta, out))
+        except Exception as exc:
+            logger.error("Google STT streaming_recognize failed: %s", exc)
+            self._schedule_coroutine(self._safe_callback(self._on_status, "error"))
+        finally:
+            done_text = " ".join(self._final_segments).strip()
+            self._schedule_coroutine(self._finalize_stream_session(done_text))
+
+    async def _finalize_stream_session(self, text: str) -> None:
+        if text and not self._final_transcript_event.is_set():
+            self._final_transcript = text
+            await self._safe_callback(self._on_transcript_done, text)
+        self._final_transcript_event.set()
+
+    async def connect(
+        self,
+        on_transcript_delta: Optional[Callable[[str], Any]] = None,
+        on_transcript_done: Optional[Callable[[str], Any]] = None,
+        on_vad_committed: Optional[Callable[[str], Any]] = None,
+        model: str = "latest_long",
+        language: str = "auto",
+        sample_rate: int = 16000,
+    ) -> bool:
+        self._reload_speech_identity()
+        error = self._validate_config()
+        if error:
+            logger.error("Google STT 初始化失敗: %s", error)
+            return False
+
+        self.model = model or "latest_long"
+        self.current_language = language or "auto"
+        self.sample_rate = int(sample_rate or 16000)
+        self._audio_buffer.clear()
+        self._pending_send.clear()
+        self._final_segments.clear()
+        self._final_transcript = None
+        self._final_transcript_event.clear()
+        self._on_transcript_delta = on_transcript_delta
+        self._on_transcript_done = on_transcript_done
+        self._on_status = on_vad_committed
+        self._loop = asyncio.get_running_loop()
+        self._audio_thread_queue = queue.Queue()
+        self.is_connected = True
+
+        self._grpc_thread = threading.Thread(target=self._grpc_worker, name="google-stt-v2-stream", daemon=True)
+        self._grpc_thread.start()
+        await self._safe_callback(self._on_status, "speech_started")
+        return True
+
+    def _enqueue_pcm(self, audio_data: bytes) -> None:
+        if not audio_data or self._audio_thread_queue is None:
+            return
+        self._pending_send.extend(audio_data)
+        # 達到 flush 閾值（~100ms）就送出，讓 STT 盡快收到音訊，減少初始延遲
+        while len(self._pending_send) >= _FLUSH_THRESHOLD_BYTES:
+            chunk_size = min(len(self._pending_send), _MAX_STREAMING_BYTES)
+            chunk = bytes(self._pending_send[:chunk_size])
+            del self._pending_send[:chunk_size]
+            self._audio_thread_queue.put(chunk)
+
 
     async def send_audio_chunk(self, audio_data: bytes) -> bool:
-        """
-        發送音頻 chunk 到 OpenAI Realtime API
-
-        Args:
-            audio_data: PCM16 格式的音頻數據（需 Base64 編碼）
-
-        Returns:
-            bool: 是否發送成功
-        """
-        if not self.is_connected or not self.ws:
-            logger.warning("⚠️ WebSocket 未連接，無法發送音頻")
+        if not self.is_connected:
+            logger.warning("Google STT 尚未連線，無法接收音訊")
             return False
-
-        try:
-            import base64
-
-            # 將音頻數據編碼為 Base64
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-
-            # 發送音頻 chunk
-            message = {
-                "type": "input_audio_buffer.append",
-                "audio": audio_base64
-            }
-
-            await self.ws.send(json.dumps(message))
-            logger.debug(f"📤 已發送音頻 chunk: {len(audio_data)} bytes")
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ 發送音頻失敗: {e}")
-            return False
+        if audio_data:
+            self._audio_buffer.extend(audio_data)
+            self._enqueue_pcm(audio_data)
+            await self._safe_callback(self._on_status, "receiving_audio")
+        return True
 
     async def commit_audio(self) -> bool:
-        """
-        手動提交音頻緩衝區（當不使用 Server VAD 時）
-
-        Returns:
-            bool: 是否提交成功
-        """
-        if not self.is_connected or not self.ws:
-            logger.warning("⚠️ WebSocket 未連接，無法提交音頻")
+        if not self.is_connected:
+            logger.warning("Google STT 尚未連線，無法提交音訊")
             return False
+        await self._safe_callback(self._on_status, "speech_stopped")
+        return True
 
-        try:
-            message = {
-                "type": "input_audio_buffer.commit"
-            }
+    def mark_final_transcript(self, transcript: str) -> None:
+        if transcript:
+            self._final_transcript = transcript
+            self._final_transcript_event.set()
 
-            await self.ws.send(json.dumps(message))
-            logger.info("📤 已手動提交音頻緩衝區")
-            return True
+    def _close_stream(self) -> None:
+        if self._audio_thread_queue is not None:
+            if self._pending_send:
+                self._audio_thread_queue.put(bytes(self._pending_send))
+                self._pending_send.clear()
+            self._audio_thread_queue.put(None)
 
-        except Exception as e:
-            logger.error(f"❌提交音頻失敗: {e}")
-            return False
+    async def wait_for_final_transcript(self, timeout: float = 3.5) -> Optional[str]:
+        if self._final_transcript:
+            return self._final_transcript
 
-    async def disconnect(self):
-        """關閉 WebSocket 連線"""
-        if self.ws:
-            logger.info("🔌 關閉 OpenAI Realtime API 連線")
-            self.is_connected = False
+        await self.commit_audio()
+        self._close_stream()
+        if self._grpc_thread and self._grpc_thread.is_alive():
+            await asyncio.to_thread(self._grpc_thread.join, timeout)
 
-            # 取消接收任務
-            if self._receive_task and not self._receive_task.done():
-                self._receive_task.cancel()
-                try:
-                    await self._receive_task
-                except asyncio.CancelledError:
-                    pass
+        for _ in range(5):
+            if self._final_transcript_event.is_set():
+                break
+            await asyncio.sleep(0)
 
-            # 關閉 WebSocket
-            await self.ws.close()
-            self.ws = None
+        if not self._final_transcript_event.is_set():
+            text = " ".join(self._final_segments).strip()
+            if text:
+                self._final_transcript = text
+                await self._safe_callback(self._on_transcript_delta, text)
+                await self._safe_callback(self._on_transcript_done, text)
+            self._final_transcript_event.set()
 
-            logger.info("✅ 已斷開連線")
+        return self._final_transcript
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
+        self._close_stream()
+        if self._grpc_thread and self._grpc_thread.is_alive():
+            await asyncio.to_thread(self._grpc_thread.join, 2.0)
+        await self._safe_callback(self._on_status, "disconnected")
 
 
-# 全域單例
 realtime_stt_service = RealtimeSTTService()
 
 
 async def create_realtime_session(
     on_transcript_delta: Optional[Callable] = None,
     on_transcript_done: Optional[Callable] = None,
-    model: str = "gpt-4o-mini-transcribe",
-    language: str = "zh"
+    model: str = "latest_long",
+    language: str = "auto",
 ) -> RealtimeSTTService:
-    """
-    便捷函數：建立 Realtime STT 會話
-
-    Args:
-        on_transcript_delta: 部分轉錄回調
-        on_transcript_done: 完整轉錄回調
-        model: 使用的模型
-        language: 語言代碼
-
-    Returns:
-        RealtimeSTTService: 已連線的服務實例
-    """
     service = RealtimeSTTService()
-    await service.connect(
-        on_transcript_delta=on_transcript_delta,
-        on_transcript_done=on_transcript_done,
-        model=model,
-        language=language
-    )
+    await service.connect(on_transcript_delta, on_transcript_done, None, model=model, language=language)
     return service

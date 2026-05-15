@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Dict, Tuple, List
 
 from core.emotion_care_manager import EmotionCareManager
+from core.config import settings
+from core.voice_care_gate import decide_voice_care, is_voice_context
 
 logger = logging.getLogger(__name__)
+
+MIN_TOOL_CONFIDENCE = 0.90
 
 
 @dataclass
@@ -35,10 +39,10 @@ class ChatPipeline:
         intent_detector: Callable[[str], Awaitable[Tuple[bool, dict]]],
         feature_processor: Callable[[dict, str, str, Optional[str]], Awaitable[Any]],
         ai_generator: Callable[..., Awaitable[str]],
-        model: str = "gpt-5-nano",
-        detect_timeout: float = 5.0,    # 2025 最佳實踐：Structured Outputs 通常 2-3秒
-        feature_timeout: float = 10.0,  # MCP 工具已有內部超時（30秒）
-        ai_timeout: float = 12.0,       # 配合 Streaming（首次回應 0.5-1秒）
+        model: Optional[str] = None,
+        detect_timeout: float = 20.0,   # 考量到 Function Calling 可能較慢
+        feature_timeout: float = 30.0,  # MCP 工具內部超時
+        ai_timeout: float = 25.0,       # 配合 Streaming
     ) -> None:
         self._intent_detector = intent_detector
         self._feature_processor = feature_processor
@@ -46,7 +50,7 @@ class ChatPipeline:
         self._detect_timeout = detect_timeout
         self._feature_timeout = feature_timeout
         self._ai_timeout = ai_timeout
-        self._model = model
+        self._model = model or settings.OPENAI_MODEL
 
     def _is_chinese_message(self, text: str) -> bool:
         """
@@ -142,11 +146,15 @@ class ChatPipeline:
                 {"role": "user", "content": combined_text}
             ]
 
-            logger.info(f"🌐 呼叫 GPT 翻譯，模型: gpt-4o-mini")
+            logger.info(f"🌐 呼叫 GPT 翻譯")
+            # 格式化回應使用環境變數設定的模型
+            model = settings.GPT_INTENT_MODEL or settings.OPENAI_MODEL
+            logger.info(f"🎨 使用配置模型進行格式化: {model}")
+            
             translated = await ai_service.generate_response_async(
                 messages=messages,
-                model="gpt-4o-mini",  # 升級到 gpt-4o-mini 以提升翻譯品質
-                reasoning_effort=None,  # gpt-4o-mini 不支援此參數
+                model=model,
+                reasoning_effort=None,
                 max_tokens=800,
             )
             logger.info(f"🌐 GPT 翻譯完成，結果長度: {len(translated) if translated else 0}")
@@ -221,207 +229,182 @@ class ChatPipeline:
 
         # language 參數保留以向後兼容，但不使用（GPT 自動判斷語言）
 
-        # 0) 先進行意圖偵測以提取情緒（需要在關懷模式檢查前執行）
-        detect_res = await self._with_timeout(
-            self._intent_detector(user_message), self._detect_timeout, reason="detect"
-        )
-        if isinstance(detect_res, PipelineResult):
-            return detect_res
-        has_feature, intent_data = detect_res
+        has_feature = False
+        intent_data = None
+        tool_context = ""
+        tool_results_list = []
+        emotion_value = "neutral"
+        care_emotion = None
+        use_care_mode = False
+        max_loops = 3
+        current_loop = 0
+        ai_res_text = ""
 
-        # 【情緒融合】雙軌制：音頻情緒優先，文字情緒輔助
-        text_emotion = intent_data.get("emotion", "neutral") if intent_data else "neutral"
-        logger.info(f"🎭 [情緒流向-1] 文字情緒: {text_emotion}")
+        while current_loop < max_loops:
+            # 0) 先進行意圖偵測與可回答性評估 (Confidence-driven check)
+            detect_res = await self._with_timeout(
+                self._intent_detector(user_message, tool_context, language=language), self._detect_timeout, reason="detect"
+            )
+            if isinstance(detect_res, PipelineResult):
+                return detect_res
+            has_feature, intent_data = detect_res
+            
+            if current_loop == 0:
+                # 只在第一輪提取情緒與進行關懷模式判斷
+                if intent_data and "emotion" in intent_data:
+                    emotion_value = intent_data["emotion"]
+                else:
+                    emotion_value = "neutral"
 
-        # 檢查音頻情緒
-        if audio_emotion:
-            logger.info(f"🎭 [情緒流向-2] 音頻情緒資料: success={audio_emotion.get('success')}, emotion={audio_emotion.get('emotion')}, confidence={audio_emotion.get('confidence')}")
+                voice_context = is_voice_context(audio_emotion)
+                voice_care_decision = None
+                if voice_context:
+                    try:
+                        voice_care_decision = decide_voice_care(text_emotion=emotion_value, audio_emotion=audio_emotion)
+                        if voice_care_decision.emotion:
+                            emotion_value = voice_care_decision.emotion
+                    except Exception as e:
+                        logger.warning(f"Voice care decision failed: {e}")
 
-        # 情緒融合邏輯
-        emotion_confidence = 0.5  # 預設置信度
-        if audio_emotion and audio_emotion.get("success"):
-            audio_emotion_label = audio_emotion.get("emotion", "neutral")
-            audio_confidence = audio_emotion.get("confidence", 0.0)
+                emotion_confidence = float(audio_emotion.get("confidence", 0.0)) if isinstance(audio_emotion, dict) else 0.0
 
-            # 【優化】提高門檻到 0.7，避免誤判（太敏感會導致錯誤情緒）
-            if audio_confidence >= 0.7:
-                emotion_value = audio_emotion_label
-                emotion_confidence = audio_confidence
-                logger.info(f"🎭 [情緒流向-3] ✅ 採用音頻情緒: {emotion_value} (置信度: {audio_confidence:.4f})")
-            else:
-                emotion_value = text_emotion
-                emotion_confidence = 0.5  # 文字情緒預設置信度
-                logger.info(f"🎭 [情緒流向-3] ⬇️ 音頻置信度過低 ({audio_confidence:.4f})，改用文字情緒: {emotion_value}")
-        else:
-            emotion_value = text_emotion
-            emotion_confidence = 0.5  # 文字情緒預設置信度
-            logger.info(f"🎭 [情緒流向-3] 📝 無音頻情緒，使用文字情緒: {emotion_value}")
+                if EmotionCareManager.is_in_care_mode(user_id):
+                    exit_match = False
+                    if "沒事了" in user_message or "謝謝" in user_message or "好多了" in user_message:
+                        if emotion_value not in ["sad", "angry", "fear"]:
+                            exit_match = True
+                        if voice_context and voice_care_decision and not voice_care_decision.allow:
+                            exit_match = True
 
-        # 【關鍵】記錄最終情緒
-        logger.info(f"🎭 [情緒流向-最終] emotion={emotion_value}, confidence={emotion_confidence:.2f}")
+                    if exit_match:
+                        logger.info(f"💙 使用者情緒平穩 [{emotion_value}]，退出關懷模式")
+                        EmotionCareManager.exit_care_mode(user_id)
+                        use_care_mode = False
+                        if emotion_callback:
+                            try:
+                                await emotion_callback(emotion_value, False)
+                            except Exception as e:
+                                logger.warning(f"emotion_callback 錯誤: {e}")
+                    else:
+                        logger.info(f"💙 維持關懷模式，情緒=[{emotion_value}]")
+                        use_care_mode = True
+                        care_emotion = EmotionCareManager._active_care_users.get(user_id, {}).get("emotion") or emotion_value
+                        if emotion_callback:
+                            try:
+                                await emotion_callback(emotion_value, True)
+                            except Exception as e:
+                                logger.warning(f"emotion_callback 錯誤: {e}")
 
-        # 1) 檢查是否在關懷模式
-        if user_id and EmotionCareManager.is_in_care_mode(user_id, chat_id):
-            # 檢查是否解除關懷模式（傳入情緒資訊）
-            if EmotionCareManager.check_release(user_id, user_message, chat_id, emotion=emotion_value):
-                logger.info(f"✅ 用戶 {user_id} 情緒恢復，解除關懷模式，繼續正常流程")
-                # 解除後繼續正常流程
-            else:
-                logger.info(f"💙 用戶 {user_id} 在關懷模式中，跳過工具調用，使用關懷 AI")
-                # 直接用關懷模式 AI 回應（不檢測意圖，不調用工具）
-                care_emotion = EmotionCareManager.get_care_emotion(user_id, chat_id)
-                final_emotion = care_emotion or emotion_value
+                        ai_res = await self._with_timeout(
+                            self._ai_generator(
+                                user_message,
+                                user_id,
+                                self._model,
+                                request_id,
+                                chat_id,
+                                use_care_mode=use_care_mode,
+                                care_emotion=care_emotion,
+                                emotion_label=emotion_value,
+                                is_first_care=False,
+                            ),
+                            self._ai_timeout,
+                            reason="ai-care",
+                        )
+                        if isinstance(ai_res, PipelineResult):
+                            return ai_res
+                        text = str(ai_res or "").strip()
+                        if not text:
+                            text = "我在這裡陪你，隨時可以聊聊。"
+                        return PipelineResult(text=text, is_fallback=False, meta={"care_mode": True, "emotion": care_emotion})
+
+                # 檢查是否需要進入關懷模式
+                can_enter_care = True
+                if voice_context and voice_care_decision is not None:
+                    can_enter_care = voice_care_decision.allow
+
+                if can_enter_care and user_id and EmotionCareManager.check_and_enter_care_mode(
+                    user_id, emotion_value, chat_id, confidence=emotion_confidence
+                ):
+                    logger.warning(f"⚠️ 偵測到極端情緒 [{emotion_value}]（置信度: {emotion_confidence:.2f}），進入關懷模式")
+                    
+                    if emotion_callback:
+                        try:
+                            await emotion_callback(emotion_value, True)
+                        except Exception as e:
+                            logger.warning(f"emotion_callback 錯誤: {e}")
+
+                    ai_res = await self._with_timeout(
+                        self._ai_generator(
+                            user_message,
+                            user_id,
+                            self._model,
+                            request_id,
+                            chat_id,
+                            use_care_mode=True,
+                            care_emotion=emotion_value,
+                            emotion_label=emotion_value,
+                            is_first_care=True,  # 告知 Agent 這是第一次進入，需引導退出
+                        ),
+                        self._ai_timeout,
+                        reason="ai-care",
+                    )
+                    if isinstance(ai_res, PipelineResult):
+                        return ai_res
+                    text = str(ai_res or "").strip()
+                    if not text:
+                        text = "我聽到了，我在這裡陪你。"
+
+                    return PipelineResult(text=text, is_fallback=False, meta={"care_mode": True, "emotion": emotion_value})
+
                 if emotion_callback:
                     try:
-                        await emotion_callback(final_emotion, True)
+                        await emotion_callback(emotion_value, False)
                     except Exception as e:
                         logger.warning(f"emotion_callback 錯誤: {e}")
 
-                ai_res = await self._with_timeout(
-                    self._ai_generator(
-                        user_message,
-                        user_id,
-                        self._model,
-                        request_id,
-                        chat_id,
-                        use_care_mode=True,
-                        care_emotion=care_emotion,
-                        emotion_label=care_emotion,
-                    ),
-                    self._ai_timeout,
-                    reason="ai-care",
-                )
-                if isinstance(ai_res, PipelineResult):
-                    return ai_res
-                text = str(ai_res or "").strip()
-                if not text:
+            if has_feature and intent_data and intent_data.get("type") == "mcp_tool":
+                confidence = float(intent_data.get("confidence", 0.0) or 0.0)
+                if confidence < MIN_TOOL_CONFIDENCE:
+                    logger.info("🔒 工具信心度不足 %.2f，禁止調用工具", confidence)
                     return PipelineResult(
-                        text="我在這裡陪你，隨時可以聊聊。",
+                        text=self._build_low_confidence_tool_message(user_message, confidence),
                         is_fallback=True,
-                        reason="ai-care-empty",
-                        meta={"care_mode": True, "emotion": care_emotion or "sad"}
+                        reason="low_confidence",
+                        meta={"confidence": confidence}
                     )
-                return PipelineResult(text=text, is_fallback=False, meta={"care_mode": True, "emotion": care_emotion})
 
-        # 2) 檢查是否需要進入關懷模式（傳遞置信度，用於連續性判斷）
-        if user_id and EmotionCareManager.check_and_enter_care_mode(
-            user_id, emotion_value, chat_id, confidence=emotion_confidence
-        ):
-            logger.warning(f"⚠️ 偵測到極端情緒 [{emotion_value}]（置信度: {emotion_confidence:.2f}），進入關懷模式")
-            # 立即使用關懷模式 AI 回應
-            
-            if emotion_callback:
-                try:
-                    await emotion_callback(emotion_value, True)
-                except Exception as e:
-                    logger.warning(f"emotion_callback 錯誤: {e}")
-
-            ai_res = await self._with_timeout(
-                self._ai_generator(
-                    user_message,
-                    user_id,
-                    self._model,
-                    request_id,
-                    chat_id,
-                    use_care_mode=True,
-                    care_emotion=emotion_value,
-                    emotion_label=emotion_value,
-                ),
-                self._ai_timeout,
-                reason="ai-care",
-            )
-            if isinstance(ai_res, PipelineResult):
-                return ai_res
-            text = str(ai_res or "").strip()
-            if not text:
-                text = "我聽到了，我在這裡陪你。"
-
-            # 第一次進入關懷模式時，附加退出提示（新增）
-            exit_hint = "\n\n💙 關懷模式已啟動。說「我沒事了」可以退出。"
-            return PipelineResult(text=text + exit_hint, is_fallback=False, meta={"care_mode": True, "emotion": emotion_value})
-
-        if emotion_callback:
-            try:
-                await emotion_callback(emotion_value, False)
-            except Exception as e:
-                logger.warning(f"emotion_callback 錯誤: {e}")
-
-        # 3) 有功能 → 功能處理(限時)
-        if has_feature and intent_data:
-            feat_res = await self._with_timeout(
-                self._feature_processor(intent_data, user_id, user_message, chat_id),
-                self._feature_timeout,
-                reason="feature",
-            )
-            if isinstance(feat_res, PipelineResult):
-                return feat_res
-            # 如果返回 None，表示這是聊天，不應該被當作功能處理
-            if feat_res is None:
-                has_feature = False
-                intent_data = None
-            else:
-                # 檢查是否為字典（包含工具信息）
-                if isinstance(feat_res, dict):
-                    text = feat_res.get('message', feat_res.get('content', '')).strip()
-                    tool_name = feat_res.get('tool_name')
-                    tool_data = feat_res.get('tool_data')
-                    if not text:
-                        return PipelineResult(
-                            text="抱歉，功能處理沒有產出結果。",
-                            is_fallback=True,
-                            reason="feature-empty",
-                            meta={"emotion": emotion_value, "care_mode": False}
-                        )
-
-                    # 簡化翻譯：非中文用戶 → 翻譯工具卡片
-                    is_chinese = self._is_chinese_message(user_message)
-                    logger.info(f"🌐 語言檢測: user_message='{user_message}', is_chinese={is_chinese}")
-                    if not is_chinese and tool_data:
-                        logger.info(f"🌐 開始翻譯工具卡片: {len(str(tool_data))} chars")
-                        tool_data = await self._translate_tool_data(tool_data, user_message)
-                        logger.info(f"🌐 翻譯完成: {len(str(tool_data))} chars")
-                    elif is_chinese:
-                        logger.info(f"🌐 用戶使用中文，不翻譯工具卡片")
-                    elif not tool_data:
-                        logger.info(f"🌐 無工具資料，跳過翻譯")
-
-                    # 返回帶有工具元數據的結果（包含情緒）
-                    meta_dict = {
-                        'emotion': emotion_value,
-                        'care_mode': False  # 工具調用不是關懷模式
-                    }
-                    if tool_name:
-                        meta_dict['tool_name'] = tool_name
-                    if tool_data:
-                        meta_dict['tool_data'] = tool_data
-
-                    return PipelineResult(
-                        text=text,
-                        is_fallback=False,
-                        meta=meta_dict
-                    )
+            if has_feature and intent_data:
+                feat_res = await self._with_timeout(
+                    self._feature_processor(intent_data, user_id, user_message, chat_id),
+                    self._feature_timeout,
+                    reason="feature",
+                )
+                if isinstance(feat_res, PipelineResult):
+                    tool_context += f"\n[工具執行結果]:\n{feat_res.text}\n"
+                    tool_results_list.append({"text": feat_res.text, "meta": feat_res.meta})
+                elif isinstance(feat_res, dict):
+                    t_name = feat_res.get('tool_name', 'unknown')
+                    t_msg = feat_res.get('message', '')
+                    t_data = feat_res.get('tool_data', {})
+                    tool_context += f"\n[工具 {t_name} 執行結果]:\n{t_msg}\n(Data: {str(t_data)[:2000]})\n"
+                    tool_results_list.append(feat_res)
                 else:
-                    # 正常字串
                     text = str(feat_res or "").strip()
-                    if not text:
-                        return PipelineResult(
-                            text="抱歉，功能處理沒有產出結果。",
-                            is_fallback=True,
-                            reason="feature-empty",
-                            meta={"emotion": emotion_value, "care_mode": False}
-                        )
+                    tool_context += f"\n[工具執行結果]:\n{text}\n"
+                    tool_results_list.append({"text": text})
+                # 【效能優化】短路機制：如果工具調用信心度為 100%，且是簡單工具，則不進入下一輪驗證
+                if confidence >= 1.0:
+                    logger.info("⚡ 工具執行信心度高且結果明確，跳過冗餘驗證")
+                    break
 
-                    # 不再翻譯工具回應，讓 GPT 自己處理並用對應語言描述
+                current_loop += 1
+                continue
+            else:
+                # 如果沒有調用工具，表示 Agent 對目前答案已有 100% 信心，退出循環
+                break
 
-                    return PipelineResult(
-                        text=text,
-                        is_fallback=False,
-                        meta={"emotion": emotion_value, "care_mode": False},
-                    )
-
-        # 4) 無功能 → 一般聊天（限時）
-        # 注意：不傳 messages，改傳 user_message，讓 ai_generator 自動載入歷史對話和記憶
-        ai_res = await self._with_timeout(
+        # 4) 最後 AI 生成回應（結合了所有 tool_context）
+        ai_res_text = await self._with_timeout(
             self._ai_generator(
                 user_message,
                 user_id or "default",
@@ -430,25 +413,48 @@ class ChatPipeline:
                 chat_id,
                 emotion_label=emotion_value,
                 language=language,
+                tool_context=tool_context,
             ),
             self._ai_timeout,
-            reason="ai",
+            reason="ai_gen",
         )
-        if isinstance(ai_res, PipelineResult):
-            return ai_res
-        text = str(ai_res or "").strip()
-        if not text:
-            return PipelineResult(
-                text="抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？",
-                is_fallback=True,
-                reason="ai-empty",
-                meta={"emotion": emotion_value, "care_mode": False}
-            )
+        if isinstance(ai_res_text, PipelineResult):
+            return ai_res_text
 
-        # 一般聊天也包含情緒資訊
-        meta_dict = {
-            'emotion': emotion_value,
-            'care_mode': False  # 一般聊天不是關懷模式
-        }
+        meta = {"emotion": emotion_value, "care_mode": use_care_mode}
+        if tool_results_list:
+            executed_tools = []
+            for t in tool_results_list:
+                if isinstance(t, dict) and t.get("tool_name"):
+                    executed_tools.append({
+                        "tool_name": t.get("tool_name"),
+                        "tool_data": t.get("tool_data")
+                    })
+                elif hasattr(t, 'meta') and t.meta and t.meta.get("tool_name"):
+                    executed_tools.append({
+                        "tool_name": t.meta.get("tool_name"),
+                        "tool_data": t.meta.get("tool_data")
+                    })
+            if executed_tools:
+                meta["executed_tools"] = executed_tools
+                # 兼容原有邏輯，將最後一個工具設為主卡片
+                last_tool = executed_tools[-1]
+                meta["tool_name"] = last_tool["tool_name"]
+                meta["tool_data"] = last_tool["tool_data"]
+            else:
+                last_tool = tool_results_list[-1]
+                if isinstance(last_tool, dict):
+                    meta["tool_name"] = last_tool.get("tool_name")
+                    meta["tool_data"] = last_tool.get("tool_data")
+                elif hasattr(last_tool, 'meta') and last_tool.meta:
+                    meta.update(last_tool.meta)
 
-        return PipelineResult(text=text, is_fallback=False, meta=meta_dict)
+        return PipelineResult(
+            text=str(ai_res_text or "").strip(),
+            is_fallback=False,
+            meta=meta
+        )
+
+    def _build_low_confidence_tool_message(self, user_message: str, confidence: float) -> str:
+        """建立低信心度工具調用的提示訊息"""
+        return "抱歉，我不太確定您的意思。您能說得更具體一點嗎？"

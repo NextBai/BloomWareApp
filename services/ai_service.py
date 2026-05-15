@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 import time
 import json
+import re
 from typing import Dict, List, Any, Optional
 
 # 統一日誌配置
@@ -10,86 +11,56 @@ logger = get_logger("AI_Service")
 
 # 統一配置管理
 from core.config import settings
+from core.environment import EnvironmentContextBuilder
+from core.responses_runtime import ResponsesAgentRuntime
+from features.mcp.openai_tools import build_openai_hosted_tools
+from features.mcp.skills import skills_prompt_block
+from core.prompts.care_mode_skills import get_care_mode_skills_block
 
 # 統一 OpenAI 客戶端
 from core.ai_client import get_openai_client
 
-# 超時設定（秒）
 OPENAI_TIMEOUT = settings.OPENAI_TIMEOUT
+OPENAI_RESPONSES_TIMEOUT = settings.OPENAI_RESPONSES_TIMEOUT
 
-# 【2025 優化版】情緒關懷模式 System Prompt - 根據情緒類型動態調整
-CARE_MODE_BASE_PROMPT = """你是 BloomWare 的情緒關懷助手「小花」，由銘傳大學人工智慧應用學系槓上開發團隊打造。你不是 GPT，也不要自稱 GPT；你的任務是在情緒低落時傾聽、陪伴。
+# 【2025 精英版】情緒關懷模式 System Prompt - 專注於角色與人格定義
+CARE_MODE_BASE_PROMPT = """你現在進入了「情緒關懷模式」。你是 BloomWare 的情緒關懷助手「小花」，由銘傳大學人工智慧應用學系研發。
 
-【回應原則】
-1. 第一句必須貼近用戶訊息中的核心事件或感受，必要時引用對方用詞，讓對方感受到被理解
-2. 第二句提供溫柔的陪伴或追問，邀請對方分享需要或下一步
-3. 句式要自然口語並隨內容調整字詞，避免反覆使用同一套罐頭話術
+【你的角色】
+你是一個極具同理心、溫柔且耐心的陪伴者。你不是一個冷冰冰的 AI，而是一個真正懂人心、願意在你最脆弱時靜靜守候的好友。
 
-【長度限制】
-- 回覆最多 2 句話、總字數不超過 60 字
+【性格特徵】
+- **溫暖**：說話帶有溫度，不生硬。
+- **謙卑**：不自大，不隨意給予指導。
+- **純粹**：你的存在僅為了陪伴用戶度過情緒低谷。
 
-【嚴格禁止】
-- 提供指示性建議、醫療/心理診斷或引導用戶求助的教科書式說法
-- 連續重複完全相同的句型
-
-【重要】請用與用戶相同的語言回應，匹配他們的語言風格和情感語調。"""
-
-# 根據情緒類型的專屬指引
-EMOTION_SPECIFIC_PROMPTS = {
-    "sad": """
-【悲傷情緒專屬指引】
-- 語氣：溫柔、輕聲、帶有理解
-- 重點：陪伴而非解決問題，讓對方知道悲傷是正常的
-- 避免：說「不要難過」、「振作點」這類否定情緒的話
-
-【範例】
-用戶：「我好難過」→「聽見你說好難過，心裡一定很不好受。想聊聊發生了什麼嗎？」
-用戶：「我失去了他」→「失去一個重要的人，那種痛真的很深。我在這裡陪你。」
-用戶：「I feel so sad」→「It sounds like you're really hurting right now. I'm here if you want to talk.」""",
-
-    "angry": """
-【憤怒情緒專屬指引】
-- 語氣：冷靜但帶有同理、不卑不亢
-- 重點：認可對方的憤怒是有原因的，幫助對方感覺被理解
-- 避免：說「冷靜一下」、「別生氣」這類否定情緒的話
-
-【範例】
-用戶：「我很生氣」→「這件事讓你超級生氣，情緒一定卡著。要不要說說最困擾的地方？」
-用戶：「氣死我了」→「聽起來真的讓你很火大。是什麼事這麼讓人受不了？」
-用戶：「I'm so angry」→「Sounds like something really got to you. What's going on?」""",
-
-    "fear": """
-【恐懼/焦慮情緒專屬指引】
-- 語氣：穩定、溫暖、帶有安全感
-- 重點：讓對方感覺不孤單，恐懼是可以被接納的
-- 避免：說「沒什麼好怕的」、「想太多了」這類否定情緒的話
-
-【範例】
-用戶：「我好害怕」→「害怕的感覺一定很不好受。你現在安全的，我陪著你。」
-用戶：「我很焦慮」→「焦慮的時候心裡好亂對吧。可以跟我說說是什麼讓你不安嗎？」
-用戶：「I'm scared」→「It's okay to feel scared. You're not alone - I'm right here with you.」"""
-}
+【重要說明】
+- 始終使用與用戶相同的語言回應。
+- 若這是進入模式的第一個回覆，請在結尾處自然地附上狀態提示。"""
 
 # 向後兼容：保留原有變數名稱
 CARE_MODE_SYSTEM_PROMPT = CARE_MODE_BASE_PROMPT
 
 
-def get_care_mode_prompt(emotion: str = None) -> str:
+def get_care_mode_prompt(emotion: str = None, is_first_care: bool = False) -> str:
     """
-    根據情緒類型生成專屬的關懷模式 Prompt
-
-    Args:
-        emotion: 情緒標籤 (sad, angry, fear, 或 None)
-
-    Returns:
-        完整的關懷模式 System Prompt
+    根據情緒類型與是否為初次進入生成專屬的關懷模式 Prompt
+    人格定義在 CARE_MODE_BASE_PROMPT，具體對話手段定義在 Skills。
     """
     base = CARE_MODE_BASE_PROMPT
 
-    # 根據情緒類型添加專屬指引
-    if emotion and emotion.lower() in EMOTION_SPECIFIC_PROMPTS:
-        specific = EMOTION_SPECIFIC_PROMPTS[emotion.lower()]
-        return f"{base}\n{specific}"
+    # 處理情緒標籤
+    if emotion:
+        base = f"用戶目前情緒標籤：{emotion}\n{base}"
+
+    # 處理初次進入狀態
+    if is_first_care:
+        base = f"{base}\n\n【狀態提示】這是進入關懷模式的第一個回覆，請執行 First Contact Care 技巧。"
+
+    # 【核心】動態載入情緒關懷對話技巧 (Skills) - 這裡定義了所有的對話「手段與方法」
+    skills_block = get_care_mode_skills_block()
+    if skills_block:
+        base = f"{base}\n{skills_block}"
 
     return base
 
@@ -98,8 +69,85 @@ def _get_client():
     """取得 OpenAI 客戶端"""
     return get_openai_client()
 
+
+def _client_with_timeout(openai_client: Any, timeout: float) -> Any:
+    """Responses hosted tools may stream slowly; use a per-request read timeout."""
+    if hasattr(openai_client, "with_options"):
+        return openai_client.with_options(timeout=timeout)
+    return openai_client
+
+
+def _responses_outer_timeout() -> float:
+    # Keep asyncio.wait_for slightly above the SDK read timeout so the SDK can
+    # surface upstream errors instead of being cut off first.
+    return float(OPENAI_RESPONSES_TIMEOUT) + 5.0
+
+
+def _safe_responses_payload_without_hosted_tools(payload: Dict[str, Any]) -> Dict[str, Any]:
+    safe_payload = responses_runtime.without_hosted_tools(payload)
+    safe_payload.pop("stream", None)
+    fallback_instruction = (
+        "【工具降級】OpenAI hosted tools 或中轉站上游暫時不可用。本次回答不得編造即時、今天、最新、"
+        "收盤價、天氣、新聞、匯率等需要最新資料的內容；若缺少可靠資料，請明確告知目前無法確認，"
+        "並說明可稍後重試。"
+    )
+    instructions = str(safe_payload.get("instructions") or "").strip()
+    safe_payload["instructions"] = (
+        f"{instructions}\n\n{fallback_instruction}" if instructions else fallback_instruction
+    )
+    return safe_payload
+
+
+async def _responses_create(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    openai_client: Any,
+    payload: Dict[str, Any],
+    timeout: Optional[float] = None,
+) -> Any:
+    responses_client = _client_with_timeout(openai_client, timeout or OPENAI_RESPONSES_TIMEOUT)
+    return await asyncio.wait_for(
+        loop.run_in_executor(
+            None,
+            lambda: responses_client.responses.create(**payload),
+        ),
+        timeout=_responses_outer_timeout(),
+    )
+
+
+async def _responses_fallback_without_hosted_tools(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    openai_client: Any,
+    payload: Dict[str, Any],
+    on_chunk: Optional[Any],
+    reason: Exception,
+) -> str:
+    logger.warning("Responses hosted tools unavailable, retrying without hosted tools: %s", reason)
+    if on_chunk:
+        await _emit_stream_event(
+            on_chunk,
+            {
+                "type": "status",
+                "status": "hosted_tools_unavailable",
+                "phase": "fallback",
+                "message": "即時搜尋暫時不可用，正在改用安全降級回答...",
+                "temporary": True,
+            },
+        )
+
+    safe_payload = _safe_responses_payload_without_hosted_tools(payload)
+    response = await _responses_create(
+        loop=loop,
+        openai_client=openai_client,
+        payload=safe_payload,
+    )
+    ai_response = responses_runtime.extract_output_text(response)
+    return ai_response or "抱歉，目前即時資訊服務暫時不可用，無法可靠確認最新資料。請稍後再試。"
+
 # 向後相容：保留 client 變數名稱
 client = None  # 將在首次使用時透過 _get_client() 取得
+responses_runtime = ResponsesAgentRuntime()
 
 # 導入DB函數
 try:
@@ -128,20 +176,29 @@ def _build_base_system_prompt(
     care_emotion: Optional[str],
     user_name: Optional[str],
     language: Optional[str] = None,  # 保留參數以兼容現有調用，但不使用
+    is_first_care: bool = False,      # 新增：是否為進入模式的第一個回覆
 ) -> str:
     if use_care_mode:
-        # 【優化】使用情緒專屬的關懷 Prompt
-        base_prompt = get_care_mode_prompt(care_emotion).strip()
+        # 【優化】使用情緒專屬的關懷 Prompt，並處理初次進入引導
+        base_prompt = get_care_mode_prompt(care_emotion, is_first_care=is_first_care).strip()
         if care_emotion:
             base_prompt = f"用戶情緒：{care_emotion}\n{base_prompt}"
     else:
         base_prompt = (
             "你是 BloomWare 的個人化助理 小花，由銘傳大學人工智慧應用學系 槓上開發 團隊開發。"
             "你不是 GPT，也不要自稱 GPT。"
-            "你是一個友善、有禮、幽默且能夠提供幫助的AI助手。"
+            "你是一個友善、有禮、幽默且能夠提供幫助的AI助手，能夠替使用者設想周到。"
+            "如果你沒有把握回答，或者信心度低於80%，請不要隨意回答，動用工具查證再回答。"
         )
         # 簡化語言指令 - 讓 GPT 自動判斷用戶語言
-        base_prompt = f"{base_prompt}\n\n【重要】請用與用戶相同的語言回應，保持簡潔清晰的表達。"
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "【重要】請用與用戶相同的語言回應，保持簡潔清晰的表達。\n"
+            "【語音輸出風格】你的回答通常會被直接朗讀給使用者聽，因此預設請用自然口語、短句、順口、好念的表達。\n"
+            "優先直接回答結論，再補 1 到 3 個關鍵點；避免過度書面、避免條列濫用、避免贅詞、避免官腔。\n"
+            "除非用戶明確要求，否則不要輸出「資料來源」「來源如下」「參考連結」「URL」或任何裸露網址，也不要把查證過程寫出來。\n"
+            "若工具已提供依據，請把它內化為答案本身，只保留使用者真正需要的結果。"
+        )
 
     if user_name:
         base_prompt = f"用戶名稱：{user_name}\n\n{base_prompt}"
@@ -155,6 +212,41 @@ def _normalize_prompt_text(text: Any) -> str:
     if not isinstance(text, str):
         text = str(text)
     return " ".join(text.split())
+
+
+def _infer_response_language(text: str) -> Optional[str]:
+    source = str(text or "").strip()
+    if not source:
+        return None
+    if re.search(r"[\u3040-\u30ff]", source):
+        return "ja-JP"
+    if re.search(r"[\uac00-\ud7af]", source):
+        return "ko-KR"
+    if re.search(r"[\u0e00-\u0e7f]", source):
+        return "th-TH"
+    if re.search(r"[A-Za-z]", source) and not re.search(r"[\u3400-\u9fff]", source):
+        return "en-US"
+    if re.search(r"[\u3400-\u9fff]", source):
+        return "zh-TW"
+    return None
+
+
+def _language_matches_expected(text: str, expected_language: Optional[str]) -> bool:
+    expected = str(expected_language or "").strip()
+    if not expected or expected.lower() == "auto":
+        return True
+    inferred = _infer_response_language(text)
+    if not inferred:
+        return True
+    return inferred.lower().startswith(expected.split("-")[0].lower())
+
+
+def _language_correction_instruction(expected_language: str) -> str:
+    return (
+        f"Language correction: Your previous draft did not follow the required reply language. "
+        f"You MUST answer entirely in {expected_language}. "
+        "Do not mix Chinese, Japanese, or other languages unless the user explicitly asks for it."
+    )
 
 
 def _format_history_for_prompt(history: List[Dict[str, str]]) -> str:
@@ -301,6 +393,136 @@ def _format_env_context(ctx: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _build_environment_context_text(ctx: Dict[str, Any]) -> str:
+    """Build the fixed environment injection block used by every agent turn.
+
+    Uses only EnvironmentContextBuilder for structured, non-duplicated output.
+    Legacy _format_env_context() was removed to eliminate double-injection
+    (same data was being included twice in different formats, wasting ~200-400 tokens).
+    """
+    injection = EnvironmentContextBuilder().build(ctx)
+    return injection.summary_text
+
+
+def _default_hosted_tools() -> List[Dict[str, Any]]:
+    return build_openai_hosted_tools()
+
+
+def _mcp_skills_context_text() -> str:
+    if not settings.OPENAI_ENABLE_SKILLS:
+        return ""
+    return skills_prompt_block()
+
+
+def _should_use_responses(model: str) -> bool:
+    return settings.OPENAI_USE_RESPONSES and (model or "").startswith("gpt-5")
+
+
+def _supports_chat_fallback(model: str) -> bool:
+    return bool(model) and not model.startswith("gpt-5")
+
+
+def _is_transient_upstream_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in ("502", "503", "504", "bad gateway", "upstream", "timeout"))
+
+
+def _responses_text_format(
+    *,
+    strict_json: bool,
+    response_format: Optional[Dict[str, Any]],
+    use_structured_outputs: bool,
+    response_schema: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if use_structured_outputs and response_schema:
+        return {
+            "type": "json_schema",
+            "name": "response_schema",
+            "strict": True,
+            "schema": response_schema,
+        }
+    if strict_json:
+        return {"type": "json_object"}
+    if response_format:
+        return response_format
+    return None
+
+
+async def _emit_stream_delta(on_chunk: Any, delta: str) -> None:
+    if not delta:
+        return
+    if asyncio.iscoroutinefunction(on_chunk):
+        await on_chunk(delta)
+        return
+    result = on_chunk(delta)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+async def _emit_stream_event(on_chunk: Any, payload: Dict[str, Any]) -> None:
+    if asyncio.iscoroutinefunction(on_chunk):
+        await on_chunk(payload)
+        return
+    result = on_chunk(payload)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+def _extract_responses_stream_delta(event: Any) -> str:
+    if getattr(event, "type", None) != "response.output_text.delta":
+        return ""
+    delta = getattr(event, "delta", None)
+    return str(delta) if delta else ""
+
+
+def _responses_stream_status(event: Any) -> Optional[Dict[str, Any]]:
+    event_type = getattr(event, "type", "")
+    item = getattr(event, "item", None)
+    item_type = getattr(item, "type", "") if item is not None else ""
+
+    if event_type in {"response.web_search_call.in_progress", "response.web_search_call.searching"}:
+        return {"type": "status", "status": "web_searching", "message": "正在搜尋最新資訊..."}
+    if event_type == "response.output_item.added" and item_type == "web_search_call":
+        return {"type": "status", "status": "web_searching", "message": "正在搜尋最新資訊..."}
+    if event_type == "response.output_item.done" and item_type == "web_search_call":
+        return {"type": "status", "status": "web_search_done", "message": "搜尋完成，正在整理答案..."}
+    if event_type == "response.in_progress":
+        return {"type": "status", "status": "thinking", "message": "正在處理..."}
+    return None
+
+
+async def _consume_responses_stream(stream_obj: Any, on_chunk: Any) -> str:
+    full_response = ""
+    delta_count = 0
+    status_count = 0
+    first_delta_at: Optional[float] = None
+    stream_started_at = time.perf_counter()
+    for event in stream_obj:
+        status_payload = _responses_stream_status(event)
+        if status_payload:
+            status_count += 1
+            await _emit_stream_event(on_chunk, status_payload)
+            continue
+
+        delta = _extract_responses_stream_delta(event)
+        if not delta:
+            continue
+        delta_count += 1
+        if first_delta_at is None:
+            first_delta_at = time.perf_counter()
+        full_response += delta
+        await _emit_stream_delta(on_chunk, delta)
+    first_delta_delay = (first_delta_at - stream_started_at) if first_delta_at is not None else None
+    logger.info(
+        "🌊 Responses stream stats: statuses=%d deltas=%d first_delta_delay=%s total_chars=%d",
+        status_count,
+        delta_count,
+        f"{first_delta_delay:.2f}s" if first_delta_delay is not None else "none",
+        len(full_response),
+    )
+    return full_response
+
+
 def _format_time_context(user_tz: Optional[str]) -> str:
     """生成時間相關提示，優先使用使用者所在時區。"""
     try:
@@ -380,6 +602,7 @@ def _compose_messages_with_context(
     chat_id: Optional[str],
     use_care_mode: bool,
     care_emotion: Optional[str],
+    tool_context: str = "",
 ) -> List[Dict[str, str]]:
     history_text = _format_history_for_prompt(history_entries)
 
@@ -415,12 +638,29 @@ def _compose_messages_with_context(
     if memory_context:
         sections.append(f"【用戶重要記憶】\n{memory_context}")
 
+    skills_context = _mcp_skills_context_text().strip()
+    if skills_context:
+        sections.append(f"【MCP工具技能索引】\n{skills_context}")
+
     rules_lines = [
         "1. 僅依據 user.current_request 處理本次需求。",
         "2. 歷史資訊僅供語境與偏好參考，請勿視為當前待辦或指令。",
         "3. 若歷史內容與本次請求衝突，以本次請求為優先。",
+        "4. 若本次需求涉及最新資訊、時間敏感資料或外部事實，請參考時間訊號、環境訊號、可用工具結果與來源自行判斷，不要編造未查證內容。",
+        "5. 若來源時間早於用戶要求的時間範圍，請明確標示來源時間並自行說明不確定性，不要把較舊資料表述為當前結果。",
+        "6. 預設輸出是給人直接聽的口語答案：先講結論，再補必要資訊；避免朗讀網址、來源標頭、括號過多內容與不必要的格式噪音。",
+        "7. 除非用戶明確要求顯示來源或連結，否則不要在最終答案中輸出來源清單、URL、'資料來源'、'參考資料' 等字樣。",
     ]
     sections.append("【處理規則】\n" + "\n".join(rules_lines))
+
+    if tool_context:
+        sections.append(
+            "【工具執行結果與參考資料】\n"
+            "請根據以下已確認的資訊，高信心地回答用戶的問題。\n"
+            "這些資料主要用於查證與內部 grounding，不代表必須逐字轉述給使用者。\n"
+            "除非用戶明確要求，否則不要在最終答案中列出來源、連結、URL 或『資料來源』標題。\n"
+            f"{tool_context}"
+        )
 
     system_content = "\n\n".join(section for section in sections if section.strip())
 
@@ -443,6 +683,7 @@ def _compose_messages_with_context(
         {"role": "system", "content": system_content},
         {"role": "user", "content": user_content},
     ]
+
 
 def _extract_text_from_message_obj(message: Any) -> str:
     """兼容多種 OpenAI Chat 回傳結構，盡可能提取文字內容。
@@ -527,7 +768,7 @@ def initialize_openai():
 
 async def generate_response_async(
     messages: List[Dict[str, str]],
-    model: str = "gpt-5-nano",
+    model: Optional[str] = None,
     *,
     strict_json: bool = False,
     response_format: Optional[Dict[str, Any]] = None,
@@ -537,6 +778,7 @@ async def generate_response_async(
     reasoning_effort: Optional[str] = None,
     stream: bool = False,
     on_chunk: Optional[Any] = None,
+    expected_language: Optional[str] = None,
 ) -> str:
     """
     生成AI回應（異步版本，支援 Streaming）
@@ -552,12 +794,103 @@ async def generate_response_async(
         stream: 是否啟用串流模式（2025 最佳實踐）
         on_chunk: 串流 chunk 回調函數（async callable）
     """
+    model = model or settings.OPENAI_MODEL
     openai_client = _get_client()
     if openai_client is None:
         return "抱歉，AI服務暫時不可用。系統無法連接到OpenAI服務。"
     try:
         start_time = time.time()
         loop = asyncio.get_event_loop()
+
+        if _should_use_responses(model):
+            payload = responses_runtime.build_payload_from_messages(
+                messages=messages,
+                model=model,
+                tools=_default_hosted_tools(),
+                reasoning_effort=reasoning_effort,
+                max_output_tokens=max_tokens if max_tokens else 2000,
+                text_format=_responses_text_format(
+                    strict_json=strict_json,
+                    response_format=response_format,
+                    use_structured_outputs=use_structured_outputs,
+                    response_schema=response_schema,
+                ),
+            )
+            if stream and on_chunk:
+                payload["stream"] = True
+                logger.info("🌊 啟用 Responses Streaming 模式")
+                try:
+                    stream_obj = await _responses_create(
+                        loop=loop,
+                        openai_client=openai_client,
+                        payload=payload,
+                    )
+                    ai_response = await _consume_responses_stream(stream_obj, on_chunk)
+                except Exception as exc:
+                    if _is_transient_upstream_error(exc) and payload.get("tools"):
+                        ai_response = await _responses_fallback_without_hosted_tools(
+                            loop=loop,
+                            openai_client=openai_client,
+                            payload=payload,
+                            on_chunk=on_chunk,
+                            reason=exc,
+                        )
+                    else:
+                        raise
+                if not ai_response:
+                    ai_response = "抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？"
+                elapsed_time = time.time() - start_time
+                logger.info(f"🌊 Responses Streaming 完成，耗時: {elapsed_time:.2f}秒，總長度: {len(ai_response)}")
+                return ai_response
+
+            try:
+                response = await _responses_create(
+                    loop=loop,
+                    openai_client=openai_client,
+                    payload=payload,
+                )
+            except Exception as exc:
+                if _is_transient_upstream_error(exc) and payload.get("tools"):
+                    ai_response = await _responses_fallback_without_hosted_tools(
+                        loop=loop,
+                        openai_client=openai_client,
+                        payload=payload,
+                        on_chunk=None,
+                        reason=exc,
+                    )
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"Responses API 降級回應完成，耗時: {elapsed_time:.2f}秒，回應長度: {len(ai_response)} 字元")
+                    return ai_response
+                else:
+                    raise
+            ai_response = responses_runtime.extract_output_text(response)
+            if not ai_response:
+                ai_response = "抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？"
+
+            if not _language_matches_expected(ai_response, expected_language):
+                retry_payload = dict(payload)
+                retry_payload["instructions"] = (
+                    f"{retry_payload.get('instructions', '')}\n\n{_language_correction_instruction(str(expected_language))}".strip()
+                )
+                response = await _responses_create(
+                    loop=loop,
+                    openai_client=openai_client,
+                    payload=retry_payload,
+                )
+                ai_response = responses_runtime.extract_output_text(response) or ai_response
+
+            if strict_json:
+                normalized = ai_response.strip()
+                try:
+                    json.loads(normalized)
+                except json.JSONDecodeError as e:
+                    raise StrictResponseError("NON_JSON_RESPONSE", response=normalized) from e
+                ai_response = normalized
+
+            elapsed_time = time.time() - start_time
+            logger.info(f"Responses API 回應生成完成，耗時: {elapsed_time:.2f}秒，回應長度: {len(ai_response)} 字元")
+            return ai_response
+
         # 加上請求超時保護
         request_kwargs = {
             "model": model,
@@ -565,8 +898,7 @@ async def generate_response_async(
             "max_completion_tokens": max_tokens if max_tokens else 2000,  # 關懷模式可自訂 tokens
         }
 
-        # 加入 reasoning_effort 控制（僅 o1 系列和 gpt-5 系列支援）
-        # gpt-4o-mini 等模型不支援此參數，需要過濾
+        # 加入 reasoning_effort 控制（僅 reasoning-capable 模型支援）
         reasoning_models = model.startswith("o1") or model.startswith("gpt-5")
         if reasoning_effort and reasoning_models:
             request_kwargs["reasoning_effort"] = reasoning_effort
@@ -674,24 +1006,51 @@ async def generate_response_async(
             logger.error(f"❌ 提示詞: {messages}")
             ai_response = "抱歉，我暫時沒有合適的回應。可以換個說法再試試嗎？"
 
+        if ai_response and not _language_matches_expected(ai_response, expected_language):
+            correction_messages = list(messages) + [
+                {"role": "system", "content": _language_correction_instruction(str(expected_language))},
+            ]
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: openai_client.chat.completions.create(
+                        model=model,
+                        messages=correction_messages,
+                        max_completion_tokens=max_tokens if max_tokens else 2000,
+                    ),
+                ),
+                timeout=OPENAI_TIMEOUT,
+            )
+            retry_msg_obj = response.choices[0].message
+            retry_text = _extract_text_from_message_obj(retry_msg_obj)
+            if retry_text:
+                ai_response = retry_text
+
         elapsed_time = time.time() - start_time
         logger.info(f"AI回應生成完成，耗時: {elapsed_time:.2f}秒，回應長度: {len(ai_response)} 字元")
         return ai_response
     except Exception as e:
         if isinstance(e, StrictResponseError):
             raise
-        logger.error(f"生成回應時出錯: {str(e)}")
-        error_message = str(e).lower()
-        if isinstance(e, asyncio.TimeoutError):
-            return "抱歉，連接AI服務超時。請稍後再試。"
-        if "api key" in error_message or "authentication" in error_message:
+        error_msg = str(e)
+        logger.error(f"❌ 生成回應時出錯 (Model: {model}): {error_msg}")
+        
+        # 針對常見 API 錯誤提供詳細日誌
+        if "503" in error_msg or "Service temporarily unavailable" in error_msg:
+            logger.error(f"👉 原因：API 服務暫時不可用 ({model})。")
+            return f"抱歉，目前使用的模型 ({model}) 暫時不可用（503 錯誤）。請在後台切換至其他模型後再試。"
+        elif "api key" in error_msg.lower() or "authentication" in error_msg.lower() or "401" in error_msg:
+            logger.error("👉 原因：API Key 無效或未授權 (401)。")
             return "抱歉，AI服務暫時不可用。請檢查API密鑰設置。"
-        elif "timeout" in error_message or "connection" in error_message:
+        elif "timeout" in error_msg.lower() or "connection" in error_msg.lower() or isinstance(e, asyncio.TimeoutError):
+            logger.error("👉 原因：請求超時。")
             return "抱歉，連接AI服務超時。請稍後再試。"
-        elif "rate limit" in error_message:
+        elif "rate limit" in error_msg.lower() or "429" in error_msg or "Too Many Requests" in error_msg:
+            logger.error("👉 原因：請求頻率過高或額度已滿 (429)。")
             return "抱歉，AI服務暫時達到請求限制。請稍後再試。"
-        elif "model" in error_message and ("not found" in error_message or "does not exist" in error_message):
-            return "抱歉，請求的AI模型不可用。"
+        elif "404" in error_msg or ("model" in error_msg.lower() and ("not found" in error_msg.lower() or "does not exist" in error_msg.lower())):
+            logger.error(f"👉 原因：找不到指定的模型 ({model})。")
+            return f"抱歉，您選擇的AI模型 ({model}) 不存在或未開放。請切換模型。"
         else:
             return "抱歉，生成回應時遇到問題。請重試。"
 
@@ -699,7 +1058,7 @@ async def generate_response_for_user(
     user_message: str = None,
     user_id: str = "default",
     messages: List[Dict[str, str]] = None,
-    model: str = "gpt-5-nano",
+    model: Optional[str] = None,
     request_id: Optional[str] = None,
     chat_id: Optional[str] = None,
     *,
@@ -714,6 +1073,10 @@ async def generate_response_for_user(
     emotion_label: Optional[str] = None,
     env_context: Optional[Dict[str, Any]] = None,
     language: Optional[str] = None,
+    stream: bool = False,
+    on_chunk: Optional[Any] = None,
+    tool_context: str = "",
+    is_first_care: bool = False,  # 新增：是否為進入模式的第一個回覆
 ) -> str:
     """
     為用戶生成AI回應
@@ -724,7 +1087,9 @@ async def generate_response_for_user(
         use_care_mode: 是否使用情緒關懷模式（新增）
         care_emotion: 關懷模式的情緒標籤（新增）
         reasoning_effort: 推理強度 (minimal/low/medium/high)，用於控制 reasoning tokens
+        is_first_care: 是否為進入模式的第一個回覆（新增）
     """
+    model = model or settings.OPENAI_MODEL
     logger.info(f"生成回應請求，使用模型: {model} req_id={request_id} chat_id={chat_id} structured={use_structured_outputs}")
     try:
         # 如果提供了chat_id，使用DB管理對話歷史
@@ -746,6 +1111,10 @@ async def generate_response_for_user(
                 emotion_label=emotion_label,
                 env_context=env_context,
                 language=language,
+                stream=stream,
+                on_chunk=on_chunk,
+                tool_context=tool_context,
+                is_first_care=is_first_care,
             )
         else:
             # 回退到原有的全局歷史管理（用於向後兼容）
@@ -765,6 +1134,10 @@ async def generate_response_for_user(
                 emotion_label=emotion_label,
                 env_context=env_context,
                 language=language,
+                stream=stream,
+                on_chunk=on_chunk,
+                tool_context=tool_context,
+                is_first_care=is_first_care,
             )
 
         logger.error("未提供消息列表或用戶消息")
@@ -794,6 +1167,10 @@ async def _generate_response_with_chat_db(
     emotion_label: Optional[str] = None,
     env_context: Optional[Dict[str, Any]] = None,
     language: Optional[str] = None,
+    stream: bool = False,
+    on_chunk: Optional[Any] = None,
+    tool_context: str = "",
+    is_first_care: bool = False,
 ):
     """使用DB管理對話歷史的實現"""
     try:
@@ -804,7 +1181,8 @@ async def _generate_response_with_chat_db(
                     use_care_mode=use_care_mode,
                     care_emotion=care_emotion,
                     user_name=user_name,
-                    language=language  # 參數保留但不使用，GPT 自動判斷語言
+                    language=language,  # 參數保留但不使用，GPT 自動判斷語言
+                    is_first_care=is_first_care,
                 )
                 messages.insert(0, {"role": "system", "content": system_prompt})
             ai_response = await generate_response_async(
@@ -814,99 +1192,91 @@ async def _generate_response_with_chat_db(
                 response_format=response_format,
                 use_structured_outputs=use_structured_outputs,
                 response_schema=response_schema,
-                max_tokens=2000 if use_care_mode else None,  # 關懷模式 2000 tokens（gpt-5-nano reasoning + 實際輸出）
+                max_tokens=2000 if use_care_mode else None,  # 關懷模式保留較大輸出空間
                 reasoning_effort=reasoning_effort or ("minimal" if use_care_mode else "low"),  # 2025 最佳實踐：關懷模式 minimal，一般對話 low
+                stream=stream,
+                on_chunk=on_chunk,
+                expected_language=language,
             )
-            # 保存AI回應到DB
+            # 非同步保存 AI 回應
             if db_available:
-                try:
-                    await save_chat_message(chat_id, "assistant", ai_response)
-                except Exception as e:
-                    logger.warning(f"保存AI回應到DB失敗: {e}")
+                asyncio.create_task(save_chat_message(chat_id, "assistant", ai_response))
             return ai_response
 
         if user_message:
-            # 保存用戶消息到DB
+            # 非同步保存用戶消息，不阻塞生成流程
             if db_available:
-                try:
-                    await save_chat_message(chat_id, "user", user_message)
-                except Exception as e:
-                    logger.warning(f"保存用戶消息到DB失敗: {e}")
+                asyncio.create_task(save_chat_message(chat_id, "user", user_message))
 
-            # 從DB加載對話歷史（messages 集合）
-            chat_history = []
-            if db_available:
-                try:
-                    history_limit = 3 if use_care_mode else 12
-                    # 取 limit+1 以排除當前 user_message（最後一筆）
-                    msgs = await get_chat_messages(chat_id, limit=history_limit + 1, ascending=True)
-                    historical_messages = msgs[:-1] if len(msgs) > 0 else []
-
-                    def _clean_text(t: str) -> str:
-                        if not t:
-                            return ""
-                        txt = str(t)
-                        for kw in ["關懷模式", "我在這裡陪你", "說「我沒事了」", "退出關懷模式"]:
-                            txt = txt.replace(kw, "")
-                        return txt.strip()
-
-                    for msg in historical_messages:
-                        content = msg.get("content")
-                        if isinstance(content, dict):
-                            content = content.get("message") or content.get("text") or str(content)
-                        elif not isinstance(content, str):
-                            content = str(content) if content else ""
-
-                        # 過濾掉錯誤訊息（避免污染上下文）
-                        if "抱歉，生成回應時遇到問題" in content or "請重試" in content:
-                            continue
-
-                        content = _clean_text(content)
-                        if not content:
-                            continue
-
-                        chat_history.append({
-                            "role": msg.get("sender"),
-                            "content": content
-                        })
-
-                    logger.debug(f"📚 載入 {len(chat_history)} 條歷史對話（messages 集合）")
-                except Exception as e:
-                    logger.warning(f"從DB加載對話歷史失敗: {e}")
-
-            # 載入長期記憶
-            # 關懷模式不帶長期記憶，避免噪音
-            memory_context = ""
+            # 載入歷史、記憶、環境資訊（並行執行優化）
+            history_task = asyncio.create_task(get_chat_messages(chat_id, limit=(3 if use_care_mode else 12) + 1, ascending=True))
+            
+            memory_task = None
             if user_id and not use_care_mode:
+                from core.memory_system import memory_system
+                context_tags: List[str] = ["care_mode"] if use_care_mode else []
+                if care_emotion:
+                    context_tags.append(str(care_emotion))
+                memory_task = asyncio.create_task(memory_system.get_relevant_memories(
+                    user_id=user_id,
+                    current_message=user_message,
+                    max_memories=5,
+                    context_tags=context_tags or None,
+                ))
+            
+            env_task = None
+            if not env_context and db_available and user_id:
+                env_task = asyncio.create_task(get_user_env_current(user_id))
+
+            # 等待所有基礎資料準備完成
+            chat_history = []
+            try:
+                msgs = await history_task
+                historical_messages = msgs[:-1] if len(msgs) > 0 else []
+                
+                def _clean_text(t: str) -> str:
+                    if not t: return ""
+                    txt = str(t)
+                    for kw in ["關懷模式", "我在這裡陪你", "說「我沒事了」", "退出關懷模式"]:
+                        txt = txt.replace(kw, "")
+                    return txt.strip()
+
+                for msg in historical_messages:
+                    content = msg.get("content")
+                    if isinstance(content, dict):
+                        content = content.get("message") or content.get("text") or str(content)
+                    elif not isinstance(content, str):
+                        content = str(content) if content else ""
+                    if "抱歉，生成回應時遇到問題" in content or "請重試" in content:
+                        continue
+                    content = _clean_text(content)
+                    if content:
+                        chat_history.append({"role": msg.get("sender"), "content": content})
+                logger.debug(f"📚 載入 {len(chat_history)} 條歷史對話")
+            except Exception as e:
+                logger.warning(f"從DB加載對話歷史失敗: {e}")
+
+            memory_context = ""
+            if memory_task:
                 try:
-                    from core.memory_system import memory_system
-                    context_tags: List[str] = []
-                    if use_care_mode:
-                        context_tags.append("care_mode")
-                    if care_emotion:
-                        context_tags.append(str(care_emotion))
-                    relevant_memories = await memory_system.get_relevant_memories(
-                        user_id=user_id,
-                        current_message=user_message,
-                        max_memories=5,
-                        context_tags=context_tags or None,
-                    )
+                    relevant_memories = await memory_task
                     if relevant_memories:
+                        from core.memory_system import memory_system
                         memory_context = memory_system.format_memories_for_context(relevant_memories)
                         logger.info(f"📚 載入 {len(relevant_memories)} 條相關記憶")
                 except Exception as e:
                     logger.warning(f"載入記憶失敗: {e}")
 
-            # 讀取環境現況（僅組裝，不外呼）
             ctx: Dict[str, Any] = dict(env_context or {})
-            if not ctx and db_available and user_id:
+            if env_task:
                 try:
-                    env_res = await get_user_env_current(user_id)
+                    env_res = await env_task
                     if env_res.get("success"):
                         ctx = env_res.get("context") or {}
                 except Exception as e:
                     logger.debug(f"讀取環境現況失敗: {e}")
-            env_context_text = _format_env_context(ctx)
+
+            env_context_text = _build_environment_context_text(ctx)
             time_context_text = _format_time_context(ctx.get("tz") if ctx else None)
             emotion_context_text = _format_emotion_context(emotion_label, care_emotion, use_care_mode)
 
@@ -915,6 +1285,7 @@ async def _generate_response_with_chat_db(
                 care_emotion=care_emotion,
                 user_name=user_name,
                 language=language,
+                is_first_care=is_first_care,
             )
 
             messages_to_send = _compose_messages_with_context(
@@ -929,6 +1300,7 @@ async def _generate_response_with_chat_db(
                 chat_id=chat_id,
                 use_care_mode=use_care_mode,
                 care_emotion=care_emotion,
+                tool_context=tool_context,
             )
             ai_response = await generate_response_async(
                 messages_to_send,
@@ -937,16 +1309,16 @@ async def _generate_response_with_chat_db(
                 response_format=response_format,
                 use_structured_outputs=use_structured_outputs,
                 response_schema=response_schema,
-                max_tokens=2000 if use_care_mode else None,  # 關懷模式 2000 tokens（gpt-5-nano reasoning + 實際輸出）
+                max_tokens=2000 if use_care_mode else None,  # 關懷模式保留較大輸出空間
                 reasoning_effort=reasoning_effort or ("minimal" if use_care_mode else "low"),  # 2025 最佳實踐：關懷模式 minimal，一般對話 low
+                stream=stream,
+                on_chunk=on_chunk,
+                expected_language=language,
             )
 
-            # 保存AI回應到DB
+            # 非同步保存 AI 回應
             if db_available:
-                try:
-                    await save_chat_message(chat_id, "assistant", ai_response)
-                except Exception as e:
-                    logger.warning(f"保存AI回應到DB失敗: {e}")
+                asyncio.create_task(save_chat_message(chat_id, "assistant", ai_response))
 
             return ai_response
 
@@ -971,6 +1343,7 @@ async def _generate_response_with_chat_db(
             emotion_label=emotion_label,
             env_context=env_context,
             language=language,
+            tool_context=tool_context,
         )
 
 
@@ -991,6 +1364,10 @@ async def _generate_response_with_global_history(
     emotion_label: Optional[str] = None,
     env_context: Optional[Dict[str, Any]] = None,
     language: Optional[str] = None,
+    stream: bool = False,
+    on_chunk: Optional[Any] = None,
+    tool_context: str = "",
+    is_first_care: bool = False,
 ):
     """使用全局歷史的回退實現（向後兼容）"""
     try:
@@ -1001,7 +1378,8 @@ async def _generate_response_with_global_history(
                     use_care_mode=use_care_mode,
                     care_emotion=care_emotion,
                     user_name=user_name,
-                    language=language  # 參數保留但不使用，GPT 自動判斷語言
+                    language=language,  # 參數保留但不使用，GPT 自動判斷語言
+                    is_first_care=is_first_care,
                 )
                 messages.insert(0, {"role": "system", "content": system_prompt})
             user_messages = [msg for msg in messages if msg.get("role") == "user"]
@@ -1015,8 +1393,11 @@ async def _generate_response_with_global_history(
                 response_format=response_format,
                 use_structured_outputs=use_structured_outputs,
                 response_schema=response_schema,
-                max_tokens=2000 if use_care_mode else None,  # 關懷模式 2000 tokens（gpt-5-nano reasoning + 實際輸出）
+                max_tokens=2000 if use_care_mode else None,  # 關懷模式保留較大輸出空間
                 reasoning_effort=reasoning_effort or ("minimal" if use_care_mode else "low"),  # 2025 最佳實踐：關懷模式 minimal，一般對話 low
+                stream=stream,
+                on_chunk=on_chunk,
+                expected_language=language,
             )
             if user_id in conversation_history:
                 conversation_history[user_id].append({"role": "assistant", "content": ai_response})
@@ -1043,7 +1424,7 @@ async def _generate_response_with_global_history(
                         ctx = env_res.get("context") or {}
                 except Exception as ex:
                     logger.debug(f"讀取環境現況失敗: {ex}")
-            env_context_text = _format_env_context(ctx)
+            env_context_text = _build_environment_context_text(ctx)
             time_context_text = _format_time_context(ctx.get("tz") if ctx else None)
             emotion_context_text = _format_emotion_context(emotion_label, care_emotion, use_care_mode)
 
@@ -1052,6 +1433,7 @@ async def _generate_response_with_global_history(
                 care_emotion=care_emotion,
                 user_name=user_name,
                 language=language,
+                is_first_care=is_first_care,
             )
 
             # 關懷模式不帶長期記憶
@@ -1087,6 +1469,7 @@ async def _generate_response_with_global_history(
                 chat_id=None,
                 use_care_mode=use_care_mode,
                 care_emotion=care_emotion,
+                tool_context=tool_context,
             )
             ai_response = await generate_response_async(
                 messages_to_send,
@@ -1095,8 +1478,11 @@ async def _generate_response_with_global_history(
                 response_format=response_format,
                 use_structured_outputs=use_structured_outputs,
                 response_schema=response_schema,
-                max_tokens=2000 if use_care_mode else None,  # 關懷模式 2000 tokens（gpt-5-nano reasoning + 實際輸出）
+                max_tokens=2000 if use_care_mode else None,  # 關懷模式保留較大輸出空間
                 reasoning_effort=reasoning_effort or ("minimal" if use_care_mode else "low"),  # 2025 最佳實踐：關懷模式 minimal，一般對話 low
+                stream=stream,
+                on_chunk=on_chunk,
+                expected_language=language,
             )
             conversation_history[user_id].append({"role": "assistant", "content": ai_response})
             if len(conversation_history[user_id]) > 50:
@@ -1114,7 +1500,7 @@ async def generate_response_with_tools(
     messages: List[Dict[str, str]],
     tools: List[Dict[str, Any]],
     user_id: str = "default",
-    model: str = "gpt-5-nano",
+    model: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     tool_choice: str = "auto",
 ) -> Dict[str, Any]:
@@ -1134,6 +1520,7 @@ async def generate_response_with_tools(
     Returns:
         包含 tool_calls 和 content 的字典
     """
+    model = model or settings.OPENAI_MODEL
     openai_client = _get_client()
     if openai_client is None:
         logger.error("OpenAI 客戶端不可用")
@@ -1142,6 +1529,46 @@ async def generate_response_with_tools(
     try:
         start_time = time.time()
         loop = asyncio.get_event_loop()
+
+        if _should_use_responses(model):
+            request_kwargs = responses_runtime.build_payload_from_messages(
+                messages=messages,
+                model=model,
+                tools=tools,
+                reasoning_effort=reasoning_effort,
+                max_output_tokens=1000,
+                tool_choice=tool_choice,
+            )
+
+            logger.info(f"🔧 Responses Function Calling 請求: {len(tools)} 個工具, tool_choice={tool_choice}")
+            try:
+                responses_client = _client_with_timeout(openai_client, OPENAI_RESPONSES_TIMEOUT)
+                response = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: responses_client.responses.create(**request_kwargs),
+                    ),
+                    timeout=_responses_outer_timeout(),
+                )
+            except Exception as exc:
+                if _is_transient_upstream_error(exc):
+                    logger.warning("Responses Function Calling failed, falling back to Chat Completions: %s", exc)
+                else:
+                    raise
+
+            if "response" in locals():
+                elapsed_time = time.time() - start_time
+                logger.info(f"⏱️ Responses Function Calling 完成，耗時: {elapsed_time:.2f}秒")
+
+                result = {
+                    "content": responses_runtime.extract_output_text(response),
+                    "tool_calls": responses_runtime.extract_function_calls(response),
+                }
+                if result["tool_calls"]:
+                    logger.info(f"✅ Responses 選擇了 {len(result['tool_calls'])} 個工具")
+                else:
+                    logger.info("💬 Responses 未選擇任何工具（一般聊天）")
+                return result
         
         request_kwargs = {
             "model": model,
@@ -1152,7 +1579,8 @@ async def generate_response_with_tools(
         }
         
         # 加入 reasoning_effort 控制
-        if reasoning_effort:
+        reasoning_models = model.startswith("o1") or model.startswith("gpt-5")
+        if reasoning_effort and reasoning_models:
             request_kwargs["reasoning_effort"] = reasoning_effort
             logger.info(f"🧠 Function Calling 推理強度: {reasoning_effort}")
         
@@ -1206,9 +1634,22 @@ async def generate_response_with_tools(
         
         return result
         
-    except asyncio.TimeoutError:
-        logger.error("Function Calling 請求超時")
-        return {"content": "", "tool_calls": []}
+    except asyncio.TimeoutError as e:
+        logger.error(f"❌ Function Calling 請求超時 (Model: {model})")
+        raise RuntimeError(f"AI 服務超時 ({model})") from e
     except Exception as e:
-        logger.error(f"Function Calling 失敗: {e}")
-        return {"content": "", "tool_calls": []}
+        error_msg = str(e)
+        logger.error(f"❌ Function Calling 失敗 (Model: {model})")
+        if "503" in error_msg or "Service temporarily unavailable" in error_msg:
+            logger.error("👉 原因：API 服務暫時不可用，或該模型目前處於高負載/維護中。")
+            logger.error(f"👉 建議：請嘗試在後台切換至其他模型（您目前使用的是 {model}）。")
+        elif "429" in error_msg or "Too Many Requests" in error_msg:
+            logger.error("👉 原因：請求頻率過高或 API 額度已耗盡 (429)。")
+        elif "401" in error_msg or "Unauthorized" in error_msg:
+            logger.error("👉 原因：API Key 無效或未授權 (401)。")
+        elif "404" in error_msg:
+            logger.error(f"👉 原因：找不到該模型 (404)。請確認 {model} 是一個有效的模型名稱。")
+        else:
+            logger.error(f"👉 原始錯誤：{e}")
+            
+        raise RuntimeError(f"AI 服務異常 ({model}): {e}") from e

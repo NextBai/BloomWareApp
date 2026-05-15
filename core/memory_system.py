@@ -1,6 +1,8 @@
 import json
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+import asyncio
+import random
 
 # 統一日誌配置
 from core.logging import get_logger
@@ -8,10 +10,120 @@ logger = get_logger("MemorySystem")
 
 # 統一 OpenAI 客戶端
 from core.ai_client import get_openai_client
+from core.config import settings
+from core.responses_runtime import ResponsesAgentRuntime
 
 def _get_memory_client():
     """取得記憶系統用的 OpenAI 客戶端"""
     return get_openai_client()
+
+
+TRANSIENT_MEMORY_ERROR_MARKERS = (
+    "502",
+    "503",
+    "504",
+    "bad gateway",
+    "upstream",
+    "timeout",
+    "timed out",
+    "connection",
+)
+
+TRANSIENT_QUERY_MARKERS = (
+    "今天",
+    "現在",
+    "目前",
+    "最新",
+    "即時",
+    "收盤",
+    "開盤",
+    "股價",
+    "股票",
+    "匯率",
+    "天氣",
+    "新聞",
+    "多少",
+    "查詢",
+    "search",
+    "latest",
+    "today",
+    "now",
+    "price",
+    "stock",
+    "weather",
+    "news",
+)
+
+MEMORY_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "memories": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["personal_info", "preferences", "goals"],
+                    },
+                    "content": {"type": "string"},
+                    "importance": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                },
+                "required": ["type", "content", "importance"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["memories"],
+    "additionalProperties": False,
+}
+
+
+def _is_transient_memory_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError) or isinstance(exc, asyncio.TimeoutError):
+        return True
+    error_text = str(exc).lower()
+    return any(marker in error_text for marker in TRANSIENT_MEMORY_ERROR_MARKERS)
+
+
+def _should_run_ai_memory_analysis(user_message: str, assistant_response: str = "") -> bool:
+    text = f"{user_message}\n{assistant_response}".strip().lower()
+    if not text:
+        return False
+
+    durable_markers = (
+        "我叫",
+        "我的名字",
+        "我喜歡",
+        "我不喜歡",
+        "我討厭",
+        "我的偏好",
+        "我住在",
+        "我的工作",
+        "我的目標",
+        "我想達成",
+        "我希望",
+        "請記得",
+        "記住",
+        "下次",
+        "my name",
+        "i like",
+        "i dislike",
+        "remember",
+        "my goal",
+    )
+    if any(marker in text for marker in durable_markers):
+        return True
+
+    user_text = (user_message or "").lower()
+    if any(marker in user_text for marker in TRANSIENT_QUERY_MARKERS):
+        return False
+
+    return len(user_message.strip()) >= 80
 
 
 
@@ -122,7 +234,44 @@ class MemoryAnalyzer:
     """記憶分析器：使用AI分析對話內容"""
 
     def __init__(self):
-        pass
+        self.responses_runtime = ResponsesAgentRuntime()
+
+    @staticmethod
+    def _memory_model() -> str:
+        return settings.OPENAI_MODEL or settings.GPT_INTENT_MODEL
+
+    @staticmethod
+    def _memory_timeout() -> float:
+        return min(float(getattr(settings, "OPENAI_TIMEOUT", 30)), 20.0)
+
+    @staticmethod
+    async def _transient_backoff(attempt: int) -> None:
+        delay = min(0.5 * (2 ** attempt), 3.0) + random.uniform(0, 0.2)
+        await asyncio.sleep(delay)
+
+    def _create_analysis_response(self, client: Any, messages: List[Dict[str, str]], max_tokens_value: int) -> Any:
+        model = self._memory_model()
+        if settings.OPENAI_USE_RESPONSES and model.startswith("gpt-5"):
+            payload = self.responses_runtime.build_payload_from_messages(
+                messages=messages,
+                model=model,
+                max_output_tokens=max_tokens_value,
+                text_format={
+                    "type": "json_schema",
+                    "name": "memory_analysis",
+                    "strict": True,
+                    "schema": MEMORY_ANALYSIS_SCHEMA,
+                },
+            )
+            payload["store"] = False
+            return client.responses.create(**payload)
+
+        return client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_completion_tokens=max_tokens_value,
+            response_format={"type": "json_object"},
+        )
 
     async def analyze_conversation(self, user_message: str, assistant_response: str = "",
                                   conversation_history: List[Dict] = None) -> List[Dict[str, Any]]:
@@ -174,39 +323,42 @@ class MemoryAnalyzer:
                 {"role": "user", "content": user_prompt}
             ]
 
-            # 嘗試調用OpenAI API，最多重試2次
-            max_retries = 2
-            for attempt in range(max_retries + 1):
+            max_attempts = 3
+            for attempt in range(max_attempts):
                 try:
-                    if attempt > 0:
-                        # 如果是重試，增加token限制
-                        max_tokens_value = 2000 + (attempt * 1000)
-                        logger.info(f"重試AI分析 (嘗試 {attempt + 1}/{max_retries + 1})，增加token限制到 {max_tokens_value}")
-                    else:
-                        max_tokens_value = 2000
+                    max_tokens_value = 500
 
-                    response = client.chat.completions.create(
-                        model="gpt-5-nano",
-                        messages=messages,
-                        max_completion_tokens=max_tokens_value,
-                        reasoning_effort="low"
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(self._create_analysis_response, client, messages, max_tokens_value),
+                        timeout=self._memory_timeout(),
                     )
                     break  # 成功後跳出重試循環
 
                 except Exception as api_error:
                     error_str = str(api_error).lower()
-                    if "max_tokens" in error_str or "token limit" in error_str:
-                        if attempt < max_retries:
-                            logger.warning(f"AI分析遇到token限制錯誤，正在重試 ({attempt + 1}/{max_retries + 1}): {api_error}")
+                    if _is_transient_memory_error(api_error):
+                        if attempt < max_attempts - 1:
+                            logger.warning(
+                                "AI記憶分析遇到暫時性上游錯誤，準備重試 (%s/%s): %s",
+                                attempt + 1,
+                                max_attempts,
+                                api_error,
+                            )
+                            await self._transient_backoff(attempt)
                             continue
-                        else:
-                            logger.error(f"AI分析在 {max_retries + 1} 次嘗試後仍然遇到token限制錯誤: {api_error}")
-                            return []  # 返回空列表，回退到關鍵字提取
+                        logger.error("AI記憶分析連續暫時性上游錯誤，已放棄本輪背景分析: %s", api_error)
+                        return []
+                    if "max_tokens" in error_str or "token limit" in error_str:
+                        logger.error(f"AI分析遇到token限制錯誤: {api_error}")
+                        return []  # 返回空列表，回退到關鍵字提取
                     else:
                         # 其他類型的錯誤，直接拋出
                         raise api_error
 
-            result_text = response.choices[0].message.content.strip()
+            if hasattr(response, "choices"):
+                result_text = response.choices[0].message.content.strip()
+            else:
+                result_text = self.responses_runtime.extract_output_text(response)
 
             # 解析JSON結果 - 嘗試多種解析方式
             try:
@@ -241,6 +393,9 @@ class MemoryAnalyzer:
             return memories
 
         except Exception as e:
+            if _is_transient_memory_error(e):
+                logger.info("AI記憶分析遇到暫時性上游錯誤，跳過本輪背景分析: %s", e)
+                return []
             logger.error(f"AI記憶分析時發生錯誤: {e}")
             return []
 
@@ -268,10 +423,12 @@ class MemoryManager:
 
             # 2. 使用AI分析提取記憶（如果可用）
             ai_memories = []
-            if _get_memory_client():
+            if _get_memory_client() and _should_run_ai_memory_analysis(user_message, assistant_response):
                 ai_memories = await self.analyzer.analyze_conversation(
                     user_message, assistant_response, conversation_history
                 )
+            else:
+                logger.debug("跳過AI記憶分析：本輪內容不具備長期記憶價值或客戶端不可用")
 
             # 3. 合併記憶（去重）
             all_memories = self._merge_memories(keyword_memories, ai_memories)

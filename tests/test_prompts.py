@@ -5,6 +5,7 @@
 import pytest
 from core.prompts.intent_detection import get_intent_prompt, TOOL_RULES
 from core.prompts.care_mode import get_care_prompt, CARE_MODE_PROMPT
+from services.ai_service import _build_base_system_prompt, _compose_messages_with_context
 
 
 class TestIntentPrompt:
@@ -16,6 +17,9 @@ class TestIntentPrompt:
         assert "意圖解析" in prompt
         assert "工具列表" in prompt
         assert "is_tool_call" in prompt
+        assert "反幻覺" in prompt
+        assert "環境優先" in prompt
+        assert "不得憑印象補答案" in prompt
 
     def test_get_intent_prompt_with_rules(self):
         """測試帶規則的 Prompt"""
@@ -76,3 +80,39 @@ class TestCarePrompt:
         prompt = get_care_prompt(emotion="angry", user_name="小華")
         assert "angry" in prompt
         assert "小華" in prompt
+
+
+class TestVoiceOutputPrompt:
+    def test_base_system_prompt_prefers_spoken_concise_answers(self):
+        prompt = _build_base_system_prompt(
+            use_care_mode=False,
+            care_emotion=None,
+            user_name="小明",
+            language="zh-TW",
+        )
+
+        assert "語音輸出風格" in prompt
+        assert "自然口語" in prompt
+        assert "不要輸出「資料來源」" in prompt
+        assert "不要輸出「資料來源」「來源如下」「參考連結」「URL」" in prompt
+
+    def test_tool_context_is_grounding_not_mandatory_source_dump(self):
+        messages = _compose_messages_with_context(
+            base_prompt="base",
+            history_entries=[],
+            memory_context="",
+            env_context="",
+            time_context="",
+            emotion_context="",
+            current_request="今天台積電多少",
+            user_id="u1",
+            chat_id="c1",
+            use_care_mode=False,
+            care_emotion=None,
+            tool_context="Yahoo: 417.72 USD",
+        )
+
+        system_prompt = messages[0]["content"]
+        assert "這些資料主要用於查證與內部 grounding" in system_prompt
+        assert "不要在最終答案中列出來源、連結、URL" in system_prompt
+        assert "預設輸出是給人直接聽的口語答案" in system_prompt

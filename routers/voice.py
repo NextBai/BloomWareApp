@@ -176,6 +176,7 @@ async def voice_login(request: VoiceLoginRequest):
         
         if not result.get("success"):
             error_code = result.get("error", "UNKNOWN_ERROR")
+            quality_warnings = result.get("quality_warnings") or []
             error_messages = {
                 "NO_AUDIO": "沒有收到音訊資料",
                 "AUDIO_TOO_SHORT": "音訊太短，請錄製至少 3 秒",
@@ -184,10 +185,15 @@ async def voice_login(request: VoiceLoginRequest):
                 "THRESHOLD_NOT_MET": "無法確認身份，請重試",
                 "MODEL_ERROR": "辨識系統錯誤，請稍後重試",
             }
+            logger.warning(f"🎙️ 語音辨識失敗: {error_code} quality_warnings={quality_warnings}")
             return VoiceLoginResponse(
                 success=False,
                 error=error_messages.get(error_code, f"辨識失敗：{error_code}")
             )
+
+        quality_warnings = result.get("quality_warnings") or []
+        if quality_warnings:
+            logger.warning(f"🎙️ 語音登入品質警告（未阻擋）: {quality_warnings}")
         
         # 取得辨識結果
         speaker_label = result.get("label")

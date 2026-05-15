@@ -22,7 +22,7 @@ class CSPMiddleware(BaseHTTPMiddleware):
             # 設定寬鬆的 CSP 以允許內嵌 script
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: "
                 "https://accounts.google.com https://www.gstatic.com; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "font-src 'self' https://fonts.gstatic.com data:; "
@@ -30,6 +30,8 @@ class CSPMiddleware(BaseHTTPMiddleware):
                 "img-src 'self' data: https: blob:; "
                 "media-src 'self' blob: data:; "
                 "frame-src https://accounts.google.com; "
+                "worker-src 'self' blob:; "
+                "child-src 'self' blob:; "
                 "base-uri 'self';"
             )
             

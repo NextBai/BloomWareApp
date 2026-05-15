@@ -44,18 +44,22 @@ def _derive_period_from_hour(hour: int) -> str:
 def _mood_from_emotion_label(emo_label: str) -> str:
     if not emo_label:
         return "很高興再次見到你！"
-    if "開心" in emo_label:
+    
+    emo_label = emo_label.lower()
+    
+    if "開心" in emo_label or "happy" in emo_label:
         return "您今天心情感覺不錯喔！"
-    if "悲傷" in emo_label:
+    if "悲傷" in emo_label or "sad" in emo_label:
         return "今天心情有點低落，我在這陪你。"
-    if "生氣" in emo_label:
+    if "生氣" in emo_label or "angry" in emo_label:
         return "看起來有點不爽，想聊聊發生什麼事嗎？"
-    if "恐懼" in emo_label:
+    if "恐懼" in emo_label or "fear" in emo_label:
         return "別擔心，有我在，慢慢來。"
-    if "驚訝" in emo_label:
+    if "驚訝" in emo_label or "surprise" in emo_label:
         return "哇，今天似乎有新鮮事！"
-    if "中性" in emo_label:
+    if "中性" in emo_label or "neutral" in emo_label:
         return "很高興再次見到你！"
+    
     return "很高興再次見到你！"
 
 
