@@ -281,7 +281,7 @@ export function LoginForm() {
 
       // 設定錄音參數
       audioContext = new AudioContext({ sampleRate: 16000 });
-      await audioContext.audioWorklet.addModule('/audio/pcm-recorder-worklet.js');
+      await audioContext.audioWorklet.addModule('/login/audio/pcm-recorder-worklet.js');
       await audioContext.resume();
       source = audioContext.createMediaStreamSource(stream);
       processor = new AudioWorkletNode(audioContext, 'pcm-recorder-processor', {

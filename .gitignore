@@ -124,10 +124,10 @@ tmp/
 temp/
 
 # Audio/Video processing temporary files
+*.wav
 *.wav.tmp
 *.mp3.tmp
 *.mp4.tmp
-
 # Machine Learning models (commented out - we want to commit all model files)
 # *.joblib
 # *.pkl
