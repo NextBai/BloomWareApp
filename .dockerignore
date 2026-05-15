@@ -18,6 +18,19 @@ __pycache__/
 venv/
 env/
 .venv
+.pytest_cache/
+.benchmarks/
+
+# Local secrets / runtime config
+.env
+.env.*
+!.env.example
+config.json
+config.json.*
+!config.json.example
+*-firebase-adminsdk-*.json
+bloomware-*.json
+supervisor-project*.json
 
 # IDE
 .vscode/
@@ -38,3 +51,8 @@ Thumbs.db
 *.log
 .env.local
 .env.*.local
+tests/
+docs/
+.git/
+AGENTS.md
+DEPLOY.md
