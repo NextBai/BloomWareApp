@@ -551,6 +551,10 @@ function initializeWebSocket(token) {
         if (data.language) {
           window.currentConversationLanguage = data.language;
           window.currentSpeechLanguage = data.language;
+        } else if (data.text) {
+          const inferredLanguage = window.inferConversationLanguage(data.text, window.currentSpeechLanguage);
+          window.currentConversationLanguage = inferredLanguage;
+          window.currentSpeechLanguage = inferredLanguage;
         }
         if (typeof currentState !== 'undefined' && currentState !== 'speaking') {
           setState('speaking');
@@ -580,6 +584,10 @@ function initializeWebSocket(token) {
         if (data.language) {
           window.currentConversationLanguage = data.language;
           window.currentSpeechLanguage = data.language;
+        } else if (data.message) {
+          const inferredLanguage = window.inferConversationLanguage(data.message, window.currentSpeechLanguage);
+          window.currentConversationLanguage = inferredLanguage;
+          window.currentSpeechLanguage = inferredLanguage;
         }
         // 完成串流 TTS（說出最後一段未以標點結尾的殘餘文字）
         if (typeof finalizeStreamingTTS === 'function') {
@@ -741,6 +749,9 @@ function handleVoiceLoginResult(data) {
     }
 
     if (data.welcome) {
+      const welcomeLang = window.inferConversationLanguage(data.welcome, 'zh-TW');
+      window.currentConversationLanguage = welcomeLang;
+      window.currentSpeechLanguage = welcomeLang;
       setState('speaking', {
         outputText: data.welcome,
         enableTTS: true

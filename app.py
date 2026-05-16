@@ -670,6 +670,7 @@ async def websocket_endpoint_with_jwt(
                                         "message_id": payload.get("message_id"),
                                         "delta": payload.get("delta", ""),
                                         "text": payload.get("text", ""),
+                                        "language": payload.get("language"),
                                         "temporary": True,
                                         "phase": payload.get("phase", "answering"),
                                         "timestamp": time.time(),
@@ -719,8 +720,9 @@ async def websocket_endpoint_with_jwt(
                             message_text = response.get('message', response.get('content', ''))
                             emotion = response.get('emotion', 'neutral')  # 預設 neutral
                             care_mode = response.get('care_mode', False)
+                            resp_language = response.get('language')
 
-                            logger.info(f"🎭 提取的情緒: emotion={emotion}, care_mode={care_mode}")
+                            logger.info(f"🎭 提取的情緒: emotion={emotion}, care_mode={care_mode}, language={resp_language}")
 
                             if care_mode:
                                 tool_name = None
@@ -749,6 +751,7 @@ async def websocket_endpoint_with_jwt(
                                 "tool_data": tool_data,
                                 "care_mode": care_mode,
                                 "emotion": emotion,
+                                "language": resp_language,
                             }
                             logger.info(f"📤 準備發送 bot_message")
                             await websocket.send_json(bot_payload)
@@ -1353,7 +1356,8 @@ async def websocket_endpoint_with_jwt(
                                         await websocket.send_json({
                                             "type": "bot_message",
                                             "message": str(response),
-                                            "timestamp": time.time()
+                                            "timestamp": time.time(),
+                                            "language": language
                                         })
                                         if chat_id:
                                             asyncio.create_task(save_message_to_db(user_id, chat_id, "assistant", str(response)))
