@@ -54,7 +54,7 @@ class HubertForSpeechClassification(HubertPreTrainedModel):
 
     @property
     def all_tied_weights_keys(self):
-        return []
+        return {}
 
     def forward(self, x):
         outputs = self.hubert(x)
