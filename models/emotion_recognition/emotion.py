@@ -52,6 +52,10 @@ class HubertForSpeechClassification(HubertPreTrainedModel):
         self.classifier = HubertClassificationHead(config)
         self.init_weights()
 
+    @property
+    def all_tied_weights_keys(self):
+        return []
+
     def forward(self, x):
         outputs = self.hubert(x)
         hidden_states = outputs[0]
