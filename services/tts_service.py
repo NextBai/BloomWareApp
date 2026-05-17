@@ -472,14 +472,39 @@ class TTSService:
             total_chunks = 0
             total_bytes = 0
             
-            # 🎯 設定超時時間，避免無限等待
+            # 🎯 緩衝區設計：避免發送過小的 chunk 導致前端處理效能崩潰或斷音
+            # 同時確保每次送出的 PCM 數據長度都是偶數 (16-bit = 2 bytes)
+            audio_buffer = bytearray()
+            MIN_CHUNK_SIZE = 4096  # 約 85ms 的音訊 @ 24kHz
+            
             response_iter = await client.streaming_synthesize(requests=request_iter(), timeout=20.0)
             async for response in response_iter:
                 chunk = getattr(response, "audio_content", b"")
                 if chunk:
+                    audio_buffer.extend(chunk)
+                    # 當累積超過最低大小時送出，且確保送出長度為偶數
+                    while len(audio_buffer) >= MIN_CHUNK_SIZE:
+                        # 計算可送出的最大偶數長度
+                        send_len = len(audio_buffer) - (len(audio_buffer) % 2)
+                        if send_len == 0:
+                            break
+                        
+                        send_chunk = bytes(audio_buffer[:send_len])
+                        audio_buffer = audio_buffer[send_len:]
+                        
+                        total_chunks += 1
+                        total_bytes += len(send_chunk)
+                        yield send_chunk
+            
+            # 處理剩餘的尾部資料
+            if len(audio_buffer) > 0:
+                # 確保長度為偶數
+                send_len = len(audio_buffer) - (len(audio_buffer) % 2)
+                if send_len > 0:
+                    send_chunk = bytes(audio_buffer[:send_len])
                     total_chunks += 1
-                    total_bytes += len(chunk)
-                    yield bytes(chunk)
+                    total_bytes += len(send_chunk)
+                    yield send_chunk
             
             logger.debug("✅ TTS 串流完成: total_chunks=%d, total_bytes=%d", total_chunks, total_bytes)
 

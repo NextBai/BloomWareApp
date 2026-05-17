@@ -135,15 +135,42 @@ def _normalize_bcp47_language_tag(tag: Optional[str]) -> Optional[str]:
 
 
 def _preferred_language_from_text(text: str) -> Optional[str]:
+    text = str(text or "").strip()
+    if not text:
+        return None
+
+    try:
+        from langdetect import detect
+        lang = detect(text)
+        
+        lang_map = {
+            "zh-cn": "zh-TW",
+            "zh-tw": "zh-TW",
+            "en": "en-US",
+            "ja": "ja-JP",
+            "ko": "ko-KR",
+            "th": "th-TH",
+            "vi": "vi-VN",
+            "id": "id-ID",
+            "ru": "ru-RU",
+            "es": "es-ES",
+            "fr": "fr-FR",
+            "de": "de-DE"
+        }
+        if lang in lang_map:
+            return lang_map[lang]
+    except Exception:
+        pass
+
     script_counts: Dict[str, int] = {}
-    for ch in str(text or ""):
+    for ch in text:
         if ch.isspace():
             continue
         try:
             name = unicodedata.name(ch)
         except ValueError:
             continue
-        for script in ("HIRAGANA", "KATAKANA", "HANGUL", "CJK UNIFIED IDEOGRAPH", "LATIN", "CYRILLIC", "THAI"):
+        for script in ("HIRAGANA", "KATAKANA", "HANGUL", "CJK UNIFIED IDEOGRAPH", "CYRILLIC", "THAI"):
             if script in name:
                 script_counts[script] = script_counts.get(script, 0) + 1
                 break
@@ -156,8 +183,6 @@ def _preferred_language_from_text(text: str) -> Optional[str]:
         return "th-TH"
     if script_counts.get("CYRILLIC", 0):
         return "ru-RU"
-    if script_counts.get("LATIN", 0) and not script_counts.get("CJK UNIFIED IDEOGRAPH", 0):
-        return "en-US"
     if script_counts.get("CJK UNIFIED IDEOGRAPH", 0):
         return "zh-TW"
     return None
